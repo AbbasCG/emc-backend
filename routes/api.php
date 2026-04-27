@@ -1,0 +1,20 @@
+<?php
+
+use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\RegistrationController;
+use App\Http\Controllers\CourseController;
+use App\Http\Controllers\AdminController;
+
+Route::get('/test', function () {
+    return response()->json(['message' => 'API works']);
+});
+
+Route::post('/register', [RegistrationController::class, 'store']);
+
+Route::get('/courses', [CourseController::class, 'index']);
+Route::get('/courses/{slug}', [CourseController::class, 'show']);
+Route::post('/courses', [CourseController::class, 'store']);
+
+Route::get('/admin/dashboard', [AdminController::class, 'dashboard']);
+Route::get('/admin/registrations', [AdminController::class, 'registrations']);
+Route::patch('/admin/registrations/{id}/status', [AdminController::class, 'updateRegistrationStatus']);
