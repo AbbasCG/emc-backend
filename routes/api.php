@@ -11,6 +11,8 @@ Route::get('/test', function () {
 });
 
 Route::post('/register', [RegistrationController::class, 'store']);
+Route::post('/payments/fake/confirm/{payment}', [PaymentController::class, 'confirmFakePayment'])->name('payments.fake.confirm');
+Route::post('/payments/fake/fail/{payment}', [PaymentController::class, 'failFakePayment'])->name('payments.fake.fail');
 Route::post('/payments/stripe/webhook', [PaymentController::class, 'stripeWebhook'])->name('payments.stripe.webhook');
 Route::post('/payments/paypal/webhook', [PaymentController::class, 'paypalWebhook'])->name('payments.paypal.webhook');
 

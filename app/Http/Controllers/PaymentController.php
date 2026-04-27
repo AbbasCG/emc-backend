@@ -12,6 +12,77 @@ use Throwable;
 
 class PaymentController extends Controller
 {
+    public function confirmFakePayment(Payment $payment): JsonResponse
+    {
+        if (! app()->environment('local')) {
+            return response()->json([
+                'message' => 'Fake payment endpoints are only available in local environment.',
+            ], 403);
+        }
+
+        if ($payment->provider !== 'fake') {
+            return response()->json([
+                'message' => 'The given payment is not a fake provider payment.',
+            ], 422);
+        }
+
+        DB::transaction(function () use ($payment) {
+            $payment->refresh();
+
+            $payment->update([
+                'status' => 'Payment Confirmed',
+                'confirmed_at' => now(),
+            ]);
+
+            $payment->registration()->update([
+                'status' => 'Registered',
+            ]);
+        });
+
+        return response()->json([
+            'message' => 'Fake payment confirmed successfully.',
+            'data' => [
+                'payment_id' => $payment->id,
+                'status' => 'Payment Confirmed',
+            ],
+        ]);
+    }
+
+    public function failFakePayment(Payment $payment): JsonResponse
+    {
+        if (! app()->environment('local')) {
+            return response()->json([
+                'message' => 'Fake payment endpoints are only available in local environment.',
+            ], 403);
+        }
+
+        if ($payment->provider !== 'fake') {
+            return response()->json([
+                'message' => 'The given payment is not a fake provider payment.',
+            ], 422);
+        }
+
+        DB::transaction(function () use ($payment) {
+            $payment->refresh();
+
+            if ($payment->status === 'Payment Confirmed') {
+                return;
+            }
+
+            $payment->update([
+                'status' => 'Payment Failed',
+            ]);
+        });
+
+        return response()->json([
+            'message' => 'Fake payment marked as failed.',
+            'data' => [
+                'payment_id' => $payment->id,
+                'status' => $payment->fresh()->status,
+            ],
+        ]);
+    }
+
     public function stripeWebhook(Request $request): JsonResponse
     {
         try {

@@ -53,6 +53,7 @@ return [
     */
 
     'url' => env('APP_URL', 'http://localhost'),
+    'frontend_url' => env('FRONTEND_URL', env('APP_URL', 'http://localhost')),
 
     'frontend_payment_success_url' => env('FRONTEND_PAYMENT_SUCCESS_URL', env('APP_URL', 'http://localhost')),
     'frontend_payment_cancel_url' => env('FRONTEND_PAYMENT_CANCEL_URL', env('APP_URL', 'http://localhost')),

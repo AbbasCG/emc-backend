@@ -24,7 +24,7 @@ class RegistrationController extends Controller
             'gender' => 'nullable|string|max:50',
             'notes' => 'nullable|string',
             'receipt' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:4096',
-            'payment_provider' => 'nullable|in:stripe,paypal',
+            'payment_provider' => 'nullable|in:stripe,paypal,fake',
         ]);
 
         try {
@@ -32,6 +32,11 @@ class RegistrationController extends Controller
             if ($course->type === 'paid' && empty($validated['payment_provider'])) {
                 return response()->json([
                     'message' => 'payment_provider is required for paid courses.',
+                ], 422);
+            }
+            if (($validated['payment_provider'] ?? null) === 'fake' && ! app()->environment('local')) {
+                return response()->json([
+                    'message' => 'fake payment_provider is only available in local environment.',
                 ], 422);
             }
 
@@ -54,8 +59,28 @@ class RegistrationController extends Controller
                     ];
                 }
 
-                $gatewayPayment = $paymentGatewayService->createCoursePayment($registration, $course, $validated['payment_provider']);
+                if (($validated['payment_provider'] ?? null) === 'fake') {
+                    $payment = Payment::create([
+                        'registration_id' => $registration->id,
+                        'amount' => $course->price,
+                        'provider' => 'fake',
+                        'provider_payment_id' => null,
+                        'status' => 'Pending Payment',
+                    ]);
 
+                    $checkoutUrl = rtrim((string) config('app.frontend_url', config('app.url')), '/') . '/fake-payment/' . $payment->id;
+                    $payment->update([
+                        'provider_payment_id' => (string) $payment->id,
+                        'checkout_url' => $checkoutUrl,
+                    ]);
+
+                    return [
+                        'registration' => $registration,
+                        'payment' => $payment->fresh(),
+                    ];
+                }
+
+                $gatewayPayment = $paymentGatewayService->createCoursePayment($registration, $course, $validated['payment_provider']);
                 $payment = Payment::create([
                     'registration_id' => $registration->id,
                     'amount' => $course->price,
