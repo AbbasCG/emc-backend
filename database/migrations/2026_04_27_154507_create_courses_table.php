@@ -13,11 +13,11 @@ return new class extends Migration
     {
         Schema::create('courses', function (Blueprint $table) {
             $table->id();
+            $table->foreignId('instructor_id')->nullable()->constrained('instructors')->nullOnDelete();
             $table->string('title');
             $table->string('slug')->unique();
             $table->text('description')->nullable();
             $table->text('short_description')->nullable();
-            $table->string('instructor_name')->nullable();
             $table->enum('type', ['free', 'paid'])->default('free');
             $table->decimal('price', 10, 2)->default(0);
             $table->string('location')->nullable();
@@ -26,6 +26,20 @@ return new class extends Migration
             $table->dateTime('end_date')->nullable();
             $table->integer('capacity')->nullable();
             $table->string('status')->default('active');
+            $table->string('duration')->nullable();
+            $table->integer('training_hours')->nullable();
+            $table->string('target_audience')->nullable();
+            $table->string('language')->nullable();
+            $table->string('level')->nullable();
+            $table->string('study_days')->nullable();
+            $table->string('study_time')->nullable();
+            $table->string('certificate')->nullable();
+
+            $table->json('learning_outcomes')->nullable();
+
+            
+
+            $table->string('course_image')->nullable();
             $table->timestamps();
         });
     }

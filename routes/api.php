@@ -5,6 +5,7 @@ use App\Http\Controllers\RegistrationController;
 use App\Http\Controllers\CourseController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\PaymentController;
+use App\Http\Controllers\InstructorController;
 
 Route::get('/test', function () {
     return response()->json(['message' => 'API works']);
@@ -23,3 +24,7 @@ Route::post('/courses', [CourseController::class, 'store']);
 Route::get('/admin/dashboard', [AdminController::class, 'dashboard']);
 Route::get('/admin/registrations', [AdminController::class, 'registrations']);
 Route::patch('/admin/registrations/{id}/status', [AdminController::class, 'updateRegistrationStatus']);
+
+Route::get('/instructors', [InstructorController::class, 'index']);
+Route::get('/instructors/{id}', [InstructorController::class, 'show']);
+Route::post('/instructors', [InstructorController::class, 'store']);
