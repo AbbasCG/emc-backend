@@ -26,10 +26,17 @@ class InstructorController extends Controller
             'image' => 'nullable|string|max:255',
         ]);
 
-        $instructor = Instructor::create($validated);
+        $instructor = Instructor::firstOrCreate(
+            ['name' => $validated['name']],
+            [
+                'title' => $validated['title'] ?? null,
+                'bio' => $validated['bio'] ?? null,
+                'image' => $validated['image'] ?? null,
+            ]
+        );
 
         return response()->json([
-            'message' => 'Instructor created successfully',
+            'message' => 'Instructor created or retrieved successfully.',
             'data' => $instructor,
         ], 201);
     }

@@ -3,9 +3,12 @@
 namespace App\Http\Controllers;
 
 use App\Models\Payment;
+use App\Models\Registration;
+use App\Mail\CourseRegistrationConfirmation;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Srmklive\PayPal\Services\PayPal as PayPalClient;
 use Stripe\Webhook;
 use Throwable;
@@ -26,18 +29,7 @@ class PaymentController extends Controller
             ], 422);
         }
 
-        DB::transaction(function () use ($payment) {
-            $payment->refresh();
-
-            $payment->update([
-                'status' => 'Payment Confirmed',
-                'confirmed_at' => now(),
-            ]);
-
-            $payment->registration()->update([
-                'status' => 'Registered',
-            ]);
-        });
+        $this->confirmPayment('fake', $payment->provider_payment_id);
 
         return response()->json([
             'message' => 'Fake payment confirmed successfully.',
@@ -162,7 +154,9 @@ class PaymentController extends Controller
 
     protected function confirmPayment(string $provider, string $providerPaymentId): void
     {
-        DB::transaction(function () use ($provider, $providerPaymentId) {
+        $registration = null;
+
+        DB::transaction(function () use ($provider, $providerPaymentId, &$registration) {
             $payment = Payment::with('registration')
                 ->where('provider', $provider)
                 ->where('provider_payment_id', $providerPaymentId)
@@ -178,10 +172,23 @@ class PaymentController extends Controller
                 'confirmed_at' => $payment->confirmed_at ?? now(),
             ]);
 
-            $payment->registration()->update([
+            $registration = $payment->registration;
+            $registration->update([
                 'status' => 'Registered',
             ]);
+            $registration->load('course.instructor', 'course.features');
         });
+
+        if (! $registration) {
+            return;
+        }
+
+        try {
+            Mail::to($registration->email)
+                ->send(new CourseRegistrationConfirmation($registration));
+        } catch (Throwable $exception) {
+            report($exception);
+        }
     }
 
     protected function failPayment(string $provider, string $providerPaymentId): void

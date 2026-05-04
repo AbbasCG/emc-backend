@@ -5,10 +5,12 @@ namespace App\Http\Controllers;
 use App\Models\Course;
 use App\Models\Payment;
 use App\Models\Registration;
+use App\Mail\CourseRegistrationConfirmation;
 use App\Services\PaymentGatewayService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Throwable;
 
 class RegistrationController extends Controller
@@ -107,9 +109,19 @@ class RegistrationController extends Controller
                 ], 201);
             }
 
+            $freeRegistration = $registration['registration'];
+            $freeRegistration->load('course.instructor', 'course.features');
+
+            try {
+                Mail::to($freeRegistration->email)
+                    ->send(new CourseRegistrationConfirmation($freeRegistration));
+            } catch (Throwable $exception) {
+                report($exception);
+            }
+
             return response()->json([
                 'message' => 'Registration created successfully',
-                'data' => $registration['registration'],
+                'data' => $freeRegistration,
             ], 201);
         } catch (Throwable $exception) {
             report($exception);
