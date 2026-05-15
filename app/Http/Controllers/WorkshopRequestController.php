@@ -3,17 +3,38 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\StoreWorkshopRequestRequest;
+use App\Http\Resources\WorkshopRequestResource;
 use App\Mail\WorkshopRequestConfirmationMail;
 use App\Mail\WorkshopRequestSubmittedMail;
 use App\Models\WorkshopRequest;
 use App\Services\WorkshopAnnouncementService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Facades\Storage;
 use Throwable;
 
 class WorkshopRequestController extends Controller
 {
+    public function index(Request $request): AnonymousResourceCollection
+    {
+        $perPage = min((int) $request->query('per_page', 15), 100);
+
+        $query = WorkshopRequest::query()->orderByDesc('created_at');
+
+        if ($request->filled('status')) {
+            $query->where('status', $request->query('status'));
+        }
+
+        $workshopRequests = $query->paginate($perPage);
+
+        return WorkshopRequestResource::collection($workshopRequests)
+            ->additional([
+                'success' => true,
+                'message' => 'Workshop requests retrieved successfully',
+            ]);
+    }
+
     public function store(
         StoreWorkshopRequestRequest $request,
         WorkshopAnnouncementService $announcementService
@@ -55,14 +76,18 @@ class WorkshopRequestController extends Controller
 
             $this->sendEmails($workshopRequest);
 
-            return response()->json([
-                'message' => 'تم استقبال طلب البرنامج التدريبي بنجاح',
-                'data' => $workshopRequest,
-            ], 201);
+            return (new WorkshopRequestResource($workshopRequest))
+                ->additional([
+                    'success' => true,
+                    'message' => 'تم استقبال طلب البرنامج التدريبي بنجاح',
+                ])
+                ->response()
+                ->setStatusCode(201);
         } catch (Throwable $exception) {
             report($exception);
 
             return response()->json([
+                'success' => false,
                 'message' => 'حدث خطأ أثناء معالجة الطلب',
             ], 500);
         }

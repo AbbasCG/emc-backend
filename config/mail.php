@@ -16,6 +16,8 @@ return [
 
     'default' => env('MAIL_MAILER', 'log'),
 
+    'designer_email' => env('DESIGNER_EMAIL', null),
+
     /*
     |--------------------------------------------------------------------------
     | Mailer Configurations

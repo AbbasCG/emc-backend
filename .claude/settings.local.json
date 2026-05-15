@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(composer require *)",
+      "Bash(php artisan *)",
+      "Bash(findstr /i \"admin\\\\|workshop-requests GET\\\\|courses POST\\\\|instructors POST\")",
+      "Bash(findstr /v \"vendor\\\\|storage\\\\|sanctum\\\\|up \")"
+    ]
+  }
+}

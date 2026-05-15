@@ -59,6 +59,12 @@ return [
     'frontend_payment_cancel_url' => env('FRONTEND_PAYMENT_CANCEL_URL', env('APP_URL', 'http://localhost')),
 
     /*
+    | When true and APP_ENV=testing, the fake payment provider is allowed (for automated tests).
+    | Never enable this in production or staging.
+    */
+    'allow_fake_payments_in_testing' => env('ALLOW_FAKE_PAYMENTS_IN_TESTING', false),
+
+    /*
     |--------------------------------------------------------------------------
     | Application Timezone
     |--------------------------------------------------------------------------
