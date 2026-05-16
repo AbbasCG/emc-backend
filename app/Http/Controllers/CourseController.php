@@ -102,13 +102,83 @@ class CourseController extends Controller
             ->setStatusCode(201);
     }
 
-    private function uniqueSlug(string $title): string
+    public function update(Request $request, Course $course): JsonResponse
+    {
+        $validated = $request->validate([
+            'track_id'          => 'nullable|exists:tracks,id',
+            'instructor_id'     => 'nullable|exists:instructors,id',
+            'title'             => 'sometimes|string|max:255',
+            'description'       => 'nullable|string',
+            'short_description' => 'nullable|string',
+            'type'              => 'sometimes|in:free,paid',
+            'price'             => 'nullable|numeric|min:0',
+            'location'          => 'nullable|string|max:255',
+            'is_online'         => 'boolean',
+            'start_date'        => 'nullable|date',
+            'end_date'          => 'nullable|date|after_or_equal:start_date',
+            'capacity'          => 'nullable|integer|min:1',
+            'status'            => 'nullable|in:active,draft,archived',
+            'duration'          => 'nullable|string|max:255',
+            'training_hours'    => 'nullable|integer|min:0',
+            'target_audience'   => 'nullable|string|max:255',
+            'language'          => 'nullable|string|max:255',
+            'level'             => 'nullable|string|max:255',
+            'study_days'        => 'nullable|string|max:255',
+            'study_time'        => 'nullable|string|max:255',
+            'certificate'       => 'nullable|string|max:255',
+            'course_image'      => 'nullable|string|max:255',
+            'learning_outcomes' => 'nullable|array',
+            'learning_outcomes.*' => 'string|max:500',
+            'features'          => 'nullable|array',
+            'features.*'        => 'string|max:255',
+        ]);
+
+        if (isset($validated['title']) && ! isset($validated['slug'])) {
+            $validated['slug'] = $this->uniqueSlug($validated['title'], $course->id);
+        }
+
+        if (isset($validated['type'])) {
+            $validated['price'] = $validated['type'] === 'free' ? 0 : ($validated['price'] ?? $course->price);
+        }
+
+        $features = $validated['features'] ?? null;
+        unset($validated['features']);
+
+        $course->update($validated);
+
+        if ($features !== null) {
+            $course->features()->delete();
+            foreach ($features as $index => $feature) {
+                $course->features()->create(['title' => $feature, 'sort_order' => $index + 1]);
+            }
+        }
+
+        $course->load(['instructor', 'features', 'track']);
+
+        return (new CourseResource($course))
+            ->additional(['success' => true, 'message' => 'Course updated successfully'])
+            ->response();
+    }
+
+    public function destroy(Course $course): JsonResponse
+    {
+        $course->delete();
+
+        return response()->json(['success' => true, 'message' => 'Course deleted successfully']);
+    }
+
+    private function uniqueSlug(string $title, ?int $ignoreId = null): string
     {
         $base  = Str::slug($title);
         $slug  = $base;
         $count = 1;
 
-        while (Course::where('slug', $slug)->exists()) {
+        while (
+            Course::query()
+                ->when($ignoreId, fn ($q) => $q->where('id', '!=', $ignoreId))
+                ->where('slug', $slug)
+                ->exists()
+        ) {
             $slug = $base . '-' . $count++;
         }
 

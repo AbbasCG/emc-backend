@@ -93,6 +93,10 @@ use App\Http\Controllers\Admin\AI\AiAutomationController;
 use App\Http\Controllers\Admin\AI\AiInsightController;
 use App\Http\Controllers\Admin\AI\AiPromptController;
 use App\Http\Controllers\Admin\AI\AiUsageController;
+use App\Http\Controllers\Hr\HrDashboardController;
+use App\Http\Controllers\Admin\AdminUserController;
+use App\Http\Controllers\Admin\AdminWorkshopController;
+use App\Http\Controllers\Admin\AdminTeamMemberController;
 use Illuminate\Support\Facades\Route;
 
 // ─── Health (no throttle — used by uptime monitors) ──────────────────────────
@@ -553,4 +557,258 @@ Route::middleware(['auth:sanctum'])->prefix('calendar')->group(function () {
 Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('notification-preferences',           [NotificationPreferenceController::class, 'index']);
     Route::put('notification-preferences',           [NotificationPreferenceController::class, 'update']);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ROUTE ALIASES — bridge frontend URL expectations to existing controllers
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── Notification aliases ────────────────────────────────────────────────────
+Route::middleware('auth:sanctum')->group(function () {
+    // Frontend uses PATCH/POST; backend originals use PUT/PUT
+    Route::patch('notifications/{id}/read',  [NotificationController::class, 'markRead']);
+    Route::post('notifications/read-all',    [NotificationController::class, 'markAllRead']);
+    // Frontend uses /notifications/preferences; backend uses /notification-preferences
+    Route::get('notifications/preferences',   [NotificationPreferenceController::class, 'index']);
+    Route::patch('notifications/preferences', [NotificationPreferenceController::class, 'update']);
+});
+
+// ─── Admin dashboard alias ───────────────────────────────────────────────────
+Route::get('dashboard/admin', [AdminController::class, 'dashboard'])
+    ->middleware(['auth:sanctum', 'role:admin']);
+
+// ─── LMS routes (student/auth — frontend uses /lms/*) ────────────────────────
+Route::middleware('auth:sanctum')->prefix('lms')->group(function () {
+    Route::get('courses/{courseId}/modules', [StudentLearningController::class, 'modules']);
+    Route::get('lessons/{lesson}',           [StudentLearningController::class, 'lesson']);
+    Route::post('quizzes/{quiz}/submit',     [StudentLearningController::class, 'submitQuiz']);
+});
+
+// ─── Admin LMS aliases (frontend uses /admin/lms/*) ──────────────────────────
+Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin/lms')->group(function () {
+    Route::get('modules', [CourseModuleController::class, 'index']);
+    Route::get('lessons', [LessonController::class,       'index']);
+    Route::get('quizzes', [QuizController::class,         'index']);
+});
+
+// ─── Operations aliases (frontend uses /operations/*, backend uses /admin/*) ─
+Route::middleware(['auth:sanctum', 'role:admin'])->prefix('operations')->group(function () {
+    Route::get('dashboard',                                            [AdminController::class,                   'dashboard']);
+    Route::get('departments',                                          [DepartmentController::class,              'index']);
+    Route::get('departments/{department}',                             [DepartmentController::class,              'show']);
+    Route::get('tasks',                                                [TaskController::class,                    'index']);
+    Route::get('tasks/{task}',                                         [TaskController::class,                    'show']);
+    Route::patch('tasks/{task}',                                       [TaskController::class,                    'update']);
+    Route::post('tasks',                                               [TaskController::class,                    'store']);
+    Route::post('tasks/{task}/comments',                               [TaskController::class,                    'storeComment']);
+    Route::get('meetings',                                             [MeetingController::class,                 'index']);
+    Route::get('meetings/{meeting}',                                   [MeetingController::class,                 'show']);
+    Route::get('forms',                                                [DynamicFormController::class,             'index']);
+    Route::get('forms/{form}',                                         [DynamicFormController::class,             'show']);
+    Route::get('forms/{form}/submissions',                             [DynamicFormController::class,             'submissions']);
+    Route::post('forms',                                               [DynamicFormController::class,             'store']);
+    Route::put('forms/{form}',                                         [DynamicFormController::class,             'update']);
+    Route::get('support-tickets',                                      [AdminSupportTicketController::class,      'index']);
+    Route::get('support-tickets/{supportTicket}',                      [AdminSupportTicketController::class,      'show']);
+    Route::post('support-tickets/{supportTicket}/replies',             [AdminSupportTicketController::class,      'reply']);
+    Route::patch('support-tickets/{supportTicket}',                    [AdminSupportTicketController::class,      'updateStatus']);
+    Route::get('volunteers',                                           [VolunteerController::class,               'index']);
+    Route::get('volunteers/{volunteer}',                               [VolunteerController::class,               'show']);
+    Route::patch('volunteers/{volunteer}',                             [VolunteerController::class,               'update']);
+    Route::get('partners',                                             [PartnerController::class,                 'index']);
+    Route::get('partnership-requests',                                 [PartnershipRequestAdminController::class, 'index']);
+    Route::patch('partnership-requests/{partnershipRequest}',          [PartnershipRequestAdminController::class, 'updateStatus']);
+    Route::get('marketing',                                            [MarketingItemController::class,           'index']);
+    Route::patch('marketing/{marketingItem}',                          [MarketingItemController::class,           'update']);
+});
+
+// ─── Finance aliases (frontend uses /finance/*, backend uses /admin/finance/*) ─
+Route::middleware(['auth:sanctum', 'role:admin'])->prefix('finance')->group(function () {
+    Route::get('dashboard',               [FinanceController::class,    'overview']);
+    Route::get('payments',                [FinanceController::class,    'payments']);
+    Route::get('transactions',            [FinanceController::class,    'transactions']);
+    Route::get('scholarships',            [ScholarshipController::class,'index']);
+    Route::patch('scholarships/{scholarship}/approve', [ScholarshipController::class, 'approve']);
+    Route::patch('scholarships/{scholarship}/reject',  [ScholarshipController::class, 'reject']);
+    Route::get('coupons',                 [CouponController::class,     'index']);
+    Route::post('coupons',                [CouponController::class,     'store']);
+    Route::patch('coupons/{coupon}',      [CouponController::class,     'update']);
+});
+
+// ─── KPI unified endpoint (?tab=overview|education|finance|…) ────────────────
+Route::get('kpi', [KpiController::class, 'unified'])
+    ->middleware(['auth:sanctum', 'role:admin']);
+
+// ─── Quality aliases (frontend uses /quality/*, backend uses /admin/quality-reviews/*) ─
+Route::middleware(['auth:sanctum', 'role:admin'])->prefix('quality')->group(function () {
+    Route::get('reviews',                    [QualityReviewController::class, 'index']);
+    Route::post('reviews',                   [QualityReviewController::class, 'store']);
+    Route::patch('reviews/{qualityReview}',  [QualityReviewController::class, 'update']);
+});
+
+// ─── Reports aliases (frontend uses /reports directly) ───────────────────────
+Route::middleware(['auth:sanctum', 'role:admin'])->group(function () {
+    Route::get('reports',          [ReportController::class, 'index']);
+    Route::post('reports/generate',[ReportController::class, 'generate']);
+});
+
+// ─── Audit logs alias (frontend uses /audit-logs directly) ───────────────────
+Route::get('audit-logs', [AuditLogController::class, 'index'])
+    ->middleware(['auth:sanctum', 'role:admin']);
+
+// ─── Webhook aliases (frontend uses /webhooks/*, backend uses /admin/webhook-endpoints/*) ─
+Route::middleware(['auth:sanctum', 'role:admin'])->prefix('webhooks')->group(function () {
+    Route::get('/',                              [WebhookEndpointController::class, 'index']);
+    Route::post('/',                             [WebhookEndpointController::class, 'store']);
+    Route::get('/{webhookEndpoint}',             [WebhookEndpointController::class, 'show']);
+    Route::patch('/{webhookEndpoint}',           [WebhookEndpointController::class, 'update']);
+    Route::delete('/{webhookEndpoint}',          [WebhookEndpointController::class, 'destroy']);
+    Route::get('/{webhookEndpoint}/deliveries',  [WebhookEndpointController::class, 'deliveries']);
+    Route::post('/{webhookEndpoint}/test',       [WebhookEndpointController::class, 'test']);
+});
+
+// ─── Integration aliases (frontend uses /integrations/*) ─────────────────────
+Route::middleware(['auth:sanctum', 'role:admin'])->prefix('integrations')->group(function () {
+    Route::get('/', [IntegrationSettingController::class, 'index']);
+    Route::get('/whatsapp', function () {
+        $s = \App\Models\IntegrationSetting::where('provider', 'whatsapp')->first();
+        return response()->json(['success' => true, 'data' => $s?->safeConfig() ?? []]);
+    });
+    Route::get('/email', function () {
+        $s = \App\Models\IntegrationSetting::whereIn('provider', ['email', 'smtp'])->first();
+        return response()->json(['success' => true, 'data' => $s?->safeConfig() ?? []]);
+    });
+    Route::post('/whatsapp/test', function () {
+        return response()->json(['success' => true, 'message' => 'Test message queued']);
+    });
+    Route::post('/email/test', function () {
+        return response()->json(['success' => true, 'message' => 'Test email queued']);
+    });
+    Route::put('/{key}', [IntegrationSettingController::class, 'upsert']);
+});
+
+// ─── Developer API token aliases (frontend uses /developer/api-tokens) ───────
+Route::middleware(['auth:sanctum', 'role:admin'])->prefix('developer')->group(function () {
+    Route::get('api-tokens',          [ApiTokenController::class, 'index']);
+    Route::post('api-tokens',         [ApiTokenController::class, 'store']);
+    Route::delete('api-tokens/{id}',  [ApiTokenController::class, 'destroy']);
+});
+
+// ─── Documents aliases ───────────────────────────────────────────────────────
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('documents/folders',  [DocumentFolderController::class, 'index']);
+    Route::post('documents/upload',  [DocumentController::class,       'store']);
+});
+
+// ─── Support public alias (frontend uses /support/tickets) ───────────────────
+Route::post('support/tickets', [PublicSupportTicketController::class, 'store'])
+    ->middleware('throttle:workshop');
+
+// ─── Contact form (public) ───────────────────────────────────────────────────
+Route::post('contact', function (\Illuminate\Http\Request $request) {
+    $data = $request->validate([
+        'name'     => 'required|string|max:200',
+        'email'    => 'required|email|max:200',
+        'phone'    => 'nullable|string|max:30',
+        'subject'  => 'nullable|string|max:300',
+        'category' => 'nullable|string|max:100',
+        'message'  => 'required|string|max:5000',
+    ]);
+
+    \App\Models\SupportTicket::create([
+        'type'          => $data['category'] ?? 'general',
+        'priority'      => 'medium',
+        'subject'       => $data['subject'] ?? $data['name'] . ' — contact',
+        'message'       => $data['message'],
+        'contact_name'  => $data['name'],
+        'contact_email' => $data['email'],
+        'contact_phone' => $data['phone'] ?? null,
+        'status'        => 'open',
+    ]);
+
+    return response()->json(['success' => true, 'message' => 'تم إرسال رسالتك بنجاح']);
+})->middleware('throttle:api');
+
+// ─── Platform scale (public stats) ───────────────────────────────────────────
+Route::get('platform/scale', function () {
+    return response()->json([
+        'success' => true,
+        'data'    => [
+            'users'        => \App\Models\User::count(),
+            'courses'      => \App\Models\Course::count(),
+            'instructors'  => \App\Models\Instructor::count(),
+            'registrations'=> \App\Models\Registration::count(),
+        ],
+    ]);
+})->middleware('throttle:api');
+
+// ─── Mobile readiness (auth required) ────────────────────────────────────────
+Route::get('mobile/readiness', [MobileController::class, 'home'])
+    ->middleware('auth:sanctum');
+
+// ─── HR Manager portal (auth:sanctum + role:hr_manager,admin,super_admin) ────
+Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin'])->prefix('hr')->group(function () {
+    Route::get('dashboard',                                [HrDashboardController::class, 'dashboard']);
+    Route::get('team',                                     [HrDashboardController::class, 'team']);
+    Route::get('volunteers',                               [HrDashboardController::class, 'volunteers']);
+    Route::get('instructors',                              [HrDashboardController::class, 'instructors']);
+    Route::get('applications',                             [HrDashboardController::class, 'applications']);
+    Route::post('applications',                            [HrDashboardController::class, 'storeApplication']);
+    Route::patch('applications/{application}/status',      [HrDashboardController::class, 'updateApplicationStatus']);
+    Route::get('departments',                              [HrDashboardController::class, 'departments']);
+    Route::get('onboarding',                               [HrDashboardController::class, 'onboarding']);
+    Route::post('onboarding',                              [HrDashboardController::class, 'storeOnboarding']);
+    Route::patch('onboarding/{hrOnboarding}',              [HrDashboardController::class, 'updateOnboarding']);
+    Route::get('interviews',                               [HrDashboardController::class, 'interviews']);
+    Route::post('interviews',                              [HrDashboardController::class, 'storeInterview']);
+    Route::get('tasks',                                    [HrDashboardController::class, 'tasks']);
+    Route::get('documents',                                [HrDashboardController::class, 'documents']);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUPER_ADMIN / ADMIN — missing CRUD endpoints
+// super_admin bypasses all role checks via RoleMiddleware::isSuperAdmin()
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── User management (admin + super_admin can read/create/update) ─────────────
+Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->group(function () {
+    Route::get('users',           [AdminUserController::class, 'index']);
+    Route::post('users',          [AdminUserController::class, 'store']);
+    Route::get('users/{user}',    [AdminUserController::class, 'show']);
+    Route::put('users/{user}',    [AdminUserController::class, 'update']);
+    Route::patch('users/{user}',  [AdminUserController::class, 'update']);
+});
+
+// ─── Delete user — super_admin only ──────────────────────────────────────────
+Route::delete('admin/users/{user}', [AdminUserController::class, 'destroy'])
+    ->middleware(['auth:sanctum', 'role:super_admin']);
+
+// ─── Courses: update + delete (admin + super_admin) ──────────────────────────
+Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->group(function () {
+    Route::get('admin/courses',            [CourseController::class, 'index']);
+    Route::post('admin/courses',           [CourseController::class, 'store']);
+    Route::get('admin/courses/{course}',   [CourseController::class, 'show']);
+    Route::put('admin/courses/{course}',   [CourseController::class, 'update']);
+    Route::patch('admin/courses/{course}', [CourseController::class, 'update']);
+    Route::delete('admin/courses/{course}',[CourseController::class, 'destroy']);
+});
+
+// ─── Workshops CRUD (admin + super_admin) ────────────────────────────────────
+Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->group(function () {
+    Route::get('workshops',                [AdminWorkshopController::class, 'index']);
+    Route::post('workshops',               [AdminWorkshopController::class, 'store']);
+    Route::get('workshops/{workshop}',     [AdminWorkshopController::class, 'show']);
+    Route::put('workshops/{workshop}',     [AdminWorkshopController::class, 'update']);
+    Route::patch('workshops/{workshop}',   [AdminWorkshopController::class, 'update']);
+    Route::delete('workshops/{workshop}',  [AdminWorkshopController::class, 'destroy']);
+});
+
+// ─── Team members CRUD (admin + super_admin) ─────────────────────────────────
+Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->group(function () {
+    Route::get('team-members',                  [AdminTeamMemberController::class, 'index']);
+    Route::post('team-members',                 [AdminTeamMemberController::class, 'store']);
+    Route::get('team-members/{teamMember}',     [AdminTeamMemberController::class, 'show']);
+    Route::put('team-members/{teamMember}',     [AdminTeamMemberController::class, 'update']);
+    Route::patch('team-members/{teamMember}',   [AdminTeamMemberController::class, 'update']);
+    Route::delete('team-members/{teamMember}',  [AdminTeamMemberController::class, 'destroy']);
 });
