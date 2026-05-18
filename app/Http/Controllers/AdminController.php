@@ -10,10 +10,12 @@ use App\Models\Payment;
 use App\Models\Registration;
 use App\Models\Track;
 use App\Models\User;
+use App\Notifications\RegistrationConfirmedNotification;
 use App\Support\PaymentStatuses;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Throwable;
 
 class AdminController extends Controller
 {
@@ -117,6 +119,22 @@ class AdminController extends Controller
                 'status'       => PaymentStatuses::CONFIRMED,
                 'confirmed_at' => now(),
             ]);
+        }
+
+        // Notify student when registration is confirmed
+        if (in_array($validated['status'], ['Registered', 'Payment Confirmed'], true)
+            && $registration->user_id
+        ) {
+            try {
+                $student = User::find($registration->user_id);
+                $student?->notify(new RegistrationConfirmedNotification(
+                    $registration->course_id,
+                    $registration->course?->title ?? 'Unknown Course',
+                    $registration->id,
+                ));
+            } catch (Throwable $e) {
+                report($e);
+            }
         }
 
         $registration->load(['course.track', 'course.instructor', 'payments']);

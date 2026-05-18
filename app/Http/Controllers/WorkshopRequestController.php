@@ -7,6 +7,7 @@ use App\Http\Resources\WorkshopRequestResource;
 use App\Mail\WorkshopRequestConfirmationMail;
 use App\Mail\WorkshopRequestSubmittedMail;
 use App\Models\WorkshopRequest;
+use App\Services\AuditLogService;
 use App\Services\WorkshopAnnouncementService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -91,6 +92,57 @@ class WorkshopRequestController extends Controller
                 'message' => 'حدث خطأ أثناء معالجة الطلب',
             ], 500);
         }
+    }
+
+    public function show(WorkshopRequest $workshopRequest): JsonResponse
+    {
+        return (new WorkshopRequestResource($workshopRequest))
+            ->additional(['success' => true])
+            ->response();
+    }
+
+    public function update(Request $request, WorkshopRequest $workshopRequest): JsonResponse
+    {
+        $data = $request->validate([
+            'status' => 'sometimes|string|max:50',
+            'generated_announcement_text' => 'sometimes|nullable|string',
+        ]);
+
+        $oldStatus = $workshopRequest->status;
+        $oldSnap   = ['status' => $oldStatus, 'program_name' => $workshopRequest->program_name];
+
+        $workshopRequest->update($data);
+        $fresh = $workshopRequest->fresh();
+
+        $newStatus = $fresh->status;
+        $action    = match ($newStatus) {
+            'approved' => 'approved',
+            'rejected' => 'rejected',
+            default    => isset($data['status']) && $newStatus !== $oldStatus ? 'status_changed' : 'updated',
+        };
+
+        AuditLogService::log($action, 'WorkshopRequest', $fresh->id,
+            $fresh->program_name,
+            $oldSnap,
+            ['status' => $newStatus, 'program_name' => $fresh->program_name],
+            null, $request);
+
+        return (new WorkshopRequestResource($fresh))
+            ->additional(['success' => true, 'message' => 'Workshop request updated successfully'])
+            ->response();
+    }
+
+    public function destroy(WorkshopRequest $workshopRequest): JsonResponse
+    {
+        $snap  = ['status' => $workshopRequest->status, 'program_name' => $workshopRequest->program_name];
+        $label = $workshopRequest->program_name;
+        $id    = $workshopRequest->id;
+
+        $workshopRequest->delete();
+
+        AuditLogService::log('deleted', 'WorkshopRequest', $id, $label, $snap, null, null, request());
+
+        return response()->json(['success' => true, 'message' => 'Workshop request deleted successfully']);
     }
 
     protected function sendEmails(WorkshopRequest $workshopRequest): void

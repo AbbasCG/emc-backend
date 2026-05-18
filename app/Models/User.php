@@ -16,9 +16,21 @@ class User extends Authenticatable
     /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, Notifiable;
 
-    protected $fillable = ['name', 'email', 'password', 'role'];
+    protected $fillable = [
+        'name', 'email', 'password', 'role',
+        'phone', 'is_active', 'department', 'avatar',
+        'city', 'country', 'how_did_you_hear_about_us', 'last_login_at',
+    ];
 
     protected $hidden = ['password', 'remember_token'];
+
+    /** Full public URL for the avatar, or null if not set. */
+    public function getAvatarUrlAttribute(): ?string
+    {
+        return $this->avatar
+            ? \Illuminate\Support\Facades\Storage::disk('public')->url($this->avatar)
+            : null;
+    }
 
     /**
      * Per-instance permission cache — avoids repeat DB queries within one request.
@@ -29,6 +41,8 @@ class User extends Authenticatable
     {
         return [
             'email_verified_at' => 'datetime',
+            'last_login_at'     => 'datetime',
+            'is_active'         => 'boolean',
         ];
     }
 

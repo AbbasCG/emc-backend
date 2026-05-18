@@ -40,4 +40,12 @@ class NotificationController extends Controller
 
         return response()->json(['success' => true, 'message' => 'All notifications marked as read.']);
     }
+
+    public function delete(Request $request, string $id): \Illuminate\Http\JsonResponse
+    {
+        $notification = $request->user()->notifications()->where('id', $id)->firstOrFail();
+        $notification->delete();
+
+        return response()->json(['success' => true, 'message' => 'Notification deleted.']);
+    }
 }

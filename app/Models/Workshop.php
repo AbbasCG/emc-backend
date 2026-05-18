@@ -10,23 +10,41 @@ class Workshop extends Model
 {
     protected $fillable = [
         'course_id',
+        'instructor_id',
+        'assigned_by',
         'title',
         'slug',
         'description',
         'status',
         'start_date',
+        'start_time',
         'end_date',
+        'end_time',
+        'location_type',
+        'meeting_link',
+        'registration_open',
         'sort_order',
     ];
 
     protected $casts = [
-        'start_date' => 'datetime',
-        'end_date' => 'datetime',
+        'start_date'        => 'datetime',
+        'end_date'          => 'datetime',
+        'registration_open' => 'boolean',
     ];
 
     public function course(): BelongsTo
     {
         return $this->belongsTo(Course::class);
+    }
+
+    public function instructor(): BelongsTo
+    {
+        return $this->belongsTo(Instructor::class);
+    }
+
+    public function assignedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'assigned_by');
     }
 
     public function sessions(): HasMany

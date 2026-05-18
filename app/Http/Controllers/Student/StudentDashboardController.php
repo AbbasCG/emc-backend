@@ -3,12 +3,16 @@
 namespace App\Http\Controllers\Student;
 
 use App\Http\Controllers\Controller;
+use App\Http\Resources\CertificateResource;
 use App\Http\Resources\LmsAssignmentResource;
 use App\Http\Resources\LmsSessionResource;
 use App\Http\Resources\RegistrationResource;
+use App\Http\Resources\StudentProgressResource;
 use App\Models\Assignment;
+use App\Models\Certificate;
 use App\Models\LmsSession;
 use App\Models\Registration;
+use App\Models\StudentProgress;
 use App\Services\LmsEnrollmentService;
 use App\Services\StudentProgressService;
 use Illuminate\Http\JsonResponse;
@@ -56,14 +60,56 @@ class StudentDashboardController extends Controller
             ->take(10)
             ->get();
 
+        $certificates = Certificate::with(['course', 'track'])
+            ->where('user_id', $user->id)
+            ->whereIn('status', ['issued', 'approved'])
+            ->latest('issued_at')
+            ->take(5)
+            ->get();
+
+        $progressRows = StudentProgress::with('course')
+            ->where('user_id', $user->id)
+            ->latest()
+            ->take(10)
+            ->get();
+
+        $notifications = $user->notifications()
+            ->latest()
+            ->take(10)
+            ->get();
+
         return response()->json([
             'success' => true,
             'message' => 'Student dashboard data retrieved successfully.',
-            'data' => [
-                'enrolled_course_ids' => $courseIds,
-                'registrations' => RegistrationResource::collection($registrations),
-                'upcoming_sessions' => LmsSessionResource::collection($upcomingSessions),
-                'assignments' => LmsAssignmentResource::collection($assignments),
+            'data'    => [
+                'user' => [
+                    'id'         => $user->id,
+                    'name'       => $user->name,
+                    'email'      => $user->email,
+                    'avatar_url' => $user->avatar_url,
+                    'role'       => $user->role,
+                ],
+                'enrolled_course_ids'  => $courseIds->values()->all(),
+                'registrations'        => RegistrationResource::collection($registrations)->resolve(),
+                'upcoming_sessions'    => LmsSessionResource::collection($upcomingSessions)->resolve(),
+                'assignments'          => LmsAssignmentResource::collection($assignments)->resolve(),
+                'certificates'         => CertificateResource::collection($certificates)->resolve(),
+                'progress'             => StudentProgressResource::collection($progressRows)->resolve(),
+                'notifications'        => $notifications->map(fn ($n) => [
+                    'id'         => $n->id,
+                    'type'       => class_basename($n->type),
+                    'data'       => $n->data,
+                    'read_at'    => $n->read_at,
+                    'created_at' => $n->created_at,
+                ])->values()->all(),
+                'stats' => [
+                    'courses_enrolled'    => $courseIds->count(),
+                    'assignments_pending' => $assignments->filter(
+                        fn ($a) => $a->submissions->isEmpty()
+                    )->count(),
+                    'certificates_earned' => $certificates->count(),
+                    'unread_notifications' => $notifications->whereNull('read_at')->count(),
+                ],
             ],
         ]);
     }

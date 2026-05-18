@@ -16,6 +16,11 @@ return Application::configure(basePath: dirname(__DIR__))
             'role'       => \App\Http\Middleware\RoleMiddleware::class,
             'permission' => \App\Http\Middleware\PermissionMiddleware::class,
         ]);
+
+        // Run on every api/* request — detects impersonation tokens and annotates
+        // the request with is_impersonating + impersonator_id attributes.
+        // No-op for unauthenticated requests or normal tokens.
+        $middleware->appendToGroup('api', \App\Http\Middleware\ImpersonationMiddleware::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
 

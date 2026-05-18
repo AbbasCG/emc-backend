@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\AuditLogService;
 use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -49,10 +50,16 @@ class AdminUserController extends Controller
     public function store(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'name'     => 'required|string|max:255',
-            'email'    => 'required|email|max:255|unique:users,email',
-            'password' => 'required|string|min:8',
-            'role'     => ['required', Rule::in(self::ALLOWED_ROLES)],
+            'name'                      => 'required|string|max:255',
+            'email'                     => 'required|email|max:255|unique:users,email',
+            'password'                  => 'required|string|min:8',
+            'role'                      => ['required', Rule::in(self::ALLOWED_ROLES)],
+            'phone'                     => 'nullable|string|max:30',
+            'department'                => 'nullable|string|max:255',
+            'city'                      => 'nullable|string|max:100',
+            'country'                   => 'nullable|string|max:100',
+            'how_did_you_hear_about_us' => 'nullable|string|max:255',
+            'is_active'                 => 'nullable|boolean',
         ]);
 
         // super_admin creation is restricted to super_admin requesters
@@ -64,11 +71,23 @@ class AdminUserController extends Controller
         }
 
         $user = User::create([
-            'name'     => $data['name'],
-            'email'    => $data['email'],
-            'password' => Hash::make($data['password']),
-            'role'     => $data['role'],
+            'name'                      => $data['name'],
+            'email'                     => $data['email'],
+            'password'                  => Hash::make($data['password']),
+            'role'                      => $data['role'],
+            'phone'                     => $data['phone'] ?? null,
+            'department'                => $data['department'] ?? null,
+            'city'                      => $data['city'] ?? null,
+            'country'                   => $data['country'] ?? null,
+            'how_did_you_hear_about_us' => $data['how_did_you_hear_about_us'] ?? null,
+            'is_active'                 => $data['is_active'] ?? true,
         ]);
+
+        AuditLogService::logModel('created', $user, null, [
+            'name'  => $user->name,
+            'email' => $user->email,
+            'role'  => $user->role,
+        ], null, $request);
 
         return response()->json([
             'success' => true,
@@ -98,10 +117,16 @@ class AdminUserController extends Controller
         }
 
         $data = $request->validate([
-            'name'     => 'sometimes|string|max:255',
-            'email'    => ['sometimes', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user->id)],
-            'password' => 'sometimes|string|min:8',
-            'role'     => ['sometimes', Rule::in(self::ALLOWED_ROLES)],
+            'name'                      => 'sometimes|string|max:255',
+            'email'                     => ['sometimes', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user->id)],
+            'password'                  => 'sometimes|nullable|string|min:8',
+            'role'                      => ['sometimes', Rule::in(self::ALLOWED_ROLES)],
+            'phone'                     => 'sometimes|nullable|string|max:30',
+            'department'                => 'sometimes|nullable|string|max:255',
+            'city'                      => 'sometimes|nullable|string|max:100',
+            'country'                   => 'sometimes|nullable|string|max:100',
+            'how_did_you_hear_about_us' => 'sometimes|nullable|string|max:255',
+            'is_active'                 => 'sometimes|boolean',
         ]);
 
         if (isset($data['role']) && $data['role'] === 'super_admin' && ! $request->user()->isSuperAdmin()) {
@@ -111,11 +136,32 @@ class AdminUserController extends Controller
             ], 403);
         }
 
-        if (isset($data['password'])) {
-            $data['password'] = Hash::make($data['password']);
+        // Hash only when a non-empty password is provided; drop the key otherwise
+        if (array_key_exists('password', $data)) {
+            if (filled($data['password'])) {
+                $data['password'] = Hash::make($data['password']);
+            } else {
+                unset($data['password']);
+            }
         }
 
+        $oldRole = $user->role;
+        $oldSnap = [
+            'name'  => $user->name,
+            'email' => $user->email,
+            'role'  => $user->role,
+            'phone' => $user->phone,
+            'is_active' => $user->is_active,
+        ];
+
         $user->update($data);
+
+        $action = isset($data['role']) && $data['role'] !== $oldRole ? 'role_changed' : 'updated';
+        AuditLogService::logModel($action, $user->fresh(), $oldSnap, [
+            'name'  => $user->fresh()->name,
+            'email' => $user->fresh()->email,
+            'role'  => $user->fresh()->role,
+        ], null, $request);
 
         return response()->json([
             'success' => true,
@@ -134,8 +180,12 @@ class AdminUserController extends Controller
             ], 422);
         }
 
+        $snap = ['name' => $user->name, 'email' => $user->email, 'role' => $user->role];
+
         $user->tokens()->delete();
         $user->delete();
+
+        AuditLogService::log('deleted', 'User', $user->id, $user->name, $snap, null, null, $request);
 
         return response()->json([
             'success' => true,
@@ -146,13 +196,21 @@ class AdminUserController extends Controller
     private function formatUser(User $user, bool $withPermissions = false): array
     {
         $data = [
-            'id'                => $user->id,
-            'name'              => $user->name,
-            'email'             => $user->email,
-            'role'              => $user->role,
-            'email_verified_at' => $user->email_verified_at,
-            'created_at'        => $user->created_at,
-            'updated_at'        => $user->updated_at,
+            'id'                         => $user->id,
+            'name'                       => $user->name,
+            'email'                      => $user->email,
+            'phone'                      => $user->phone,
+            'role'                       => $user->role,
+            'department'                 => $user->department,
+            'is_active'                  => $user->is_active ?? true,
+            'city'                       => $user->city,
+            'country'                    => $user->country,
+            'how_did_you_hear_about_us'  => $user->how_did_you_hear_about_us,
+            'avatar_url'                 => $user->avatar_url,
+            'email_verified_at'          => $user->email_verified_at,
+            'last_login_at'              => $user->last_login_at,
+            'created_at'                 => $user->created_at,
+            'updated_at'                 => $user->updated_at,
         ];
 
         if ($withPermissions) {

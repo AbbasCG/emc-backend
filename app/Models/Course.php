@@ -5,8 +5,10 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use App\Models\Department;
 use App\Models\Instructor;
 use App\Models\CourseFeature;
+use App\Models\User;
 
 class Course extends Model
 {
@@ -15,6 +17,9 @@ class Course extends Model
     protected $fillable = [
         'track_id',
         'instructor_id',
+        'department_id',
+        'created_by',
+        'assigned_by',
         'title',
         'slug',
         'description',
@@ -22,10 +27,13 @@ class Course extends Model
         'type',
         'price',
         'location',
+        'location_type',
+        'meeting_link',
         'is_online',
         'start_date',
         'end_date',
         'capacity',
+        'registration_open',
         'status',
         'duration',
         'training_hours',
@@ -40,8 +48,9 @@ class Course extends Model
     ];
 
     protected $casts = [
-        'learning_outcomes' => 'array',
-        'is_online' => 'boolean',
+        'learning_outcomes'  => 'array',
+        'is_online'          => 'boolean',
+        'registration_open'  => 'boolean',
     ];
 
     public function instructor()
@@ -52,6 +61,21 @@ class Course extends Model
     public function track()
     {
         return $this->belongsTo(Track::class);
+    }
+
+    public function department()
+    {
+        return $this->belongsTo(Department::class);
+    }
+
+    public function createdBy()
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function assignedBy()
+    {
+        return $this->belongsTo(User::class, 'assigned_by');
     }
 
     public function features()

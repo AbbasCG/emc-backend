@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\TeamMember;
+use App\Services\AuditLogService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -50,6 +51,10 @@ class AdminTeamMemberController extends Controller
         $member = TeamMember::create($data);
         $member->load(['user:id,name,email,role', 'department:id,name', 'section:id,name']);
 
+        AuditLogService::log('created', 'TeamMember', $member->id,
+            $member->user?->name ?? "member#{$member->id}",
+            null, $this->format($member), null, $request);
+
         return response()->json([
             'success' => true,
             'message' => 'Team member added successfully',
@@ -76,8 +81,16 @@ class AdminTeamMemberController extends Controller
             'joined_at'     => 'nullable|date',
         ]);
 
+        $oldSnap = $this->format($teamMember);
+        $oldStatus = $teamMember->status;
+
         $teamMember->update($data);
         $teamMember->load(['user:id,name,email,role', 'department:id,name', 'section:id,name']);
+
+        $action = isset($data['status']) && $data['status'] !== $oldStatus ? 'status_changed' : 'updated';
+        AuditLogService::log($action, 'TeamMember', $teamMember->id,
+            $teamMember->user?->name ?? "member#{$teamMember->id}",
+            $oldSnap, $this->format($teamMember), null, $request);
 
         return response()->json([
             'success' => true,
@@ -89,7 +102,13 @@ class AdminTeamMemberController extends Controller
     // DELETE /api/admin/team-members/{teamMember}
     public function destroy(TeamMember $teamMember): JsonResponse
     {
+        $snap  = $this->format($teamMember);
+        $label = $teamMember->user?->name ?? "member#{$teamMember->id}";
+        $id    = $teamMember->id;
+
         $teamMember->delete();
+
+        AuditLogService::log('deleted', 'TeamMember', $id, $label, $snap, null, null, request());
 
         return response()->json(['success' => true, 'message' => 'Team member removed successfully']);
     }

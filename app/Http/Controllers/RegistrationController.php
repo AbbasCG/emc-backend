@@ -9,6 +9,7 @@ use App\Mail\CourseRegistrationConfirmation;
 use App\Models\Course;
 use App\Models\Payment;
 use App\Models\Registration;
+use App\Notifications\CourseRegisteredNotification;
 use App\Services\PaymentGatewayService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
@@ -20,6 +21,7 @@ class RegistrationController extends Controller
     public function store(StoreRegistrationRequest $request, PaymentGatewayService $paymentGatewayService): JsonResponse
     {
         $validated = $request->validated();
+        $authUser  = $request->user(); // null for public (unauthenticated) submissions
 
         try {
             $course = Course::findOrFail($validated['course_id']);
@@ -31,18 +33,35 @@ class RegistrationController extends Controller
                 ], 422);
             }
 
+            // Prevent duplicate registration for authenticated users
+            if ($authUser) {
+                $existing = Registration::where('user_id', $authUser->id)
+                    ->where('course_id', $validated['course_id'])
+                    ->whereNotIn('status', ['Cancelled'])
+                    ->first();
+
+                if ($existing) {
+                    return response()->json([
+                        'success'      => false,
+                        'message'      => 'You are already registered for this course.',
+                        'registration' => new RegistrationResource($existing->loadMissing('course', 'payments')),
+                    ], 409);
+                }
+            }
+
             $receiptPath = null;
             if ($request->hasFile('receipt') && $request->file('receipt')->isValid()) {
                 $receiptPath = $request->file('receipt')->store('receipts', 'public');
             }
 
-            $result = DB::transaction(function () use ($validated, $course, $paymentGatewayService, $receiptPath) {
+            $result = DB::transaction(function () use ($validated, $course, $paymentGatewayService, $receiptPath, $authUser) {
                 $registration = Registration::create([
                     'course_id' => $validated['course_id'],
+                    'user_id'   => $authUser?->id,
                     'full_name' => $validated['full_name'],
                     'phone'     => $validated['phone'],
                     'email'     => $validated['email'],
-                    'city'      => $validated['city']   ?? null,
+                    'city'      => $validated['city'],
                     'gender'    => $validated['gender'] ?? null,
                     'notes'     => $validated['notes']  ?? null,
                     'status'    => $course->type === 'paid' ? 'Pending Payment' : 'Registered',
@@ -99,13 +118,27 @@ class RegistrationController extends Controller
                     'payments',
                 ]);
 
+                // Notify authenticated student
+                if ($authUser) {
+                    try {
+                        $authUser->notify(new CourseRegisteredNotification(
+                            $registration->course_id,
+                            $course->title,
+                            $registration->id,
+                            $registration->status,
+                        ));
+                    } catch (Throwable $e) {
+                        report($e);
+                    }
+                }
+
                 return response()->json([
-                    'success'        => true,
-                    'type'           => 'paid',
-                    'message'        => 'Payment required.',
+                    'success'      => true,
+                    'type'         => 'paid',
+                    'message'      => 'Payment required.',
                     'registration' => new RegistrationResource($registration),
-                    'payment'        => new PaymentResource($payment),
-                    'checkout_url'   => $payment->checkout_url,
+                    'payment'      => new PaymentResource($payment),
+                    'checkout_url' => $payment->checkout_url,
                 ], 201);
             }
 
@@ -119,10 +152,24 @@ class RegistrationController extends Controller
                 report($exception);
             }
 
+            // Notify authenticated student
+            if ($authUser) {
+                try {
+                    $authUser->notify(new CourseRegisteredNotification(
+                        $freeRegistration->course_id,
+                        $course->title,
+                        $freeRegistration->id,
+                        $freeRegistration->status,
+                    ));
+                } catch (Throwable $e) {
+                    report($e);
+                }
+            }
+
             return response()->json([
-                'success'        => true,
-                'type'           => 'free',
-                'message'        => 'Registration completed successfully.',
+                'success'      => true,
+                'type'         => 'free',
+                'message'      => 'Registration completed successfully.',
                 'registration' => new RegistrationResource($freeRegistration),
             ], 201);
         } catch (Throwable $exception) {

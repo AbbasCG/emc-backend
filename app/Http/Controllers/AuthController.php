@@ -49,6 +49,8 @@ class AuthController extends Controller
         // Revoke previous tokens (single-session enforcement)
         $user->tokens()->delete();
 
+        $user->update(['last_login_at' => now()]);
+
         $token = $user->createToken('api-token')->plainTextToken;
 
         return response()->json([
@@ -75,16 +77,31 @@ class AuthController extends Controller
 
     public function me(Request $request): JsonResponse
     {
-        $user = $request->user();
+        $user            = $request->user();
+        $isImpersonating = (bool) $request->attributes->get('is_impersonating', false);
+
+        $data = [
+            'user'             => new UserResource($user),
+            'role'             => $user->role,
+            'permissions'      => $user->allPermissions(),
+            'is_impersonating' => $isImpersonating,
+        ];
+
+        if ($isImpersonating) {
+            $impersonatorId = $request->attributes->get('impersonator_id');
+            $impersonator   = $impersonatorId ? \App\Models\User::find($impersonatorId) : null;
+
+            $data['impersonator'] = $impersonator ? [
+                'id'   => $impersonator->id,
+                'name' => $impersonator->name,
+                'role' => $impersonator->role,
+            ] : null;
+        }
 
         return response()->json([
             'success' => true,
             'message' => 'Authenticated user retrieved',
-            'data'    => [
-                'user'        => new UserResource($user),
-                'role'        => $user->role,
-                'permissions' => $user->allPermissions(),
-            ],
+            'data'    => $data,
         ]);
     }
 }

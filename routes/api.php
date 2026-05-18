@@ -97,6 +97,12 @@ use App\Http\Controllers\Hr\HrDashboardController;
 use App\Http\Controllers\Admin\AdminUserController;
 use App\Http\Controllers\Admin\AdminWorkshopController;
 use App\Http\Controllers\Admin\AdminTeamMemberController;
+use App\Http\Controllers\Admin\AdminAuditLogController;
+use App\Http\Controllers\Admin\AdminCourseController;
+use App\Http\Controllers\Admin\ImpersonationController;
+use App\Http\Controllers\Instructor\InstructorWorkshopController;
+use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\Student\StudentRegistrationsController;
 use Illuminate\Support\Facades\Route;
 
 // ─── Health (no throttle — used by uptime monitors) ──────────────────────────
@@ -138,20 +144,26 @@ Route::get('/team', [\App\Http\Controllers\TeamController::class, 'index'])->mid
 
 // ─── Student LMS (auth:sanctum + role:student) ─────────────────────────────────
 Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(function () {
-    Route::get('/dashboard', StudentDashboardController::class);
-    Route::get('/sessions', [StudentSessionController::class, 'index']);
-    Route::get('/materials', [StudentMaterialController::class, 'index']);
-    Route::get('/assignments', [StudentAssignmentController::class, 'index']);
+    Route::get('/dashboard',     StudentDashboardController::class);
+    Route::get('/sessions',      [StudentSessionController::class, 'index']);
+    Route::get('/materials',     [StudentMaterialController::class, 'index']);
+    Route::get('/assignments',   [StudentAssignmentController::class, 'index']);
     Route::post('/assignments/{assignment}/submit', [StudentAssignmentController::class, 'submit']);
-    Route::get('/progress', [StudentProgressController::class, 'index']);
-    Route::post('/evaluations', [StudentEvaluationController::class, 'store']);
-    Route::get('/certificates', [StudentCertificateController::class, 'index']);
+    Route::get('/progress',      [StudentProgressController::class, 'index']);
+    Route::post('/evaluations',  [StudentEvaluationController::class, 'store']);
+    Route::get('/certificates',  [StudentCertificateController::class, 'index']);
+
+    // Enrolled courses, registration history, and discovery
+    Route::get('/registrations',    [StudentRegistrationsController::class, 'index']);
+    Route::get('/courses',          [StudentRegistrationsController::class, 'courses']);
+    Route::get('/available-courses',[StudentRegistrationsController::class, 'availableCourses']);
+    Route::get('/upcoming-sessions',[StudentSessionController::class, 'index']);
 
     // Advanced LMS
-    Route::get('/learning',                          [StudentLearningController::class, 'index']);
-    Route::get('/courses/{courseId}/modules',        [StudentLearningController::class, 'modules']);
-    Route::get('/lessons/{lesson}',                  [StudentLearningController::class, 'lesson']);
-    Route::post('/quizzes/{quiz}/submit',            [StudentLearningController::class, 'submitQuiz']);
+    Route::get('/learning',                    [\App\Http\Controllers\Student\StudentLearningController::class, 'index']);
+    Route::get('/courses/{courseId}/modules',  [\App\Http\Controllers\Student\StudentLearningController::class, 'modules']);
+    Route::get('/lessons/{lesson}',            [\App\Http\Controllers\Student\StudentLearningController::class, 'lesson']);
+    Route::post('/quizzes/{quiz}/submit',      [\App\Http\Controllers\Student\StudentLearningController::class, 'submitQuiz']);
 });
 
 // ─── Notifications (auth:sanctum, any role) ───────────────────────────────────
@@ -159,6 +171,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/notifications',                   [NotificationController::class, 'index']);
     Route::put('/notifications/{id}/read',         [NotificationController::class, 'markRead']);
     Route::put('/notifications/read-all',          [NotificationController::class, 'markAllRead']);
+    Route::delete('/notifications/{id}',           [NotificationController::class, 'delete']);
 
     // Documents (auth:sanctum, any role; visibility enforced in controller)
     Route::get('/documents',  [DocumentController::class, 'index']);
@@ -206,13 +219,15 @@ Route::prefix('partner')->middleware(['auth:sanctum', 'role:partner,admin'])->gr
 
 // ─── Instructor LMS portal (auth:sanctum + role:teacher,admin) ──────────────
 Route::prefix('instructor')->middleware(['auth:sanctum', 'role:teacher,admin'])->group(function () {
-    Route::get('/dashboard', InstructorDashboardController::class);
-    Route::get('/sessions', [InstructorSessionController::class, 'index']);
-    Route::get('/courses', [InstructorCourseController::class, 'index']);
-    Route::get('/students', [InstructorStudentController::class, 'index']);
+    Route::get('/dashboard',   InstructorDashboardController::class);
+    Route::get('/sessions',    [InstructorSessionController::class, 'index']);
+    Route::get('/courses',     [InstructorCourseController::class, 'index']);
+    Route::get('/workshops',   [InstructorWorkshopController::class, 'index']);
+    Route::get('/students',    [InstructorStudentController::class, 'index']);
     Route::put('/attendance/{session}', [SessionAttendanceController::class, 'update']);
     Route::get('/assignments', [InstructorAssignmentController::class, 'index']);
     Route::put('/submissions/{submission}/review', [InstructorSubmissionController::class, 'review']);
+    Route::get('/notifications', [NotificationController::class, 'index']);
 });
 
 // ─── Public: Tracks (LMS) ────────────────────────────────────────────────────
@@ -568,6 +583,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Frontend uses PATCH/POST; backend originals use PUT/PUT
     Route::patch('notifications/{id}/read',  [NotificationController::class, 'markRead']);
     Route::post('notifications/read-all',    [NotificationController::class, 'markAllRead']);
+    Route::delete('notifications/{id}',      [NotificationController::class, 'delete']);
     // Frontend uses /notifications/preferences; backend uses /notification-preferences
     Route::get('notifications/preferences',   [NotificationPreferenceController::class, 'index']);
     Route::patch('notifications/preferences', [NotificationPreferenceController::class, 'update']);
@@ -783,24 +799,34 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->
 Route::delete('admin/users/{user}', [AdminUserController::class, 'destroy'])
     ->middleware(['auth:sanctum', 'role:super_admin']);
 
-// ─── Courses: update + delete (admin + super_admin) ──────────────────────────
+// ─── Admin Courses CRUD — full management with filters + instructor assignment ─
 Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->group(function () {
-    Route::get('admin/courses',            [CourseController::class, 'index']);
-    Route::post('admin/courses',           [CourseController::class, 'store']);
-    Route::get('admin/courses/{course}',   [CourseController::class, 'show']);
-    Route::put('admin/courses/{course}',   [CourseController::class, 'update']);
-    Route::patch('admin/courses/{course}', [CourseController::class, 'update']);
-    Route::delete('admin/courses/{course}',[CourseController::class, 'destroy']);
+    Route::get('admin/courses',                                 [AdminCourseController::class, 'index']);
+    Route::post('admin/courses',                                [AdminCourseController::class, 'store']);
+    Route::get('admin/courses/{course}',                        [AdminCourseController::class, 'show']);
+    Route::put('admin/courses/{course}',                        [AdminCourseController::class, 'update']);
+    Route::patch('admin/courses/{course}',                      [AdminCourseController::class, 'update']);
+    Route::delete('admin/courses/{course}',                     [AdminCourseController::class, 'destroy']);
+    Route::post('admin/courses/{course}/assign-instructor',     [AdminCourseController::class, 'assignInstructor']);
+
+    // Programs = tracks alias
+    Route::get('admin/programs',            [AdminTrackController::class, 'index']);
+    Route::post('admin/programs',           [AdminTrackController::class, 'store']);
+    Route::get('admin/programs/{track}',    [AdminTrackController::class, 'show']);
+    Route::put('admin/programs/{track}',    [AdminTrackController::class, 'update']);
+    Route::patch('admin/programs/{track}',  [AdminTrackController::class, 'update']);
+    Route::delete('admin/programs/{track}', [AdminTrackController::class, 'destroy']);
 });
 
 // ─── Workshops CRUD (admin + super_admin) ────────────────────────────────────
 Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->group(function () {
-    Route::get('workshops',                [AdminWorkshopController::class, 'index']);
-    Route::post('workshops',               [AdminWorkshopController::class, 'store']);
-    Route::get('workshops/{workshop}',     [AdminWorkshopController::class, 'show']);
-    Route::put('workshops/{workshop}',     [AdminWorkshopController::class, 'update']);
-    Route::patch('workshops/{workshop}',   [AdminWorkshopController::class, 'update']);
-    Route::delete('workshops/{workshop}',  [AdminWorkshopController::class, 'destroy']);
+    Route::get('workshops',                                 [AdminWorkshopController::class, 'index']);
+    Route::post('workshops',                                [AdminWorkshopController::class, 'store']);
+    Route::get('workshops/{workshop}',                      [AdminWorkshopController::class, 'show']);
+    Route::put('workshops/{workshop}',                      [AdminWorkshopController::class, 'update']);
+    Route::patch('workshops/{workshop}',                    [AdminWorkshopController::class, 'update']);
+    Route::delete('workshops/{workshop}',                   [AdminWorkshopController::class, 'destroy']);
+    Route::post('workshops/{workshop}/assign-instructor',   [AdminWorkshopController::class, 'assignInstructor']);
 });
 
 // ─── Team members CRUD (admin + super_admin) ─────────────────────────────────
@@ -811,4 +837,44 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->
     Route::put('team-members/{teamMember}',     [AdminTeamMemberController::class, 'update']);
     Route::patch('team-members/{teamMember}',   [AdminTeamMemberController::class, 'update']);
     Route::delete('team-members/{teamMember}',  [AdminTeamMemberController::class, 'destroy']);
+});
+
+// ─── Workshop Requests admin CRUD (admin + super_admin) ───────────────────────
+// Public submissions from POST /workshop-requests land in workshop_requests table.
+// These routes expose that table for admin review/management.
+Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->group(function () {
+    Route::get('workshop-requests',                        [WorkshopRequestController::class, 'index']);
+    Route::get('workshop-requests/{workshopRequest}',      [WorkshopRequestController::class, 'show']);
+    Route::put('workshop-requests/{workshopRequest}',      [WorkshopRequestController::class, 'update']);
+    Route::patch('workshop-requests/{workshopRequest}',    [WorkshopRequestController::class, 'update']);
+    Route::delete('workshop-requests/{workshopRequest}',   [WorkshopRequestController::class, 'destroy']);
+});
+
+// ─── Audit Logs (super_admin read-only) ───────────────────────────────────────
+Route::middleware(['auth:sanctum', 'role:super_admin,admin'])->prefix('admin')->group(function () {
+    Route::get('audit-logs',             [AdminAuditLogController::class, 'index']);
+    Route::get('audit-logs/{auditLog}',  [AdminAuditLogController::class, 'show']);
+});
+
+// ─── Impersonation (super_admin only to start; any token to stop) ─────────────
+// Start: authenticated as super_admin with their own token
+Route::middleware(['auth:sanctum', 'role:super_admin'])->group(function () {
+    Route::post('/admin/impersonate/{user}', [ImpersonationController::class, 'start']);
+});
+// Stop: authenticated with the impersonation token (role is the target user's role)
+Route::middleware(['auth:sanctum'])->group(function () {
+    Route::post('/admin/impersonate/stop', [ImpersonationController::class, 'stop']);
+});
+
+// ─── /me shortcut (impersonation-aware) ───────────────────────────────────────
+Route::middleware(['auth:sanctum'])->group(function () {
+    Route::get('/me', [AuthController::class, 'me']);
+});
+
+// ─── Self-service profile (any authenticated role) ────────────────────────────
+Route::middleware(['auth:sanctum'])->group(function () {
+    Route::get('/profile',        [ProfileController::class, 'show']);
+    Route::put('/profile',        [ProfileController::class, 'update']);
+    Route::post('/profile/avatar', [ProfileController::class, 'uploadAvatar']);
+    Route::delete('/profile',     [ProfileController::class, 'destroy']);
 });
