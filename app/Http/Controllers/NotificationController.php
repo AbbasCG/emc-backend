@@ -2,49 +2,72 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Resources\PlatformNotificationResource;
+use App\Models\PlatformNotification;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class NotificationController extends Controller
 {
-    public function index(Request $request): \Illuminate\Http\JsonResponse
+    public function index(Request $request): JsonResponse
     {
-        $notifications = $request->user()
-            ->notifications()
+        $user = $request->user();
+
+        $notifications = PlatformNotification::where('user_id', $user->id)
             ->latest()
             ->paginate(30);
 
+        $unreadCount = PlatformNotification::where('user_id', $user->id)
+            ->where('is_read', false)
+            ->count();
+
         return response()->json([
-            'success'       => true,
-            'unread_count'  => $request->user()->unreadNotifications()->count(),
-            'data'          => $notifications->through(fn ($n) => [
-                'id'         => $n->id,
-                'type'       => class_basename($n->type),
-                'data'       => $n->data,
-                'read_at'    => $n->read_at,
-                'created_at' => $n->created_at,
-            ]),
+            'success'      => true,
+            'unread_count' => $unreadCount,
+            'data'         => PlatformNotificationResource::collection($notifications),
+            'meta'         => [
+                'total'        => $notifications->total(),
+                'current_page' => $notifications->currentPage(),
+                'last_page'    => $notifications->lastPage(),
+                'per_page'     => $notifications->perPage(),
+            ],
         ]);
     }
 
-    public function markRead(Request $request, string $id): \Illuminate\Http\JsonResponse
+    public function unreadCount(Request $request): JsonResponse
     {
-        $notification = $request->user()->notifications()->where('id', $id)->firstOrFail();
-        $notification->markAsRead();
+        $count = PlatformNotification::where('user_id', $request->user()->id)
+            ->where('is_read', false)
+            ->count();
+
+        return response()->json(['success' => true, 'unread_count' => $count]);
+    }
+
+    public function markRead(Request $request, string $id): JsonResponse
+    {
+        PlatformNotification::where('user_id', $request->user()->id)
+            ->where('id', $id)
+            ->firstOrFail()
+            ->update(['is_read' => true]);
 
         return response()->json(['success' => true, 'message' => 'Notification marked as read.']);
     }
 
-    public function markAllRead(Request $request): \Illuminate\Http\JsonResponse
+    public function markAllRead(Request $request): JsonResponse
     {
-        $request->user()->unreadNotifications->markAsRead();
+        PlatformNotification::where('user_id', $request->user()->id)
+            ->where('is_read', false)
+            ->update(['is_read' => true]);
 
         return response()->json(['success' => true, 'message' => 'All notifications marked as read.']);
     }
 
-    public function delete(Request $request, string $id): \Illuminate\Http\JsonResponse
+    public function delete(Request $request, string $id): JsonResponse
     {
-        $notification = $request->user()->notifications()->where('id', $id)->firstOrFail();
-        $notification->delete();
+        PlatformNotification::where('user_id', $request->user()->id)
+            ->where('id', $id)
+            ->firstOrFail()
+            ->delete();
 
         return response()->json(['success' => true, 'message' => 'Notification deleted.']);
     }

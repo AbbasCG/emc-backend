@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\LmsSessionResource;
 use App\Models\Course;
 use App\Models\LmsSession;
+use App\Models\PlatformNotification;
 use App\Models\Registration;
 use App\Models\Workshop;
 use Illuminate\Http\JsonResponse;
@@ -28,7 +29,7 @@ class InstructorDashboardController extends Controller
                     'workshops_count'         => 0,
                     'students_count'          => 0,
                     'pending_reviews'         => 0,
-                    'unread_notifications'    => $user->unreadNotifications()->count(),
+                    'unread_notifications'    => PlatformNotification::where('user_id', $user->id)->where('is_read', false)->count(),
                     'upcoming_sessions'       => [],
                     'recent_registrations'    => [],
                 ],
@@ -88,7 +89,7 @@ class InstructorDashboardController extends Controller
                 'workshops_count'      => $workshopsCount,
                 'students_count'       => $studentsCount,
                 'pending_reviews'      => $pendingReviews,
-                'unread_notifications' => $user->unreadNotifications()->count(),
+                'unread_notifications' => PlatformNotification::where('user_id', $user->id)->where('is_read', false)->count(),
                 'upcoming_sessions'    => LmsSessionResource::collection($upcomingSessions)->resolve(),
                 'recent_registrations' => $recentRegistrations->values()->all(),
             ],

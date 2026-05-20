@@ -10,36 +10,137 @@ class CourseResource extends JsonResource
     public function toArray(Request $request): array
     {
         return [
-            'id'               => $this->id,
-            'track_id'         => $this->track_id,
-            'title'            => $this->title,
-            'slug'             => $this->slug,
-            'description'      => $this->description,
-            'short_description' => $this->short_description,
-            'type'             => $this->type,
-            'price'            => $this->price,
-            'location'         => $this->location,
-            'is_online'        => $this->is_online,
-            'start_date'       => $this->start_date,
-            'end_date'         => $this->end_date,
-            'capacity'         => $this->capacity,
-            'status'           => $this->status,
-            'duration'         => $this->duration,
-            'training_hours'   => $this->training_hours,
-            'target_audience'  => $this->target_audience,
-            'language'         => $this->language,
-            'level'            => $this->level,
-            'study_days'       => $this->study_days,
-            'study_time'       => $this->study_time,
-            'certificate'      => $this->certificate,
-            'learning_outcomes' => $this->learning_outcomes,
-            'course_image'     => $this->course_image,
-            'instructor_id'    => $this->instructor_id,
-            // Nested relationships — only present when eager-loaded
-            'track'            => TrackResource::make($this->whenLoaded('track')),
-            'instructor'       => InstructorResource::make($this->whenLoaded('instructor')),
-            'features'         => CourseFeatureResource::collection($this->whenLoaded('features')),
-            'created_at'       => $this->created_at,
+            'id'                    => $this->id,
+            'track_id'              => $this->track_id,
+            'title'                 => $this->title,
+            'slug'                  => $this->slug,
+            'description'           => $this->description,
+            'short_description'     => $this->short_description,
+            'type'                  => $this->type,
+            'price'                 => (float) $this->price,
+            'is_free'               => (bool) $this->is_free,
+            'status'                => $this->status,
+            'program_type'          => $this->program_type,
+
+            // Dates — always formatted as Y-m-d strings (cast returns Carbon, must format here)
+            'start_date'            => $this->start_date?->format('Y-m-d'),
+            'end_date'              => $this->end_date?->format('Y-m-d'),
+            'start_time'            => $this->start_time,
+            'end_time'              => $this->end_time,
+            'next_cohort_pending'   => ! $this->start_date,
+
+            // Location / delivery
+            'delivery_type'         => $this->location_type ?? 'unknown',
+            'location_type'         => $this->location_type ?? 'unknown',
+            'location'              => $this->location,
+            'meeting_link'          => $this->meeting_link,
+            'is_online'             => (bool) $this->is_online,
+
+            // Capacity
+            'capacity'              => $this->capacity,
+            'seats_count'           => $this->capacity,
+            'registrations_count'   => $this->registrations_count ?? 0,
+            'registration_open'     => (bool) ($this->registration_open ?? true),
+            'registration_status'   => $this->registration_status ?? 'open',
+
+            // Image — raw path AND resolved full URL
+            'course_image'          => $this->course_image,
+            'image_url'             => $this->resolveImageUrl($this->course_image),
+
+            // Learning content — always arrays, never null or JSON strings
+            'learning_outcomes'     => $this->ensureArray($this->learning_outcomes),
+            'requirements'          => $this->ensureArray($this->requirements),
+            'curriculum_topics'     => $this->ensureArray($this->curriculum_topics),
+            'keywords'              => $this->ensureArray($this->keywords),
+
+            // Features — plain string array (not resource objects)
+            'features'              => $this->whenLoaded(
+                'features',
+                fn () => $this->features->pluck('title')->values()->all(),
+                []
+            ),
+
+            // Meta
+            'duration'              => $this->duration,
+            'training_hours'        => $this->training_hours,
+            'target_audience'       => $this->target_audience,
+            'language'              => $this->language,
+            'level'                 => $this->level,
+            'study_days'            => $this->study_days,
+            'study_time'            => $this->study_time,
+            'certificate'           => $this->certificate,
+            'certificate_available' => (bool) $this->certificate_available,
+            'certificate_type'      => $this->certificate_type,
+
+            // Instructor
+            'instructor_id'         => $this->instructor_id,
+            'instructor'            => $this->buildInstructor(),
+            'instructor_name'       => $this->buildInstructorName(),
+
+            // Relations
+            'track'                 => TrackResource::make($this->whenLoaded('track')),
+
+            'created_at'            => $this->created_at,
+            'updated_at'            => $this->updated_at,
         ];
+    }
+
+    private function buildInstructor(): ?array
+    {
+        if (! $this->relationLoaded('instructor') || ! $this->instructor) {
+            return null;
+        }
+
+        $profile = $this->instructor;
+        $user    = $profile->relationLoaded('user') ? $profile->user : null;
+
+        $avatarPath = $user?->avatar ?? $profile->image;
+        $photoUrl   = $this->resolveImageUrl($avatarPath);
+
+        return [
+            'id'                => $profile->id,
+            'user_id'           => $profile->user_id,
+            'name'              => $user?->name ?? $profile->name,
+            'email'             => $user?->email,
+            'role'              => $user?->role ?? 'instructor',
+            'title'             => $profile->title,
+            'profile_photo_url' => $photoUrl,
+        ];
+    }
+
+    private function buildInstructorName(): ?string
+    {
+        if (! $this->relationLoaded('instructor') || ! $this->instructor) {
+            return null;
+        }
+
+        $user = $this->instructor->relationLoaded('user') ? $this->instructor->user : null;
+
+        return $user?->name ?? $this->instructor->name;
+    }
+
+    private function resolveImageUrl(?string $path): ?string
+    {
+        if (! $path) {
+            return null;
+        }
+        if (str_starts_with($path, 'http')) {
+            return $path;
+        }
+        return asset('storage/' . ltrim($path, '/'));
+    }
+
+    /** Guarantees the value is a PHP array regardless of whether it is already
+     *  decoded (array), a JSON string (string), or null. */
+    private function ensureArray(mixed $value): array
+    {
+        if (is_array($value)) {
+            return $value;
+        }
+        if (is_string($value) && $value !== '') {
+            $decoded = json_decode($value, true);
+            return is_array($decoded) ? $decoded : [];
+        }
+        return [];
     }
 }

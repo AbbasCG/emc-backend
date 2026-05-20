@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Events\WorkshopRequestSubmittedEvent;
 use App\Http\Requests\StoreWorkshopRequestRequest;
 use App\Http\Resources\WorkshopRequestResource;
 use App\Mail\WorkshopRequestConfirmationMail;
@@ -75,6 +76,7 @@ class WorkshopRequestController extends Controller
                 'generated_announcement_text' => $announcementText,
             ]);
 
+            event(new WorkshopRequestSubmittedEvent($workshopRequest));
             $this->sendEmails($workshopRequest);
 
             return (new WorkshopRequestResource($workshopRequest))

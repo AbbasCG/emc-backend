@@ -7,6 +7,7 @@ use App\Models\Course;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class CourseController extends Controller
@@ -15,13 +16,43 @@ class CourseController extends Controller
     {
         $perPage = min((int) $request->query('per_page', 15), 100);
 
-        $query = Course::with(['instructor', 'features', 'track'])->latest();
+        Log::info('Public courses count', ['total_in_db' => Course::count()]);
+
+        $query = Course::with(['instructor.user', 'features', 'track'])
+            ->withCount('registrations')
+            // Show active/published/scheduled; treat missing status as visible (fallback)
+            ->where(function ($q) {
+                $q->whereIn('status', ['active', 'published', 'scheduled'])
+                  ->orWhereNull('status');
+            })
+            // registration_open defaults true; NULL means old row created before column existed
+            ->where(function ($q) {
+                $q->whereNull('registration_open')
+                  ->orWhere('registration_open', true);
+            })
+            ->latest();
 
         if ($request->filled('track_id')) {
             $query->where('track_id', $request->query('track_id'));
         }
 
+        if ($request->filled('type')) {
+            $query->where('type', $request->query('type'));
+        }
+
+        if ($request->filled('search')) {
+            $term = (string) $request->query('search');
+            $query->where(fn ($q) => $q->where('title', 'like', "%{$term}%")
+                ->orWhere('short_description', 'like', "%{$term}%"));
+        }
+
         $courses = $query->paginate($perPage);
+
+        Log::info('Public courses returned', [
+            'count'   => $courses->count(),
+            'total'   => $courses->total(),
+            'filters' => $request->only(['track_id', 'type', 'search']),
+        ]);
 
         return CourseResource::collection($courses)
             ->additional([
@@ -32,7 +63,8 @@ class CourseController extends Controller
 
     public function show(string $slug): JsonResponse
     {
-        $course = Course::with(['instructor', 'features', 'track'])
+        $course = Course::with(['instructor.user', 'features', 'track'])
+            ->withCount('registrations')
             ->where('slug', $slug)
             ->firstOrFail();
 
@@ -91,7 +123,7 @@ class CourseController extends Controller
             ]);
         }
 
-        $course->load(['instructor', 'features', 'track']);
+        $course->load(['instructor.user', 'features', 'track']);
 
         return (new CourseResource($course))
             ->additional([
@@ -153,7 +185,7 @@ class CourseController extends Controller
             }
         }
 
-        $course->load(['instructor', 'features', 'track']);
+        $course->load(['instructor.user', 'features', 'track']);
 
         return (new CourseResource($course))
             ->additional(['success' => true, 'message' => 'Course updated successfully'])

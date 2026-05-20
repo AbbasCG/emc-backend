@@ -15,7 +15,7 @@ class InstructorCourseController extends Controller
         $user = $request->user();
         $profile = $user->instructorProfile;
 
-        $query = Course::query()->with(['track', 'instructor', 'features']);
+        $query = Course::query()->with(['track', 'instructor.user', 'features']);
 
         if ($profile) {
             $query->where('instructor_id', $profile->id);

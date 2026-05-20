@@ -5,8 +5,8 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Instructor;
 use App\Models\Workshop;
-use App\Notifications\InstructorAssignedNotification;
 use App\Services\AuditLogService;
+use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -66,9 +66,8 @@ class AdminWorkshopController extends Controller
 
         $workshop = Workshop::create($data);
 
-        // Notify instructor if assigned
         if ($workshop->instructor_id) {
-            $this->notifyInstructor($workshop->instructor, 'workshop', $workshop->id, $workshop->title);
+            $this->notifyInstructor($workshop->instructor, 'workshop', $workshop->id, $workshop->title, $request->user()->id);
         }
 
         AuditLogService::logModel('created', $workshop, null,
@@ -124,9 +123,8 @@ class AdminWorkshopController extends Controller
         $workshop->update($data);
         $fresh = $workshop->fresh(['course:id,title,slug', 'instructor']);
 
-        // Notify newly assigned instructor
         if ($instructorChanged && ! empty($data['instructor_id'])) {
-            $this->notifyInstructor($fresh->instructor, 'workshop', $workshop->id, $workshop->title);
+            $this->notifyInstructor($fresh->instructor, 'workshop', $workshop->id, $workshop->title, $request->user()->id);
         }
 
         $action = (isset($data['status']) && $data['status'] !== $oldSnap['status']) ? 'status_changed' : 'updated';
@@ -170,7 +168,7 @@ class AdminWorkshopController extends Controller
 
         $instructor = Instructor::find($data['instructor_id']);
         if ($instructor) {
-            $this->notifyInstructor($instructor, 'workshop', $workshop->id, $workshop->title);
+            $this->notifyInstructor($instructor, 'workshop', $workshop->id, $workshop->title, $request->user()->id);
         }
 
         AuditLogService::log('updated', 'Workshop', $workshop->id, $workshop->title,
@@ -189,10 +187,10 @@ class AdminWorkshopController extends Controller
         ]);
     }
 
-    private function notifyInstructor(?Instructor $instructor, string $entityType, int $entityId, string $title): void
+    private function notifyInstructor(?Instructor $instructor, string $entityType, int $entityId, string $title, int $assignedByUserId = 0): void
     {
-        if ($instructor?->user) {
-            $instructor->user->notify(new InstructorAssignedNotification($entityType, $entityId, $title));
+        if ($instructor?->user_id) {
+            NotificationService::workshopInstructorAssigned($instructor->user_id, $entityId, $title, $assignedByUserId);
         }
     }
 

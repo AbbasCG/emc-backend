@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Services\AuditLogService;
-use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -52,7 +51,7 @@ class AdminUserController extends Controller
         $data = $request->validate([
             'name'                      => 'required|string|max:255',
             'email'                     => 'required|email|max:255|unique:users,email',
-            'password'                  => 'required|string|min:8',
+            'password'                  => 'nullable|string|min:8',
             'role'                      => ['required', Rule::in(self::ALLOWED_ROLES)],
             'phone'                     => 'nullable|string|max:30',
             'department'                => 'nullable|string|max:255',
@@ -70,6 +69,13 @@ class AdminUserController extends Controller
             ], 403);
         }
 
+        // Auto-generate a temporary password when none is provided
+        $temporaryPassword = null;
+        if (empty($data['password'])) {
+            $temporaryPassword = \Illuminate\Support\Str::random(12);
+            $data['password']  = $temporaryPassword;
+        }
+
         $user = User::create([
             'name'                      => $data['name'],
             'email'                     => $data['email'],
@@ -83,17 +89,28 @@ class AdminUserController extends Controller
             'is_active'                 => $data['is_active'] ?? true,
         ]);
 
+        // Auto-create instructor profile so user appears in the instructors module
+        if (in_array($user->role, ['instructor', 'teacher'], true)) {
+            AdminInstructorController::ensureProfile($user);
+        }
+
         AuditLogService::logModel('created', $user, null, [
             'name'  => $user->name,
             'email' => $user->email,
             'role'  => $user->role,
         ], null, $request);
 
-        return response()->json([
+        $response = [
             'success' => true,
             'message' => 'User created successfully',
             'data'    => $this->formatUser($user),
-        ], 201);
+        ];
+
+        if ($temporaryPassword !== null) {
+            $response['temporary_password'] = $temporaryPassword;
+        }
+
+        return response()->json($response, 201);
     }
 
     // GET /api/admin/users/{user}
@@ -155,6 +172,10 @@ class AdminUserController extends Controller
         ];
 
         $user->update($data);
+
+        if (in_array($user->fresh()->role, ['instructor', 'teacher'], true)) {
+            AdminInstructorController::ensureProfile($user->fresh());
+        }
 
         $action = isset($data['role']) && $data['role'] !== $oldRole ? 'role_changed' : 'updated';
         AuditLogService::logModel($action, $user->fresh(), $oldSnap, [

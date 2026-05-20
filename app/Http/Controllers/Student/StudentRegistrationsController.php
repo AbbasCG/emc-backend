@@ -22,7 +22,7 @@ class StudentRegistrationsController extends Controller
         $user = $request->user();
 
         $registrations = Registration::query()
-            ->with(['course.track', 'course.instructor', 'payments'])
+            ->with(['course.instructor.user', 'course.track', 'payments'])
             ->where(function ($q) use ($user) {
                 $q->where('user_id', $user->id)
                   ->orWhere('email', $user->email);
@@ -35,19 +35,52 @@ class StudentRegistrationsController extends Controller
 
         $data = $registrations->map(fn ($reg) => [
             'id'             => $reg->id,
+            'user_id'        => $reg->user_id,
             'course_id'      => $reg->course_id,
-            'course_title'   => $reg->course?->title,
-            'course_slug'    => $reg->course?->slug,
+            'full_name'      => $reg->full_name,
+            'email'          => $reg->email,
             'status'         => $reg->status,
-            'payment_status' => $reg->payments->last()?->status ?? ($reg->course?->type === 'free' ? 'free' : null),
+            'payment_status' => $reg->payments->last()?->status
+                ?? ($reg->course?->type === 'free' ? 'free' : null),
             'registered_at'  => $reg->created_at,
             'next_session'   => $nextSessionsMap[$reg->course_id] ?? null,
+            'course'         => $reg->course ? [
+                'id'           => $reg->course->id,
+                'title'        => $reg->course->title,
+                'slug'         => $reg->course->slug,
+                'image_url'    => $this->storageUrl($reg->course->course_image),
+                'type'         => $reg->course->type,
+                'price'        => (float) $reg->course->price,
+                'start_date'   => $reg->course->start_date?->format('Y-m-d'),
+                'start_time'   => $reg->course->start_time,
+                'location_type'=> $reg->course->location_type,
+                'meeting_link' => $reg->course->meeting_link,
+                'track'        => $reg->course->track
+                    ? ['id' => $reg->course->track->id, 'name' => $reg->course->track->title]
+                    : null,
+                'instructor'   => $reg->course->instructor ? [
+                    'id'   => $reg->course->instructor->id,
+                    'name' => $reg->course->instructor->user?->name
+                           ?? $reg->course->instructor->name,
+                ] : null,
+            ] : null,
         ])->values()->all();
 
         return response()->json([
             'success' => true,
             'data'    => $data,
         ]);
+    }
+
+    private function storageUrl(?string $path): ?string
+    {
+        if (! $path) {
+            return null;
+        }
+        if (str_starts_with($path, 'http')) {
+            return $path;
+        }
+        return asset('storage/' . ltrim($path, '/'));
     }
 
     /**
@@ -60,7 +93,7 @@ class StudentRegistrationsController extends Controller
         $user = $request->user();
 
         $registrations = Registration::query()
-            ->with(['course.track', 'course.instructor', 'payments'])
+            ->with(['course.track', 'course.instructor.user', 'payments'])
             ->where(function ($q) use ($user) {
                 $q->where('user_id', $user->id)
                   ->orWhere('email', $user->email);
@@ -101,7 +134,8 @@ class StudentRegistrationsController extends Controller
                 'id'   => $reg->course->track->id,
                 'name' => $reg->course->track->title,
             ] : null,
-            'instructor_name'     => $reg->course?->instructor?->name,
+            'instructor_name'     => $reg->course?->instructor?->user?->name
+                ?? $reg->course?->instructor?->name,
             'registration_id'     => $reg->id,
             'registration_status' => $reg->status,
             'payment_status'      => $reg->payments->last()?->status ?? ($reg->course?->type === 'free' ? 'free' : null),
@@ -138,7 +172,7 @@ class StudentRegistrationsController extends Controller
             $q->where('user_id', $user->id)->orWhere('email', $user->email);
         })->whereNotIn('status', ['Cancelled'])->pluck('course_id')->all();
 
-        $query = \App\Models\Course::with(['instructor', 'track'])
+        $query = \App\Models\Course::with(['instructor.user', 'track'])
             ->whereIn('status', ['published', 'active', 'scheduled'])
             ->where('registration_open', true)
             ->whereNotIn('id', $enrolledCourseIds);
@@ -175,7 +209,7 @@ class StudentRegistrationsController extends Controller
                 'location_type'       => $c->location_type,
                 'start_date'          => $c->start_date,
                 'next_cohort_pending' => $c->start_date === null,
-                'instructor_name'     => $c->instructor?->name,
+                'instructor_name'     => $c->instructor?->user?->name ?? $c->instructor?->name,
                 'track'               => $c->track ? ['id' => $c->track->id, 'title' => $c->track->title] : null,
             ]),
             'meta' => [

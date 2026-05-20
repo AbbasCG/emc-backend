@@ -99,6 +99,7 @@ use App\Http\Controllers\Admin\AdminWorkshopController;
 use App\Http\Controllers\Admin\AdminTeamMemberController;
 use App\Http\Controllers\Admin\AdminAuditLogController;
 use App\Http\Controllers\Admin\AdminCourseController;
+use App\Http\Controllers\Admin\AdminInstructorController;
 use App\Http\Controllers\Admin\ImpersonationController;
 use App\Http\Controllers\Instructor\InstructorWorkshopController;
 use App\Http\Controllers\ProfileController;
@@ -169,8 +170,9 @@ Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(fu
 // ─── Notifications (auth:sanctum, any role) ───────────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/notifications',                   [NotificationController::class, 'index']);
-    Route::put('/notifications/{id}/read',         [NotificationController::class, 'markRead']);
+    Route::get('/notifications/unread-count',      [NotificationController::class, 'unreadCount']);
     Route::put('/notifications/read-all',          [NotificationController::class, 'markAllRead']);
+    Route::put('/notifications/{id}/read',         [NotificationController::class, 'markRead']);
     Route::delete('/notifications/{id}',           [NotificationController::class, 'delete']);
 
     // Documents (auth:sanctum, any role; visibility enforced in controller)
@@ -243,8 +245,12 @@ Route::get('/instructors',       [InstructorController::class, 'index']);
 Route::get('/instructors/{id}',  [InstructorController::class, 'show']);
 
 // ─── Course Registration (throttle:registration — 5 req/min per IP) ──────────
+// optional.sanctum: Bearer token links registration to user_id when logged in
 Route::post('/register', [RegistrationController::class, 'store'])
-    ->middleware('throttle:registration');
+    ->middleware(['throttle:registration', 'optional.sanctum']);
+
+Route::post('/courses/{course}/register', [RegistrationController::class, 'storeForCourse'])
+    ->middleware(['throttle:registration', 'optional.sanctum']);
 
 // ─── Workshop Request Submission (throttle:workshop — 5 req/min per IP) ──────
 Route::post('/workshop-requests', [WorkshopRequestController::class, 'store'])
@@ -800,7 +806,7 @@ Route::delete('admin/users/{user}', [AdminUserController::class, 'destroy'])
     ->middleware(['auth:sanctum', 'role:super_admin']);
 
 // ─── Admin Courses CRUD — full management with filters + instructor assignment ─
-Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->group(function () {
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,department_manager'])->group(function () {
     Route::get('admin/courses',                                 [AdminCourseController::class, 'index']);
     Route::post('admin/courses',                                [AdminCourseController::class, 'store']);
     Route::get('admin/courses/{course}',                        [AdminCourseController::class, 'show']);
@@ -808,6 +814,13 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->group(function ()
     Route::patch('admin/courses/{course}',                      [AdminCourseController::class, 'update']);
     Route::delete('admin/courses/{course}',                     [AdminCourseController::class, 'destroy']);
     Route::post('admin/courses/{course}/assign-instructor',     [AdminCourseController::class, 'assignInstructor']);
+    Route::patch('admin/courses/{course}/assign-instructor',    [AdminCourseController::class, 'assignInstructor']);
+    Route::put('admin/courses/{course}/assign-instructor',      [AdminCourseController::class, 'assignInstructor']);
+
+    // Instructor management
+    Route::get('admin/instructors',        [AdminInstructorController::class, 'index']);
+    Route::post('admin/instructors',       [AdminInstructorController::class, 'store']);
+    Route::get('admin/instructors/{user}', [AdminInstructorController::class, 'show']);
 
     // Programs = tracks alias
     Route::get('admin/programs',            [AdminTrackController::class, 'index']);

@@ -10,7 +10,7 @@ use App\Models\Payment;
 use App\Models\Registration;
 use App\Models\Track;
 use App\Models\User;
-use App\Notifications\RegistrationConfirmedNotification;
+use App\Services\NotificationService;
 use App\Support\PaymentStatuses;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -55,7 +55,8 @@ class AdminController extends Controller
     {
         $perPage = min((int) $request->query('per_page', 20), 100);
 
-        $query = Registration::with(['course.track', 'course.instructor', 'payments']);
+        // Load user even when user_id is NULL — whereNotNull not used so nulls appear too
+        $query = Registration::with(['course.track', 'course.instructor.user', 'payments', 'user']);
 
         if ($request->filled('course_id')) {
             $query->where('course_id', $request->query('course_id'));
@@ -69,11 +70,15 @@ class AdminController extends Controller
             $query->whereHas('payments', fn ($q) => $q->where('status', $request->query('payment_status')));
         }
 
-        if ($request->filled('q')) {
-            $q = (string) $request->query('q');
-            $query->where(function ($sub) use ($q) {
-                $sub->where('full_name', 'like', '%' . $q . '%')
-                    ->orWhere('email', 'like', '%' . $q . '%');
+        // Accept both ?q= and ?search= for backwards compat
+        $search = $request->query('q') ?? $request->query('search');
+        if (filled($search)) {
+            $term = (string) $search;
+            $query->where(function ($sub) use ($term) {
+                $sub->where('full_name', 'like', "%{$term}%")
+                    ->orWhere('email',     'like', "%{$term}%")
+                    ->orWhere('phone',     'like', "%{$term}%")
+                    ->orWhereHas('course', fn ($c) => $c->where('title', 'like', "%{$term}%"));
             });
         }
 
@@ -121,17 +126,16 @@ class AdminController extends Controller
             ]);
         }
 
-        // Notify student when registration is confirmed
         if (in_array($validated['status'], ['Registered', 'Payment Confirmed'], true)
             && $registration->user_id
         ) {
             try {
-                $student = User::find($registration->user_id);
-                $student?->notify(new RegistrationConfirmedNotification(
+                NotificationService::registrationConfirmed(
+                    $registration->user_id,
                     $registration->course_id,
                     $registration->course?->title ?? 'Unknown Course',
                     $registration->id,
-                ));
+                );
             } catch (Throwable $e) {
                 report($e);
             }

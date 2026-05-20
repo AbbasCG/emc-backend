@@ -27,6 +27,16 @@ use App\Models\Department;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\User;
+use App\Events\CourseCreatedEvent;
+use App\Events\CourseUpdatedEvent;
+use App\Events\InstructorAssignedEvent;
+use App\Events\StudentRegisteredEvent;
+use App\Events\WorkshopRequestSubmittedEvent;
+use App\Listeners\CourseCreatedListener;
+use App\Listeners\CourseUpdatedListener;
+use App\Listeners\InstructorAssignedListener;
+use App\Listeners\StudentRegisteredListener;
+use App\Listeners\WorkshopRequestListener;
 use App\Policies\AssignmentPolicy;
 use App\Policies\AssignmentSubmissionPolicy;
 use App\Policies\CertificatePolicy;
@@ -50,6 +60,7 @@ use App\Policies\WorkshopPolicy;
 use App\Support\Permissions;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
@@ -98,6 +109,16 @@ class AppServiceProvider extends ServiceProvider
         $this->configureLmsRouteModelBinding();
         $this->configurePolicies();
         $this->configurePermissionGates();
+        $this->configureEventListeners();
+    }
+
+    private function configureEventListeners(): void
+    {
+        Event::listen(CourseCreatedEvent::class, CourseCreatedListener::class);
+        Event::listen(InstructorAssignedEvent::class, InstructorAssignedListener::class);
+        Event::listen(CourseUpdatedEvent::class, CourseUpdatedListener::class);
+        Event::listen(StudentRegisteredEvent::class, StudentRegisteredListener::class);
+        Event::listen(WorkshopRequestSubmittedEvent::class, WorkshopRequestListener::class);
     }
 
     private function configureLmsRouteModelBinding(): void
