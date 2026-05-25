@@ -4,8 +4,9 @@ namespace App\Listeners;
 
 use App\Events\WorkshopRequestSubmittedEvent;
 use App\Services\NotificationService;
+use Illuminate\Contracts\Queue\ShouldQueue;
 
-class WorkshopRequestListener
+class WorkshopRequestListener implements ShouldQueue
 {
     public function handle(WorkshopRequestSubmittedEvent $event): void
     {

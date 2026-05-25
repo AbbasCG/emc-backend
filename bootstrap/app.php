@@ -16,12 +16,18 @@ return Application::configure(basePath: dirname(__DIR__))
             'role'               => \App\Http\Middleware\RoleMiddleware::class,
             'permission'         => \App\Http\Middleware\PermissionMiddleware::class,
             'optional.sanctum'   => \App\Http\Middleware\OptionalSanctumAuth::class,
+            'active'             => \App\Http\Middleware\EnsureUserIsActive::class,
         ]);
 
         // Run on every api/* request — detects impersonation tokens and annotates
         // the request with is_impersonating + impersonator_id attributes.
         // No-op for unauthenticated requests or normal tokens.
         $middleware->appendToGroup('api', \App\Http\Middleware\ImpersonationMiddleware::class);
+
+        // Block suspended accounts on every authenticated request.
+        // EnsureUserIsActive is a no-op when $request->user() is null,
+        // so it is safe to append globally — unauthenticated public routes are unaffected.
+        $middleware->appendToGroup('api', \App\Http\Middleware\EnsureUserIsActive::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
 

@@ -121,8 +121,10 @@ Route::get('/health', function () {
 
 // ─── Auth (throttle:auth — 10 req/min per IP) ────────────────────────────────
 Route::prefix('auth')->middleware('throttle:auth')->group(function () {
-    Route::post('/register', [AuthController::class, 'register']);
-    Route::post('/login',    [AuthController::class, 'login']);
+    Route::post('/register',       [AuthController::class, 'register']);
+    Route::post('/login',          [AuthController::class, 'login']);
+    Route::post('/forgot-password', [\App\Http\Controllers\Auth\ForgotPasswordController::class, 'send']);
+    Route::post('/reset-password',  [\App\Http\Controllers\Auth\ResetPasswordController::class, 'reset']);
 
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
@@ -165,6 +167,11 @@ Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(fu
     Route::get('/courses/{courseId}/modules',  [\App\Http\Controllers\Student\StudentLearningController::class, 'modules']);
     Route::get('/lessons/{lesson}',            [\App\Http\Controllers\Student\StudentLearningController::class, 'lesson']);
     Route::post('/quizzes/{quiz}/submit',      [\App\Http\Controllers\Student\StudentLearningController::class, 'submitQuiz']);
+
+    // Course content learning view (modules + sessions + materials + assignments)
+    // Both patterns supported: frontend uses /courses/{courseId}/learn following existing convention
+    Route::get('/courses/{courseId}/learn',    [\App\Http\Controllers\Student\StudentLearnController::class, 'show']);
+    Route::get('/learn/{courseId}',            [\App\Http\Controllers\Student\StudentLearnController::class, 'show']);
 });
 
 // ─── Notifications (auth:sanctum, any role) ───────────────────────────────────
@@ -230,6 +237,40 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:teacher,admin'])-
     Route::get('/assignments', [InstructorAssignmentController::class, 'index']);
     Route::put('/submissions/{submission}/review', [InstructorSubmissionController::class, 'review']);
     Route::get('/notifications', [NotificationController::class, 'index']);
+
+    // ── Course content: nested CRUD (POST /instructor/courses/{course}/…) ────────
+    Route::get('/courses/{course}/content',                              [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'content']);
+    Route::post('/courses/{course}/modules',                             [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'storeModule']);
+    Route::post('/courses/{course}/modules/reorder',                     [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'reorderModules']);
+    Route::put('/courses/{course}/modules/{module}',                     [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateModule']);
+    Route::patch('/courses/{course}/modules/{module}',                   [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateModule']);
+    Route::delete('/courses/{course}/modules/{module}',                  [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'destroyModule']);
+    Route::post('/courses/{course}/sessions',                            [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'storeCourseSession']);
+    Route::put('/courses/{course}/sessions/{courseSession}',             [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateCourseSession']);
+    Route::patch('/courses/{course}/sessions/{courseSession}',           [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateCourseSession']);
+    Route::delete('/courses/{course}/sessions/{courseSession}',          [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'destroyCourseSession']);
+    Route::post('/courses/{course}/materials',                           [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'storeMaterial']);
+    Route::put('/courses/{course}/materials/{material}',                 [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateMaterial']);
+    Route::patch('/courses/{course}/materials/{material}',               [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateMaterial']);
+    Route::delete('/courses/{course}/materials/{material}',              [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'destroyMaterial']);
+    Route::post('/courses/{course}/assignments',                         [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'storeAssignment']);
+    Route::put('/courses/{course}/assignments/{courseAssignment}',       [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateAssignment']);
+    Route::patch('/courses/{course}/assignments/{courseAssignment}',     [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateAssignment']);
+    Route::delete('/courses/{course}/assignments/{courseAssignment}',    [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'destroyAssignment']);
+
+    // ── Course content: flat routes (PUT /instructor/modules|sessions|…/{id}) ──
+    Route::put('/modules/{module}',                                      [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateModule']);
+    Route::patch('/modules/{module}',                                    [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateModule']);
+    Route::delete('/modules/{module}',                                   [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'destroyModule']);
+    Route::put('/sessions/{courseSession}',                              [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateCourseSession']);
+    Route::patch('/sessions/{courseSession}',                            [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateCourseSession']);
+    Route::delete('/sessions/{courseSession}',                           [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'destroyCourseSession']);
+    Route::put('/materials/{material}',                                  [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateMaterial']);
+    Route::patch('/materials/{material}',                                [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateMaterial']);
+    Route::delete('/materials/{material}',                               [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'destroyMaterial']);
+    Route::put('/assignments/{courseAssignment}',                        [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateAssignment']);
+    Route::patch('/assignments/{courseAssignment}',                      [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateAssignment']);
+    Route::delete('/assignments/{courseAssignment}',                     [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'destroyAssignment']);
 });
 
 // ─── Public: Tracks (LMS) ────────────────────────────────────────────────────
@@ -753,15 +794,16 @@ Route::post('contact', function (\Illuminate\Http\Request $request) {
 
 // ─── Platform scale (public stats) ───────────────────────────────────────────
 Route::get('platform/scale', function () {
-    return response()->json([
-        'success' => true,
-        'data'    => [
-            'users'        => \App\Models\User::count(),
-            'courses'      => \App\Models\Course::count(),
-            'instructors'  => \App\Models\Instructor::count(),
-            'registrations'=> \App\Models\Registration::count(),
-        ],
-    ]);
+    $data = \Illuminate\Support\Facades\Cache::remember('platform_scale', 3600, function () {
+        return [
+            'users'         => \App\Models\User::count(),
+            'courses'       => \App\Models\Course::count(),
+            'instructors'   => \App\Models\Instructor::count(),
+            'registrations' => \App\Models\Registration::count(),
+        ];
+    });
+
+    return response()->json(['success' => true, 'data' => $data]);
 })->middleware('throttle:api');
 
 // ─── Mobile readiness (auth required) ────────────────────────────────────────
@@ -816,6 +858,26 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,department_manager'])
     Route::post('admin/courses/{course}/assign-instructor',     [AdminCourseController::class, 'assignInstructor']);
     Route::patch('admin/courses/{course}/assign-instructor',    [AdminCourseController::class, 'assignInstructor']);
     Route::put('admin/courses/{course}/assign-instructor',      [AdminCourseController::class, 'assignInstructor']);
+
+    // ── Course content: nested CRUD (all under /admin/courses/{course}/…) ───────
+    Route::get('admin/courses/{course}/content',                             [\App\Http\Controllers\Admin\CourseContentController::class, 'content']);
+    Route::post('admin/courses/{course}/modules',                            [\App\Http\Controllers\Admin\CourseContentController::class, 'storeModule']);
+    Route::post('admin/courses/{course}/modules/reorder',                    [\App\Http\Controllers\Admin\CourseContentController::class, 'reorderModules']);
+    Route::put('admin/courses/{course}/modules/{module}',                    [\App\Http\Controllers\Admin\CourseContentController::class, 'updateModule']);
+    Route::patch('admin/courses/{course}/modules/{module}',                  [\App\Http\Controllers\Admin\CourseContentController::class, 'updateModule']);
+    Route::delete('admin/courses/{course}/modules/{module}',                 [\App\Http\Controllers\Admin\CourseContentController::class, 'destroyModule']);
+    Route::post('admin/courses/{course}/sessions',                           [\App\Http\Controllers\Admin\CourseContentController::class, 'storeCourseSession']);
+    Route::put('admin/courses/{course}/sessions/{courseSession}',            [\App\Http\Controllers\Admin\CourseContentController::class, 'updateCourseSession']);
+    Route::patch('admin/courses/{course}/sessions/{courseSession}',          [\App\Http\Controllers\Admin\CourseContentController::class, 'updateCourseSession']);
+    Route::delete('admin/courses/{course}/sessions/{courseSession}',         [\App\Http\Controllers\Admin\CourseContentController::class, 'destroyCourseSession']);
+    Route::post('admin/courses/{course}/materials',                          [\App\Http\Controllers\Admin\CourseContentController::class, 'storeMaterial']);
+    Route::put('admin/courses/{course}/materials/{material}',                [\App\Http\Controllers\Admin\CourseContentController::class, 'updateMaterial']);
+    Route::patch('admin/courses/{course}/materials/{material}',              [\App\Http\Controllers\Admin\CourseContentController::class, 'updateMaterial']);
+    Route::delete('admin/courses/{course}/materials/{material}',             [\App\Http\Controllers\Admin\CourseContentController::class, 'destroyMaterial']);
+    Route::post('admin/courses/{course}/assignments',                        [\App\Http\Controllers\Admin\CourseContentController::class, 'storeAssignment']);
+    Route::put('admin/courses/{course}/assignments/{courseAssignment}',      [\App\Http\Controllers\Admin\CourseContentController::class, 'updateAssignment']);
+    Route::patch('admin/courses/{course}/assignments/{courseAssignment}',    [\App\Http\Controllers\Admin\CourseContentController::class, 'updateAssignment']);
+    Route::delete('admin/courses/{course}/assignments/{courseAssignment}',   [\App\Http\Controllers\Admin\CourseContentController::class, 'destroyAssignment']);
 
     // Instructor management
     Route::get('admin/instructors',        [AdminInstructorController::class, 'index']);

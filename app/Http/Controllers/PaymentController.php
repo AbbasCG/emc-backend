@@ -4,8 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Http\Resources\PaymentResource;
 use App\Http\Resources\RegistrationResource;
-use App\Models\Payment;
 use App\Mail\CourseRegistrationConfirmation;
+use App\Models\Payment;
+use App\Services\AuditLogService;
 use App\Support\FakePaymentEnvironment;
 use App\Support\PaymentStatuses;
 use Illuminate\Http\JsonResponse;
@@ -142,28 +143,29 @@ class PaymentController extends Controller
     {
         try {
             $paypal = new PayPalClient();
-            $paypal->setApiCredentials(config('services.paypal'));
+            $paypal->setApiCredentials((array) config('services.paypal', []));
 
             $webhookId = (string) config('services.paypal.webhook_id', '');
 
-            if ($webhookId !== '') {
-                $paypal->getAccessToken();
+            if ($webhookId === '') {
+                Log::critical('PAYPAL_WEBHOOK_ID is not configured. Rejecting webhook to prevent unsigned payload acceptance.');
+                return response()->json(['message' => 'Webhook not configured on server.'], 500);
+            }
 
-                $verified = $paypal->verifyWebHook([
-                    'auth_algo'         => $request->header('PAYPAL-AUTH-ALGO', ''),
-                    'cert_url'          => $request->header('PAYPAL-CERT-URL', ''),
-                    'transmission_id'   => $request->header('PAYPAL-TRANSMISSION-ID', ''),
-                    'transmission_sig'  => $request->header('PAYPAL-TRANSMISSION-SIG', ''),
-                    'transmission_time' => $request->header('PAYPAL-TRANSMISSION-TIME', ''),
-                    'webhook_id'        => $webhookId,
-                    'webhook_event'     => $request->all(),
-                ]);
+            $paypal->getAccessToken();
 
-                if (($verified['verification_status'] ?? null) !== 'SUCCESS') {
-                    return response()->json(['message' => 'Invalid PayPal webhook signature.'], 400);
-                }
-            } else {
-                Log::warning('PAYPAL_WEBHOOK_ID is not configured — skipping PayPal webhook signature verification.');
+            $verified = $paypal->verifyWebHook([
+                'auth_algo'         => $request->header('PAYPAL-AUTH-ALGO', ''),
+                'cert_url'          => $request->header('PAYPAL-CERT-URL', ''),
+                'transmission_id'   => $request->header('PAYPAL-TRANSMISSION-ID', ''),
+                'transmission_sig'  => $request->header('PAYPAL-TRANSMISSION-SIG', ''),
+                'transmission_time' => $request->header('PAYPAL-TRANSMISSION-TIME', ''),
+                'webhook_id'        => $webhookId,
+                'webhook_event'     => $request->all(),
+            ]);
+
+            if (($verified['verification_status'] ?? null) !== 'SUCCESS') {
+                return response()->json(['message' => 'Invalid PayPal webhook signature.'], 400);
             }
 
             $eventType = $request->input('event_type');
@@ -201,9 +203,10 @@ class PaymentController extends Controller
     protected function confirmPayment(string $provider, string $providerPaymentId): void
     {
         $registration = null;
+        $confirmedPayment = null;
         $shouldSendMail = false;
 
-        DB::transaction(function () use ($provider, $providerPaymentId, &$registration, &$shouldSendMail) {
+        DB::transaction(function () use ($provider, $providerPaymentId, &$registration, &$confirmedPayment, &$shouldSendMail) {
             $payment = Payment::with('registration')
                 ->where('provider', $provider)
                 ->where('provider_payment_id', $providerPaymentId)
@@ -223,6 +226,7 @@ class PaymentController extends Controller
                 'confirmed_at' => $payment->confirmed_at ?? now(),
             ]);
 
+            $confirmedPayment = $payment;
             $registration = $payment->registration;
             $registration->update([
                 'status' => 'Registered',
@@ -235,12 +239,22 @@ class PaymentController extends Controller
             return;
         }
 
-        try {
-            Mail::to($registration->email)
-                ->send(new CourseRegistrationConfirmation($registration));
-        } catch (Throwable $exception) {
-            report($exception);
-        }
+        AuditLogService::log(
+            'confirmed',
+            'Payment',
+            $confirmedPayment->id,
+            "#{$confirmedPayment->id} ({$provider})",
+            null,
+            [
+                'status'   => PaymentStatuses::CONFIRMED,
+                'amount'   => $confirmedPayment->amount,
+                'provider' => $provider,
+                'registration_id' => $registration->id,
+            ],
+        );
+
+        Mail::to($registration->email)
+            ->queue(new CourseRegistrationConfirmation($registration));
     }
 
     protected function failPayment(string $provider, string $providerPaymentId): void

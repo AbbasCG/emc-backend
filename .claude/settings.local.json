@@ -11,7 +11,17 @@
       "Bash(curl -s -X GET http://localhost/emc-backend/public/api/finance/dashboard -H 'Accept: application/json' -H 'Authorization: Bearer 18|jh2Y12yPMtK8nYfRKBQ5VM5d9PQ8hD4rJDFwNWqvb6e7dfcc')",
       "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('success:', d.get\\('success'\\)\\)\")",
       "Bash(curl -s http://localhost/emc-backend/public/api/hr/team -H 'Accept: application/json' -H 'Authorization: Bearer 33|SEfnjcx9IQ8o0se1NRpiQk83GOkIwBi8jn00DWkz65a9c8a4')",
-      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('departments:', len\\(d['data']\\)\\)\")"
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('departments:', len\\(d['data']\\)\\)\")",
+      "Bash(Get-ChildItem -Path \"d:\\\\xampp\\\\htdocs\\\\emc-backend\\\\app\\\\Models\" -File)",
+      "Bash(Select-Object Name)",
+      "Bash(git commit -m ' *)",
+      "PowerShell(php -l \"d:\\\\xampp\\\\htdocs\\\\emc-backend\\\\app\\\\Http\\\\Controllers\\\\Admin\\\\AdminUserController.php\")",
+      "PowerShell(php -l \"d:\\\\xampp\\\\htdocs\\\\emc-backend\\\\app\\\\Http\\\\Controllers\\\\Admin\\\\AdminInstructorController.php\")",
+      "PowerShell(php -l \"d:\\\\xampp\\\\htdocs\\\\emc-backend\\\\routes\\\\api.php\")",
+      "Bash(xargs grep -l -i \"review\\\\|campaign\\\\|token\")",
+      "Bash(dir \"d:\\\\xampp\\\\htdocs\\\\\" /b 2>&1)",
+      "Bash(Get-ChildItem -Path \"D:\\\\xampp\\\\htdocs\\\\emc-course-reviews\" -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object Name, PSIsContainer)"
     ]
   }
 }

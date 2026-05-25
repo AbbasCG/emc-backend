@@ -70,10 +70,10 @@ class NotificationService
             return [];
         }
 
-        return User::where('role', 'department_manager')
-            ->where('department_id', $departmentId)
-            ->pluck('id')
-            ->all();
+        // users table has no department_id — use the department's leader_id instead
+        $leaderId = \App\Models\Department::where('id', $departmentId)->value('leader_id');
+
+        return $leaderId ? [$leaderId] : [];
     }
 
     // ── Notification scenarios ───────────────────────────────────────────────

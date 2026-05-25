@@ -43,10 +43,11 @@ class StudentLearningController extends Controller
 
     public function modules(Request $request, int $courseId): \Illuminate\Http\JsonResponse
     {
-        // Verify enrollment
         $enrolled = Registration::where(function ($q) use ($request) {
             $q->where('user_id', $request->user()->id)->orWhere('email', $request->user()->email);
-        })->where('course_id', $courseId)->where('status', 'registered')->exists();
+        })->where('course_id', $courseId)
+          ->whereIn('status', ['Registered', 'registered', 'Payment Confirmed', 'Attended'])
+          ->exists();
 
         abort_if(! $enrolled, 403, 'You are not enrolled in this course.');
 
@@ -65,7 +66,9 @@ class StudentLearningController extends Controller
 
         $enrolled = Registration::where(function ($q) use ($request) {
             $q->where('user_id', $request->user()->id)->orWhere('email', $request->user()->email);
-        })->where('course_id', $courseId)->where('status', 'registered')->exists();
+        })->where('course_id', $courseId)
+          ->whereIn('status', ['Registered', 'registered', 'Payment Confirmed', 'Attended'])
+          ->exists();
 
         abort_if(! $enrolled, 403, 'You are not enrolled in this course.');
         abort_if($lesson->status !== 'active', 404);

@@ -20,11 +20,21 @@ use App\Models\Track;
 use App\Models\User;
 use App\Models\VolunteerProfile;
 use App\Models\Workshop;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class KpiService
 {
+    private const TTL = 300; // 5 minutes
+
     public function overview(): array
+    {
+        return Cache::remember('kpi_overview', self::TTL, function () {
+            return $this->computeOverview();
+        });
+    }
+
+    private function computeOverview(): array
     {
         $totalStudents      = User::where('role', 'student')->count();
         $totalInstructors   = Instructor::count();
@@ -70,6 +80,13 @@ class KpiService
 
     public function education(): array
     {
+        return Cache::remember('kpi_education', self::TTL, function () {
+            return $this->computeEducation();
+        });
+    }
+
+    private function computeEducation(): array
+    {
         $activeCourses = Course::where('status', 'active')->count();
         $activeTracks  = Track::where('status', 'active')->count();
 
@@ -106,6 +123,13 @@ class KpiService
     }
 
     public function finance(): array
+    {
+        return Cache::remember('kpi_finance', self::TTL, function () {
+            return $this->computeFinance();
+        });
+    }
+
+    private function computeFinance(): array
     {
         // Sum from financial_transactions if populated, else fall back to payments
         $totalRevenue = FinancialTransaction::where('type', 'revenue')
@@ -155,6 +179,13 @@ class KpiService
 
     public function departments(): array
     {
+        return Cache::remember('kpi_departments', self::TTL, function () {
+            return $this->computeDepartments();
+        });
+    }
+
+    private function computeDepartments(): array
+    {
         $departments = Department::withCount([
             'tasks',
             'meetings',
@@ -195,6 +226,13 @@ class KpiService
 
     public function marketing(): array
     {
+        return Cache::remember('kpi_marketing', self::TTL, function () {
+            return $this->computeMarketing();
+        });
+    }
+
+    private function computeMarketing(): array
+    {
         $total     = MarketingItem::count();
         $published = MarketingItem::where('status', 'published')->count();
         $scheduled = MarketingItem::where('status', 'scheduled')->count();
@@ -214,6 +252,13 @@ class KpiService
 
     public function partnerships(): array
     {
+        return Cache::remember('kpi_partnerships', self::TTL, function () {
+            return $this->computePartnerships();
+        });
+    }
+
+    private function computePartnerships(): array
+    {
         $total           = Partner::count();
         $active          = Partner::where('status', 'active')->count();
         $pendingRequests = \App\Models\PartnershipRequest::where('status', 'new')->count();
@@ -229,6 +274,13 @@ class KpiService
     }
 
     public function hr(): array
+    {
+        return Cache::remember('kpi_hr', self::TTL, function () {
+            return $this->computeHr();
+        });
+    }
+
+    private function computeHr(): array
     {
         $total              = VolunteerProfile::count();
         $applicants         = VolunteerProfile::where('status', 'applicant')->count();

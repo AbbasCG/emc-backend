@@ -18,11 +18,13 @@ class PlatformNotification extends Model
         'icon',
         'color',
         'is_read',
+        'read_at',
         'created_by',
     ];
 
     protected $casts = [
         'is_read'   => 'boolean',
+        'read_at'   => 'datetime',
         'entity_id' => 'integer',
     ];
 

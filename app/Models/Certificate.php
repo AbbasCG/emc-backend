@@ -4,10 +4,12 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Str;
 
 class Certificate extends Model
 {
+    use SoftDeletes;
     protected $fillable = [
         'user_id', 'course_id', 'track_id', 'workshop_id',
         'certificate_type', 'title', 'professional_title',

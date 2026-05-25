@@ -48,7 +48,7 @@ class NotificationController extends Controller
         PlatformNotification::where('user_id', $request->user()->id)
             ->where('id', $id)
             ->firstOrFail()
-            ->update(['is_read' => true]);
+            ->update(['is_read' => true, 'read_at' => now()]);
 
         return response()->json(['success' => true, 'message' => 'Notification marked as read.']);
     }
@@ -57,7 +57,7 @@ class NotificationController extends Controller
     {
         PlatformNotification::where('user_id', $request->user()->id)
             ->where('is_read', false)
-            ->update(['is_read' => true]);
+            ->update(['is_read' => true, 'read_at' => now()]);
 
         return response()->json(['success' => true, 'message' => 'All notifications marked as read.']);
     }

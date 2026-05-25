@@ -2,9 +2,10 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Models\Department;
 use App\Models\Instructor;
 use App\Models\CourseFeature;
@@ -12,7 +13,7 @@ use App\Models\User;
 
 class Course extends Model
 {
-    use HasFactory;
+    use HasFactory, SoftDeletes;
 
     protected $fillable = [
         'track_id',
@@ -129,6 +130,16 @@ class Course extends Model
     public function modules(): HasMany
     {
         return $this->hasMany(CourseModule::class)->orderBy('sort_order');
+    }
+
+    public function courseSessions(): HasMany
+    {
+        return $this->hasMany(CourseSession::class)->orderBy('sort_order');
+    }
+
+    public function courseAssignments(): HasMany
+    {
+        return $this->hasMany(CourseAssignment::class)->orderBy('sort_order');
     }
 
     public function quizzes(): HasMany

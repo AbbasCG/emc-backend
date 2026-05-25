@@ -26,10 +26,15 @@ class DemoUserSeeder extends Seeder
 
     public function run(): void
     {
+        if (app()->environment('production')) {
+            $this->command->warn('DemoUserSeeder skipped — will not seed demo accounts in production.');
+            return;
+        }
+
         $password = Hash::make('password');
 
         foreach (self::DEMO_USERS as $userData) {
-            $user = User::updateOrCreate(
+            User::updateOrCreate(
                 ['email' => $userData['email']],
                 [
                     'name'     => $userData['name'],

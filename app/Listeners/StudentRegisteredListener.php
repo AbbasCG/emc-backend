@@ -4,8 +4,9 @@ namespace App\Listeners;
 
 use App\Events\StudentRegisteredEvent;
 use App\Services\NotificationService;
+use Illuminate\Contracts\Queue\ShouldQueue;
 
-class StudentRegisteredListener
+class StudentRegisteredListener implements ShouldQueue
 {
     public function handle(StudentRegisteredEvent $event): void
     {

@@ -42,7 +42,8 @@ class ImpersonationController extends Controller
 
         $tokenResult = $user->createToken(
             'impersonation-by-' . $superAdmin->id,
-            ['via-impersonation']
+            ['via-impersonation'],
+            now()->addMinutes(30)
         );
 
         SecurityLog::create([

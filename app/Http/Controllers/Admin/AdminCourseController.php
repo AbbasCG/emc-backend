@@ -14,6 +14,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class AdminCourseController extends Controller
 {
@@ -86,7 +87,7 @@ class AdminCourseController extends Controller
 
         $data = $this->validateCourse($request, null);
 
-        $data['slug']       = $this->uniqueSlug($data['title']);
+        $data['slug']       = $data['slug'] ?? $this->uniqueSlug($data['title']);
         $data['created_by'] = $request->user()->id;
         $data['status']     = $data['status'] ?? 'draft';
 
@@ -167,8 +168,10 @@ class AdminCourseController extends Controller
         $instructorChanged = array_key_exists('instructor_id', $data)
             && ((int) $data['instructor_id'] !== (int) $course->instructor_id);
 
-        if (isset($data['title'])) {
-            $data['slug'] = $this->uniqueSlug($data['title'], $course->id);
+        if (isset($data['slug'])) {
+            $data['slug'] = Str::slug($data['slug']) ?: $data['slug'];
+        } elseif (isset($data['title'])) {
+            $data['slug'] = $course->slug;
         }
 
         if (isset($data['type'])) {
@@ -284,17 +287,24 @@ class AdminCourseController extends Controller
     {
         $isUpdate = $course !== null;
 
+        if ($request->filled('slug')) {
+            $slug = Str::slug((string) $request->input('slug')) ?: (string) $request->input('slug');
+            $request->merge(['slug' => $slug]);
+        } elseif (! $isUpdate && $request->filled('title')) {
+            $slug = Str::slug((string) $request->input('title'));
+            if ($slug !== '') {
+                $request->merge(['slug' => $slug]);
+            }
+        }
+
         $messages = [
             'required'               => 'الحقل مطلوب.',
             'title.required'         => 'الحقل مطلوب.',
-            'status.required'        => 'الحقل مطلوب.',
-            'status.in'               => 'حالة النشر غير صحيحة.',
-            'course_image.string'     => 'صورة الغلاف يجب أن تكون رابطًا نصيًا.',
-            'course_image.file'       => 'الصورة غير صالحة.',
-            'learning_outcomes.array' => 'نوع البيانات غير صحيح.',
+            'status.in'              => 'حالة النشر غير صحيحة.',
+            'learning_outcomes.array'   => 'نوع البيانات غير صحيح.',
             'learning_outcomes.*.string' => 'نوع البيانات غير صحيح.',
-            'features.array'          => 'نوع البيانات غير صحيح.',
-            'features.*.string'       => 'نوع البيانات غير صحيح.',
+            'features.array'            => 'نوع البيانات غير صحيح.',
+            'features.*.string'         => 'نوع البيانات غير صحيح.',
         ];
 
         $attributes = [
@@ -308,7 +318,18 @@ class AdminCourseController extends Controller
             'track_id'              => 'nullable|exists:tracks,id',
             'instructor_id'         => 'nullable|exists:instructors,id',
             'department_id'         => 'nullable|exists:departments,id',
-            'title'                 => $isUpdate ? 'sometimes|string|max:255' : 'required|string|max:255',
+            'title'                 => [
+                $isUpdate ? 'sometimes' : 'required',
+                'string',
+                'max:255',
+                Rule::unique('courses', 'title')->ignore($course?->id),
+            ],
+            'slug'                  => [
+                'nullable',
+                'string',
+                'max:255',
+                Rule::unique('courses', 'slug')->ignore($course?->id),
+            ],
             'description'           => 'nullable|string',
             'short_description'     => 'nullable|string',
             'type'                  => 'nullable|in:free,paid',
@@ -329,7 +350,7 @@ class AdminCourseController extends Controller
             'seats_count'           => 'nullable|integer|min:1',   // alias for capacity
             'registration_open'     => 'nullable|boolean',
             'registration_status'   => 'nullable|in:open,closed,coming_soon',
-            'status'                => ($isUpdate ? 'nullable' : 'required').'|in:draft,published,archived',
+            'status'                => 'nullable|in:draft,published,archived',
             'notes'                 => 'nullable|string',
             'duration'              => 'nullable|string|max:255',
             'training_hours'        => 'nullable|integer|min:0',
@@ -355,16 +376,20 @@ class AdminCourseController extends Controller
         ];
 
         if ($request->hasFile('course_image')) {
-            $rules['course_image'] = 'nullable|file|mimes:jpg,jpeg,png,webp|max:4096';
+            $rules['course_image'] = 'nullable|file|mimes:jpg,jpeg,png,webp,gif|max:4096';
+        } elseif ($request->hasFile('image')) {
+            $rules['image'] = 'nullable|file|mimes:jpg,jpeg,png,webp,gif|max:4096';
+            $rules['course_image'] = 'nullable';
         } else {
-            $rules['course_image'] = 'nullable|string|max:500';
+            // Accept string URL or null — no type enforcement so a URL of any length works
+            $rules['course_image'] = 'nullable';
+            $rules['image']        = 'nullable';
         }
 
         $data = $request->validate($rules, $messages, $attributes);
 
-        if ($request->hasFile('course_image')) {
-            unset($data['course_image']);
-        }
+        // Remove file objects from the validated data array — handleImageUpload handles them
+        unset($data['course_image'], $data['image']);
 
         // Map delivery_type → location_type (frontend alias)
         if (isset($data['delivery_type']) && ! isset($data['location_type'])) {

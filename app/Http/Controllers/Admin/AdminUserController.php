@@ -3,11 +3,13 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Mail\TemporaryPasswordMail;
 use App\Models\User;
 use App\Services\AuditLogService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Validation\Rule;
 
 class AdminUserController extends Controller
@@ -69,11 +71,13 @@ class AdminUserController extends Controller
             ], 403);
         }
 
-        // Auto-generate a temporary password when none is provided
-        $temporaryPassword = null;
+        // Auto-generate a temporary password when none is provided.
+        // The plaintext is sent via email ONLY — never returned in the API response.
+        $usedTemporaryPassword = false;
         if (empty($data['password'])) {
-            $temporaryPassword = \Illuminate\Support\Str::random(12);
-            $data['password']  = $temporaryPassword;
+            $temporaryPassword     = \Illuminate\Support\Str::random(12);
+            $data['password']      = $temporaryPassword;
+            $usedTemporaryPassword = true;
         }
 
         $user = User::create([
@@ -94,23 +98,24 @@ class AdminUserController extends Controller
             AdminInstructorController::ensureProfile($user);
         }
 
+        if ($usedTemporaryPassword) {
+            // Queue the email — plaintext never leaves the server via the API response
+            Mail::to($user->email)->queue(new TemporaryPasswordMail($user, $temporaryPassword));
+        }
+
         AuditLogService::logModel('created', $user, null, [
             'name'  => $user->name,
             'email' => $user->email,
             'role'  => $user->role,
         ], null, $request);
 
-        $response = [
+        return response()->json([
             'success' => true,
-            'message' => 'User created successfully',
+            'message' => $usedTemporaryPassword
+                ? 'User created successfully. A temporary password has been sent to their email.'
+                : 'User created successfully.',
             'data'    => $this->formatUser($user),
-        ];
-
-        if ($temporaryPassword !== null) {
-            $response['temporary_password'] = $temporaryPassword;
-        }
-
-        return response()->json($response, 201);
+        ], 201);
     }
 
     // GET /api/admin/users/{user}

@@ -4,8 +4,9 @@ namespace App\Listeners;
 
 use App\Events\CourseUpdatedEvent;
 use App\Services\NotificationService;
+use Illuminate\Contracts\Queue\ShouldQueue;
 
-class CourseUpdatedListener
+class CourseUpdatedListener implements ShouldQueue
 {
     public function handle(CourseUpdatedEvent $event): void
     {
