@@ -173,9 +173,9 @@ class InstructorCourseContentController extends Controller
         $data = $this->validateMaterial($request);
 
         if ($request->hasFile('file')) {
-            $path              = $request->file('file')->store('course-materials', 'public');
+            $path              = $request->file('file')->store('course-materials', 'local');
             $data['file_path'] = $path;
-            $data['file_url']  = asset('storage/' . $path);
+            $data['file_url']  = null;
         }
 
         $data['course_id']  = $course->id;
@@ -202,11 +202,11 @@ class InstructorCourseContentController extends Controller
 
         if ($request->hasFile('file')) {
             if ($material->file_path) {
-                Storage::disk('public')->delete($material->file_path);
+                $this->deleteFile($material->file_path);
             }
-            $path              = $request->file('file')->store('course-materials', 'public');
+            $path              = $request->file('file')->store('course-materials', 'local');
             $data['file_path'] = $path;
-            $data['file_url']  = asset('storage/' . $path);
+            $data['file_url']  = null;
         }
 
         unset($data['file']);
@@ -224,7 +224,7 @@ class InstructorCourseContentController extends Controller
         $this->authoriseByCourse($request, $material->course_id);
 
         if ($material->file_path) {
-            Storage::disk('public')->delete($material->file_path);
+            $this->deleteFile($material->file_path);
         }
 
         $material->delete();
@@ -334,6 +334,16 @@ class InstructorCourseContentController extends Controller
         abort_if(! $ownsCourse, 403, 'You can only manage your own courses.');
     }
 
+    // Try local disk first, fall back to public (for pre-migration files)
+    private function deleteFile(string $path): void
+    {
+        if (Storage::disk('local')->exists($path)) {
+            Storage::disk('local')->delete($path);
+        } elseif (Storage::disk('public')->exists($path)) {
+            Storage::disk('public')->delete($path);
+        }
+    }
+
     // ─── Shared validation helpers ────────────────────────────────────────────
 
     private function validateSession(Request $request, bool $required = true): array
@@ -375,7 +385,11 @@ class InstructorCourseContentController extends Controller
             'sort_order'        => 'nullable|integer|min:0',
             'is_visible'        => 'nullable|boolean',
             'visibility'        => 'nullable|string',
-            'file'              => 'nullable|file|max:51200',
+            'file'              => [
+                'nullable', 'file', 'max:51200',
+                'mimes:pdf,doc,docx,xls,xlsx,ppt,pptx,mp4,mov,avi,mp3,wav,jpg,jpeg,png,webp,gif,zip',
+                'mimetypes:application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,video/mp4,video/quicktime,video/x-msvideo,audio/mpeg,audio/wav,image/jpeg,image/png,image/webp,image/gif,application/zip',
+            ],
         ]);
 
         // Accept kind as alias for type

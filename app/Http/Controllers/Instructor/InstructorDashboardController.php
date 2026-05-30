@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Instructor;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\LmsSessionResource;
+use App\Http\Resources\UserResource;
 use App\Models\Course;
 use App\Models\LmsSession;
 use App\Models\PlatformNotification;
@@ -24,7 +25,7 @@ class InstructorDashboardController extends Controller
                 'success' => true,
                 'message' => 'Instructor dashboard data retrieved successfully.',
                 'data'    => [
-                    'user'                    => $this->userShape($user),
+                    'user'                    => UserResource::make($user),
                     'courses_count'           => 0,
                     'workshops_count'         => 0,
                     'students_count'          => 0,
@@ -84,7 +85,7 @@ class InstructorDashboardController extends Controller
             'success' => true,
             'message' => 'Instructor dashboard data retrieved successfully.',
             'data'    => [
-                'user'                 => $this->userShape($user),
+                'user'                 => UserResource::make($user),
                 'courses_count'        => $courseIds->count(),
                 'workshops_count'      => $workshopsCount,
                 'students_count'       => $studentsCount,
@@ -96,14 +97,4 @@ class InstructorDashboardController extends Controller
         ]);
     }
 
-    private function userShape(\App\Models\User $user): array
-    {
-        return [
-            'id'         => $user->id,
-            'name'       => $user->name,
-            'email'      => $user->email,
-            'avatar_url' => $user->avatar_url,
-            'role'       => $user->role,
-        ];
-    }
 }

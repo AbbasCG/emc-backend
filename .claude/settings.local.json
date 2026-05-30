@@ -23,5 +23,9 @@
       "Bash(Get-ChildItem -Path \"D:\\\\xampp\\\\htdocs\\\\emc-course-reviews\" -ErrorAction SilentlyContinue)",
       "Bash(Select-Object Name, PSIsContainer)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "trello"
+  ],
+  "enableAllProjectMcpServers": true
 }

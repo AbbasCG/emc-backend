@@ -2,9 +2,11 @@
 
 namespace App\AI\Tools;
 
+use App\Enums\RegistrationStatus;
 use App\Models\Certificate;
 use App\Models\Payment;
 use App\Models\Registration;
+use App\Support\PaymentStatuses;
 
 class GetKpiMetricsTool implements AiToolInterface
 {
@@ -51,8 +53,8 @@ class GetKpiMetricsTool implements AiToolInterface
             'period'              => $period,
             'from'                => $from->toDateString(),
             'registrations'       => Registration::query()->where('created_at', '>=', $from)->count(),
-            'active_registrations'=> Registration::query()->where('status', 'Registered')->count(),
-            'revenue'             => Payment::query()->where('status', 'Payment Confirmed')->where('created_at', '>=', $from)->sum('amount'),
+            'active_registrations'=> Registration::query()->whereIn('status', RegistrationStatus::activeEnrollment())->count(),
+            'revenue'             => Payment::query()->where('status', PaymentStatuses::CONFIRMED)->where('created_at', '>=', $from)->sum('amount'),
             'certificates_issued' => Certificate::query()->where('status', 'issued')->where('issued_at', '>=', $from)->count(),
         ];
     }

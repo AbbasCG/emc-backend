@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Enums\RegistrationStatus;
 use App\Models\Registration;
 use App\Models\User;
 use Illuminate\Support\Collection;
@@ -14,7 +15,7 @@ class LmsEnrollmentService
     public function enrolledCourseIds(User $user): Collection
     {
         return Registration::query()
-            ->where('status', 'Registered')
+            ->whereIn('status', RegistrationStatus::activeEnrollment())
             ->where(function ($q) use ($user) {
                 $q->where('user_id', $user->id)
                     ->orWhere('email', $user->email);

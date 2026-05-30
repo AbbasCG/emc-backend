@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\RegistrationStatus;
 use App\Http\Resources\PaymentResource;
 use App\Http\Resources\RegistrationResource;
 use App\Models\Course;
@@ -10,6 +11,7 @@ use App\Models\Payment;
 use App\Models\Registration;
 use App\Models\Track;
 use App\Models\User;
+use App\Services\AuditLogService;
 use App\Services\NotificationService;
 use App\Support\PaymentStatuses;
 use Illuminate\Http\JsonResponse;
@@ -40,8 +42,8 @@ class AdminController extends Controller
                 'total_instructors'         => Instructor::count(),
                 'total_users'               => User::count(),
                 'total_registrations'       => Registration::count(),
-                'registered_count'          => Registration::where('status', 'Registered')->count(),
-                'pending_payment_count'     => Registration::where('status', 'Pending Payment')->count(),
+                'registered_count'          => Registration::where('status', RegistrationStatus::REGISTERED->value)->count(),
+                'pending_payment_count'     => Registration::where('status', RegistrationStatus::PENDING_PAYMENT->value)->count(),
                 'paid_count'                => Payment::where('status', PaymentStatuses::CONFIRMED)->count(),
                 'failed_payment_count'      => Payment::where('status', PaymentStatuses::FAILED)->count(),
                 'total_revenue_confirmed'   => (float) Payment::where('status', PaymentStatuses::CONFIRMED)->sum('amount'),
@@ -113,20 +115,30 @@ class AdminController extends Controller
 
     public function updateRegistrationStatus(Request $request, Registration $registration): JsonResponse
     {
+        $allowedStatuses = array_column(RegistrationStatus::cases(), 'value');
+
         $validated = $request->validate([
-            'status' => 'required|in:Registered,Pending Payment,Payment Confirmed,Cancelled,Attended,No Show',
+            'status' => 'required|in:' . implode(',', $allowedStatuses),
         ]);
 
+        $oldStatus = $registration->status;
         $registration->update(['status' => $validated['status']]);
 
-        if ($validated['status'] === 'Payment Confirmed') {
+        if ($validated['status'] === RegistrationStatus::PAYMENT_CONFIRMED->value) {
             Payment::where('registration_id', $registration->id)->update([
                 'status'       => PaymentStatuses::CONFIRMED,
                 'confirmed_at' => now(),
             ]);
         }
 
-        if (in_array($validated['status'], ['Registered', 'Payment Confirmed'], true)
+        AuditLogService::log('status_changed', 'Registration', $registration->id,
+            $registration->full_name,
+            ['status' => $oldStatus],
+            ['status' => $validated['status']],
+            null, $request
+        );
+
+        if (in_array($validated['status'], [RegistrationStatus::REGISTERED->value, RegistrationStatus::PAYMENT_CONFIRMED->value], true)
             && $registration->user_id
         ) {
             try {

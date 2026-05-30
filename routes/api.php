@@ -107,17 +107,7 @@ use App\Http\Controllers\Student\StudentRegistrationsController;
 use Illuminate\Support\Facades\Route;
 
 // ─── Health (no throttle — used by uptime monitors) ──────────────────────────
-Route::get('/health', function () {
-    return response()->json([
-        'success'   => true,
-        'message'   => 'EMC API is healthy',
-        'data'      => [
-            'status'    => 'ok',
-            'timestamp' => now()->toIso8601String(),
-            'version'   => '1.0.0',
-        ],
-    ]);
-});
+Route::get('/health', \App\Http\Controllers\HealthController::class);
 
 // ─── Auth (throttle:auth — 10 req/min per IP) ────────────────────────────────
 Route::prefix('auth')->middleware('throttle:auth')->group(function () {
@@ -173,6 +163,12 @@ Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(fu
     Route::get('/courses/{courseId}/learn',    [\App\Http\Controllers\Student\StudentLearnController::class, 'show']);
     Route::get('/learn/{courseId}',            [\App\Http\Controllers\Student\StudentLearnController::class, 'show']);
 });
+
+// ─── Protected material download (auth:sanctum, access checked inside) ────────
+Route::middleware('auth:sanctum')->get(
+    '/materials/{material}/download',
+    [\App\Http\Controllers\Student\MaterialDownloadController::class, 'download']
+)->name('materials.download');
 
 // ─── Notifications (auth:sanctum, any role) ───────────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {

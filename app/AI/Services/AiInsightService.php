@@ -6,6 +6,7 @@ use App\AI\AiManager;
 use App\AI\DTOs\AiRequest;
 use App\Models\AiInsight;
 use App\Models\AiRecommendation;
+use App\Enums\RegistrationStatus;
 use App\Models\Registration;
 use App\Models\User;
 
@@ -104,7 +105,7 @@ class AiInsightService
     {
         return [
             'total_registrations'  => Registration::query()->count(),
-            'active_students'      => Registration::query()->where('status', 'Registered')->count(),
+            'active_students'      => Registration::query()->whereIn('status', RegistrationStatus::activeEnrollment())->count(),
             'this_month_signups'   => Registration::query()->where('created_at', '>=', now()->startOfMonth())->count(),
         ];
     }

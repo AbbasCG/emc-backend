@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Mobile;
 
+use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\CourseResource;
 use App\Http\Resources\RegistrationResource;
@@ -31,7 +32,7 @@ class MobileController extends Controller
 
         $enrolledCount = Registration::query()
             ->where('user_id', $user->id)
-            ->whereIn('status', ['Registered', 'Pending Payment'])
+            ->whereIn('status', [RegistrationStatus::REGISTERED->value, RegistrationStatus::PENDING_PAYMENT->value])
             ->count();
 
         $unreadCount = $user->unreadNotifications()->count();
@@ -161,7 +162,7 @@ class MobileController extends Controller
     {
         $registrations = Registration::query()
             ->where('user_id', $request->user()->id)
-            ->whereIn('status', ['Registered'])
+            ->whereIn('status', RegistrationStatus::activeEnrollment())
             ->with('course:id,title,slug,description,price,is_paid')
             ->latest()
             ->paginate(10);

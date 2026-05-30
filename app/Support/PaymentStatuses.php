@@ -4,9 +4,9 @@ namespace App\Support;
 
 final class PaymentStatuses
 {
-    public const PENDING = 'Pending Payment';
+    public const PENDING = 'pending_payment';
 
-    public const CONFIRMED = 'Payment Confirmed';
+    public const CONFIRMED = 'payment_confirmed';
 
-    public const FAILED = 'Payment Failed';
+    public const FAILED = 'payment_failed';
 }

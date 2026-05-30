@@ -17,6 +17,7 @@ class PlatformNotificationResource extends JsonResource
             'icon'        => $this->icon,
             'color'       => $this->color,
             'is_read'     => (bool) $this->is_read,
+            'read_at'     => $this->read_at,
             'action_url'  => $this->action_url,
             'entity_type' => $this->entity_type,
             'entity_id'   => $this->entity_id,

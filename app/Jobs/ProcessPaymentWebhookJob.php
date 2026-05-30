@@ -2,9 +2,11 @@
 
 namespace App\Jobs;
 
+use App\Enums\RegistrationStatus;
 use App\Models\Payment;
 use App\Models\Registration;
 use App\Services\ActivityLogger;
+use App\Support\PaymentStatuses;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -53,7 +55,7 @@ class ProcessPaymentWebhookJob implements ShouldQueue
         }
 
         // Idempotency: skip if already in a terminal state
-        if (in_array($payment->status, ['Payment Confirmed', 'Refunded'], true)) {
+        if (in_array($payment->status, [PaymentStatuses::CONFIRMED, 'refunded'], true)) {
             Log::info('ProcessPaymentWebhookJob: already processed', ['id' => $this->paymentId]);
 
             return;
@@ -65,10 +67,10 @@ class ProcessPaymentWebhookJob implements ShouldQueue
 
             $payment->update(['status' => $newStatus]);
 
-            if ($newStatus === 'Payment Confirmed') {
+            if ($newStatus === PaymentStatuses::CONFIRMED) {
                 $registration = Registration::query()->find($payment->registration_id);
-                if ($registration && $registration->status !== 'Registered') {
-                    $registration->update(['status' => 'Registered']);
+                if ($registration && $registration->status !== RegistrationStatus::REGISTERED->value) {
+                    $registration->update(['status' => RegistrationStatus::REGISTERED->value]);
                 }
             }
 
@@ -87,13 +89,13 @@ class ProcessPaymentWebhookJob implements ShouldQueue
         $event = strtolower($payload['event'] ?? $payload['type'] ?? '');
 
         if (str_contains($event, 'success') || str_contains($event, 'confirmed') || str_contains($event, 'paid')) {
-            return 'Payment Confirmed';
+            return PaymentStatuses::CONFIRMED;
         }
 
         if (str_contains($event, 'fail') || str_contains($event, 'declined')) {
-            return 'Payment Failed';
+            return PaymentStatuses::FAILED;
         }
 
-        return 'Payment Pending';
+        return PaymentStatuses::PENDING;
     }
 }

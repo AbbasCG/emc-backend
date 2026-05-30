@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Support\PaymentStatuses;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -16,7 +17,7 @@ class PaymentResource extends JsonResource
             'provider'        => $this->provider,
             'status'          => $this->status,
             // checkout_url is only useful while payment is pending
-            'checkout_url'    => $this->status === 'Pending Payment' ? $this->checkout_url : null,
+            'checkout_url'    => $this->status === PaymentStatuses::PENDING ? $this->checkout_url : null,
             'receipt_url'     => $this->receipt_url,
             'confirmed_at'    => $this->confirmed_at,
             'created_at'      => $this->created_at,

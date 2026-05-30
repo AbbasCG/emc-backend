@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\RegistrationStatus;
 use App\Http\Resources\PaymentResource;
 use App\Http\Resources\RegistrationResource;
 use App\Mail\CourseRegistrationConfirmation;
@@ -229,13 +230,13 @@ class PaymentController extends Controller
             $confirmedPayment = $payment;
             $registration = $payment->registration;
             $registration->update([
-                'status' => 'Registered',
+                'status' => RegistrationStatus::REGISTERED->value,
             ]);
             $registration->load('course.instructor', 'course.features', 'course.track');
             $shouldSendMail = true;
         });
 
-        if (! $registration || ! $shouldSendMail) {
+        if (! $registration || ! $confirmedPayment || ! $shouldSendMail) {
             return;
         }
 

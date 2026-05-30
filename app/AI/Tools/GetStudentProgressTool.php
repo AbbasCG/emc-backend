@@ -2,6 +2,7 @@
 
 namespace App\AI\Tools;
 
+use App\Enums\RegistrationStatus;
 use App\Models\Registration;
 use App\Models\StudentProgress;
 
@@ -49,7 +50,7 @@ class GetStudentProgressTool implements AiToolInterface
         return [
             'user_id'       => $targetId,
             'registrations' => $registrations->count(),
-            'active'        => $registrations->where('status', 'Registered')->count(),
+            'active'        => $registrations->whereIn('status', RegistrationStatus::activeEnrollment())->count(),
             'courses'       => $registrations->map(fn ($r) => [
                 'course'   => $r->course?->title,
                 'status'   => $r->status,

@@ -20,6 +20,8 @@ use App\Models\Track;
 use App\Models\User;
 use App\Models\VolunteerProfile;
 use App\Models\Workshop;
+use App\Enums\CourseStatus;
+use App\Enums\RegistrationStatus;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
@@ -52,7 +54,7 @@ class KpiService
             : 0;
 
         // Completion rate: registrations with status 'registered' / total
-        $completedRegs  = Registration::where('status', 'registered')->count();
+        $completedRegs  = Registration::where('status', RegistrationStatus::REGISTERED->value)->count();
         $completionRate = $totalRegistrations > 0
             ? round(($completedRegs / $totalRegistrations) * 100, 1)
             : 0;
@@ -87,7 +89,7 @@ class KpiService
 
     private function computeEducation(): array
     {
-        $activeCourses = Course::where('status', 'active')->count();
+        $activeCourses = Course::where('status', CourseStatus::PUBLISHED->value)->count();
         $activeTracks  = Track::where('status', 'active')->count();
 
         $now = now()->toDateString();

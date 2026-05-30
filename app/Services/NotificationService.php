@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Enums\RegistrationStatus;
 use App\Models\PlatformNotification;
 use App\Models\Registration;
 use App\Models\User;
@@ -59,7 +60,7 @@ class NotificationService
     {
         return Registration::where('course_id', $courseId)
             ->whereNotNull('user_id')
-            ->whereIn('status', ['Registered', 'Pending Payment', 'Payment Confirmed'])
+            ->whereIn('status', [RegistrationStatus::REGISTERED->value, RegistrationStatus::PENDING_PAYMENT->value, RegistrationStatus::PAYMENT_CONFIRMED->value])
             ->pluck('user_id')
             ->all();
     }

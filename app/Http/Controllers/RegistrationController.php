@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\RegistrationStatus;
 use App\Events\StudentRegisteredEvent;
 use App\Http\Requests\StoreRegistrationRequest;
 use App\Http\Resources\CourseResource;
@@ -11,7 +12,9 @@ use App\Mail\CourseRegistrationConfirmation;
 use App\Models\Course;
 use App\Models\Payment;
 use App\Models\Registration;
+use App\Services\AuditLogService;
 use App\Services\PaymentGatewayService;
+use App\Support\PaymentStatuses;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
@@ -51,7 +54,7 @@ class RegistrationController extends Controller
             // One active registration per course per identity (user_id or normalized email)
             $existing = Registration::query()
                 ->where('course_id', $course->id)
-                ->whereNotIn('status', ['Cancelled'])
+                ->whereNotIn('status', [RegistrationStatus::CANCELLED->value])
                 ->where(function ($q) use ($authUser, $emailNorm) {
                     if ($authUser) {
                         $q->where('user_id', $authUser->id)
@@ -85,7 +88,7 @@ class RegistrationController extends Controller
                     'city'      => $validated['city'] ?? $authUser?->city,
                     'gender'    => $validated['gender'] ?? null,
                     'notes'     => $validated['notes'] ?? null,
-                    'status'    => $course->type === 'paid' ? 'Pending Payment' : 'Registered',
+                    'status'    => $course->type === 'paid' ? RegistrationStatus::PENDING_PAYMENT->value : RegistrationStatus::REGISTERED->value,
                 ]);
 
                 if ($course->type !== 'paid') {
@@ -99,7 +102,7 @@ class RegistrationController extends Controller
                         'provider'            => 'fake',
                         'provider_payment_id' => null,
                         'receipt_url'         => $receiptPath,
-                        'status'              => 'Pending Payment',
+                        'status'              => PaymentStatuses::PENDING,
                     ]);
 
                     $checkoutUrl = rtrim((string) config('app.frontend_url', config('app.url')), '/') . '/fake-payment/' . $payment->id;
@@ -124,7 +127,7 @@ class RegistrationController extends Controller
                     'provider_payment_id' => $gatewayPayment['provider_payment_id'],
                     'checkout_url'        => $gatewayPayment['checkout_url'],
                     'receipt_url'         => $receiptPath,
-                    'status'              => 'Pending Payment',
+                    'status'              => PaymentStatuses::PENDING,
                 ]);
 
                 return ['registration' => $registration, 'payment' => $payment];
@@ -138,6 +141,13 @@ class RegistrationController extends Controller
                     'course.features',
                     'payments',
                 ]);
+
+                AuditLogService::log('created', 'Registration', $registration->id,
+                    "{$registration->full_name} → {$course->title}",
+                    null,
+                    ['status' => $registration->status, 'course_id' => $course->id, 'user_id' => $authUser?->id],
+                    null, $request
+                );
 
                 if ($authUser) {
                     try {
@@ -162,12 +172,15 @@ class RegistrationController extends Controller
             $freeRegistration = $result['registration'];
             $freeRegistration->load('course.track', 'course.instructor', 'course.features');
 
-            try {
-                Mail::to($freeRegistration->email)
-                    ->send(new CourseRegistrationConfirmation($freeRegistration));
-            } catch (Throwable $exception) {
-                report($exception);
-            }
+            AuditLogService::log('created', 'Registration', $freeRegistration->id,
+                "{$freeRegistration->full_name} → {$course->title}",
+                null,
+                ['status' => $freeRegistration->status, 'course_id' => $course->id, 'user_id' => $authUser?->id],
+                null, $request
+            );
+
+            Mail::to($freeRegistration->email)
+                ->queue(new CourseRegistrationConfirmation($freeRegistration));
 
             if ($authUser) {
                 try {

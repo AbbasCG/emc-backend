@@ -31,6 +31,19 @@ return Application::configure(basePath: dirname(__DIR__))
     })
     ->withExceptions(function (Exceptions $exceptions): void {
 
+        // ── Sentry error reporting (optional) ─────────────────────────────
+        // Active only when sentry/sentry-laravel is installed and SENTRY_LARAVEL_DSN is set.
+        // Install: composer require sentry/sentry-laravel
+        if (
+            env('SENTRY_LARAVEL_DSN') &&
+            class_exists(\Sentry\Laravel\Integration::class)
+        ) {
+            $exceptions->report(function (\Throwable $e) {
+                \Sentry\Laravel\Integration::captureUnhandledException($e);
+            });
+        }
+
+
         // 429 — Rate limit exceeded
         $exceptions->render(function (
             \Illuminate\Http\Exceptions\ThrottleRequestsException $e,

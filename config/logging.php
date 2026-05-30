@@ -53,8 +53,9 @@ return [
     'channels' => [
 
         'stack' => [
-            'driver' => 'stack',
-            'channels' => explode(',', (string) env('LOG_STACK', 'single')),
+            'driver'            => 'stack',
+            // Add 'sentry' here once SENTRY_LARAVEL_DSN is set and package is installed
+            'channels'          => explode(',', (string) env('LOG_STACK', 'daily')),
             'ignore_exceptions' => false,
         ],
 
@@ -125,6 +126,15 @@ return [
 
         'emergency' => [
             'path' => storage_path('logs/laravel.log'),
+        ],
+
+        // Sentry channel — active only when SENTRY_LARAVEL_DSN is set.
+        // Requires: composer require sentry/sentry-laravel
+        // Then add 'sentry' to LOG_STACK in .env and run: php artisan sentry:publish --dsn=<DSN>
+        'sentry' => [
+            'driver' => env('SENTRY_LARAVEL_DSN') ? 'sentry' : 'null',
+            'level'  => env('LOG_LEVEL', 'error'),
+            'bubble' => true,
         ],
 
     ],

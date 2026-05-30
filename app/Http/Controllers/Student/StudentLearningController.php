@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Student;
 
+use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\CourseModuleResource;
 use App\Http\Resources\LessonResource;
@@ -20,11 +21,9 @@ class StudentLearningController extends Controller
     public function index(Request $request): \Illuminate\Http\JsonResponse
     {
         $user          = $request->user();
-        $registrations = Registration::with(['course.modules.lessons'])
-            ->where(function ($q) use ($user) {
-                $q->where('user_id', $user->id)->orWhere('email', $user->email);
-            })
-            ->where('status', 'registered')
+        $registrations = Registration::with(['course.modules.courseSessions'])
+            ->where('user_id', $user->id)
+            ->whereIn('status', RegistrationStatus::activeEnrollment())
             ->get();
 
         return response()->json([
@@ -32,10 +31,10 @@ class StudentLearningController extends Controller
             'data'    => $registrations->map(fn ($r) => [
                 'registration_id' => $r->id,
                 'course'          => $r->course ? [
-                    'id'            => $r->course->id,
-                    'title'         => $r->course->title,
-                    'modules_count' => $r->course->modules->count(),
-                    'lessons_count' => $r->course->modules->sum(fn ($m) => $m->lessons->count()),
+                    'id'             => $r->course->id,
+                    'title'          => $r->course->title,
+                    'modules_count'  => $r->course->modules->count(),
+                    'sessions_count' => $r->course->modules->sum(fn ($m) => $m->courseSessions->count()),
                 ] : null,
             ]),
         ]);
@@ -43,15 +42,14 @@ class StudentLearningController extends Controller
 
     public function modules(Request $request, int $courseId): \Illuminate\Http\JsonResponse
     {
-        $enrolled = Registration::where(function ($q) use ($request) {
-            $q->where('user_id', $request->user()->id)->orWhere('email', $request->user()->email);
-        })->where('course_id', $courseId)
-          ->whereIn('status', ['Registered', 'registered', 'Payment Confirmed', 'Attended'])
-          ->exists();
+        $enrolled = Registration::where('user_id', $request->user()->id)
+            ->where('course_id', $courseId)
+            ->whereIn('status', RegistrationStatus::activeEnrollment())
+            ->exists();
 
         abort_if(! $enrolled, 403, 'You are not enrolled in this course.');
 
-        $modules = CourseModule::with(['lessons'])
+        $modules = CourseModule::with(['courseSessions.materials', 'courseSessions.assignments'])
             ->where('course_id', $courseId)
             ->where('status', 'active')
             ->orderBy('sort_order')
@@ -64,11 +62,10 @@ class StudentLearningController extends Controller
     {
         $courseId = $lesson->module->course_id;
 
-        $enrolled = Registration::where(function ($q) use ($request) {
-            $q->where('user_id', $request->user()->id)->orWhere('email', $request->user()->email);
-        })->where('course_id', $courseId)
-          ->whereIn('status', ['Registered', 'registered', 'Payment Confirmed', 'Attended'])
-          ->exists();
+        $enrolled = Registration::where('user_id', $request->user()->id)
+            ->where('course_id', $courseId)
+            ->whereIn('status', RegistrationStatus::activeEnrollment())
+            ->exists();
 
         abort_if(! $enrolled, 403, 'You are not enrolled in this course.');
         abort_if($lesson->status !== 'active', 404);

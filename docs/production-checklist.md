@@ -4,12 +4,27 @@ Use this checklist before every production deployment. Mark each item when verif
 
 ---
 
+## Production Readiness Command
+
+Run this first — it checks most items below automatically:
+
+```bash
+php artisan emc:production-check
+```
+
+Exit code 0 = all checks passed (warnings may exist). Exit code 1 = critical failures must be resolved before deployment.
+
+---
+
 ## Application
 
+- [ ] `php artisan emc:production-check` exits with code 0
+- [ ] `GET /api/health` returns HTTP 200 with all checks `"status": "ok"`
 - [ ] `APP_ENV=production`
 - [ ] `APP_DEBUG=false`
 - [ ] `APP_KEY` is set (run `php artisan key:generate` if missing)
 - [ ] `APP_URL` is set to the production API URL (e.g. `https://api.emc.sa`)
+- [ ] `APP_VERSION` is set (used by health endpoint)
 - [ ] `FRONTEND_URL` is set to the React app URL (e.g. `https://app.emc.sa`)
 
 ## Database
@@ -91,11 +106,26 @@ Use this checklist before every production deployment. Mark each item when verif
 - [ ] Log rotation is configured (`logrotate` or Laravel's daily driver)
 - [ ] Centralized logging is set up (optional but recommended)
 
+## Backups
+
+- [ ] `php artisan emc:backup --db` runs without error
+- [ ] Backup file written to `storage/app/backups/`
+- [ ] Restore test completed (restore latest backup to a temp DB, verify row counts)
+- [ ] `ENABLE_SCHEDULED_BACKUP=true` in `.env` (daily 01:00 via scheduler)
+- [ ] Backup files are copied off-server (S3 / SCP / external storage)
+
+## Error Tracking
+
+- [ ] Sentry or equivalent configured (`SENTRY_LARAVEL_DSN` in `.env`)
+  - If not using Sentry: Slack webhook or email alerting configured for critical errors
+- [ ] `php artisan sentry:test` succeeds (if Sentry installed)
+
 ## Monitoring
 
-- [ ] `/up` health endpoint returns `200`
-- [ ] Uptime monitor is configured (UptimeRobot, Pingdom, etc.)
-- [ ] Error alerting in place (Sentry, Bugsnag, Flare, or Slack webhook)
+- [ ] `GET /api/health` returns `{"status":"ok"}` with HTTP 200
+- [ ] Uptime monitor pointing to `GET https://api.emc.sa/api/health` (5-min interval)
+- [ ] Alert configured when health endpoint returns 503 (degraded)
+- [ ] Queue `failed_jobs` count monitored — alert when > 0
 
 ## Pre-launch Verification
 
@@ -108,21 +138,43 @@ Use this checklist before every production deployment. Mark each item when verif
 
 ---
 
+## Scheduled Jobs
+
+- [ ] Cron entry active: `* * * * * www-data php /var/www/emc-backend/artisan schedule:run >> /dev/null 2>&1`
+- [ ] `php artisan schedule:list` shows:
+  - `emc:prune-notifications` — daily 02:30
+  - `queue:prune-failed` — weekly Sunday 03:00
+  - `sanctum:prune-expired` — daily 03:30
+  - `emc:backup` — daily 01:00 (if `ENABLE_SCHEDULED_BACKUP=true`)
+- [ ] Scheduler log exists: `storage/logs/scheduler.log`
+
 ## Quick Commands
 
 ```bash
-# Full deploy optimization
+# Full production readiness check:
+php artisan emc:production-check
+
+# Full deploy optimization:
 php artisan optimize:clear && php artisan optimize
 
-# Check queue status
+# Check queue status:
 php artisan queue:monitor
 
-# Clear failed jobs
+# Clear failed jobs:
 php artisan queue:flush
 
-# Manually trigger scheduler
+# Manually trigger scheduler:
 php artisan schedule:run
 
-# View recent logs
+# Manual backup:
+php artisan emc:backup --all
+
+# Prune old notifications manually:
+php artisan emc:prune-notifications --days=90
+
+# View recent logs:
 tail -n 100 storage/logs/laravel.log
+
+# View scheduler log:
+tail -n 50 storage/logs/scheduler.log
 ```

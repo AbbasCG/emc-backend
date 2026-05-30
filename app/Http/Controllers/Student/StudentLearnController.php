@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Student;
 
+use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\CourseAssignmentResource;
 use App\Http\Resources\CourseMaterialResource;
@@ -24,11 +25,10 @@ class StudentLearnController extends Controller
     {
         $user = $request->user();
 
-        $enrolled = Registration::where(function ($q) use ($user) {
-            $q->where('user_id', $user->id)->orWhere('email', $user->email);
-        })->where('course_id', $courseId)
-          ->whereIn('status', ['Registered', 'registered', 'Payment Confirmed', 'Attended'])
-          ->exists();
+        $enrolled = Registration::where('user_id', $user->id)
+            ->where('course_id', $courseId)
+            ->whereIn('status', RegistrationStatus::activeEnrollment())
+            ->exists();
 
         if (! $enrolled) {
             return response()->json([

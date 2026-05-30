@@ -129,27 +129,27 @@ server {
 
 ## 7. Queue Workers (Supervisor)
 
-Create `/etc/supervisor/conf.d/emc-worker.conf`:
-
-```ini
-[program:emc-queue-worker]
-process_name=%(program_name)s_%(process_num)02d
-command=php /var/www/emc-backend/artisan queue:work database --sleep=3 --tries=3 --timeout=90
-autostart=true
-autorestart=true
-stopasgroup=true
-killasgroup=true
-user=www-data
-numprocs=2
-redirect_stderr=true
-stdout_logfile=/var/log/emc-queue-worker.log
-stopwaitsecs=3600
-```
+Use the ready-made config in `docs/supervisor.conf`:
 
 ```bash
+sudo cp docs/supervisor.conf /etc/supervisor/conf.d/emc.conf
+# Edit the file to confirm /var/www/emc-backend paths are correct
 sudo supervisorctl reread
 sudo supervisorctl update
-sudo supervisorctl start emc-queue-worker:*
+sudo supervisorctl start emc:*
+sudo supervisorctl status
+```
+
+The config runs:
+- **emc-worker** (×2) — default queue, `--tries=3 --timeout=90 --max-time=3600`
+- **emc-webhook-worker** (×1) — `webhooks,default` queue, `--tries=5`
+- **emc-scheduler** (×1) — replaces cron if preferred
+
+After every deployment, restart workers gracefully:
+
+```bash
+php artisan queue:restart        # signals workers to stop after current job
+sudo supervisorctl restart emc:* # supervisor brings fresh workers up
 ```
 
 ---
@@ -213,14 +213,68 @@ Consider integrating with Papertrail, Logtail, or Datadog for centralized loggin
 
 ---
 
+## 10. Zero-Downtime Deployment Script (updated)
+
+```bash
+#!/bin/bash
+set -e
+cd /var/www/emc-backend
+
+git pull origin main
+composer install --no-dev --optimize-autoloader
+
+php artisan down --refresh=15
+
+# Production readiness gate — abort if critical failures found
+php artisan emc:production-check || { php artisan up; echo "Deploy aborted: production check failed."; exit 1; }
+
+php artisan migrate --force
+php artisan optimize:clear && php artisan optimize
+
+php artisan queue:restart
+sudo supervisorctl restart emc:*
+
+php artisan up
+
+# Verify health
+curl -sf https://api.emc.sa/api/health | grep '"status":"ok"' || echo "WARNING: health check degraded"
+echo "Deployment complete."
+```
+
+---
+
+## 11. Backups
+
+```bash
+# Database backup (output to storage/app/backups/):
+php artisan emc:backup --db
+
+# Storage backup:
+php artisan emc:backup --storage
+
+# Both:
+php artisan emc:backup --all
+
+# Enable nightly automated backups via scheduler:
+# Set ENABLE_SCHEDULED_BACKUP=true in .env
+```
+
+---
+
 ## Post-Deployment Verification
 
 ```bash
-# Health check
-curl https://api.emc.sa/up
+# Full production check (exit 1 on failures):
+php artisan emc:production-check
+
+# Health endpoint — checks DB, cache, queue, storage:
+curl -s https://api.emc.sa/api/health | python3 -m json.tool
 
 # Test auth endpoint
 curl -X POST https://api.emc.sa/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"admin@emc.sa","password":"your-password"}'
+
+# Check scheduled tasks are wired up:
+php artisan schedule:list
 ```

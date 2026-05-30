@@ -19,7 +19,7 @@ class ProfileController extends Controller
     {
         return response()->json([
             'success' => true,
-            'user'    => $this->userShape($request->user()),
+            'user'    => UserResource::make($request->user()),
         ]);
     }
 
@@ -77,7 +77,7 @@ class ProfileController extends Controller
                 ? 'Profile updated. Email changed — please verify your new address.'
                 : 'Profile updated successfully.',
             'email_changed' => $emailChanged,
-            'user'          => $this->userShape($fresh),
+            'user'          => UserResource::make($fresh),
         ]);
     }
 
@@ -105,7 +105,7 @@ class ProfileController extends Controller
             'message'           => 'Profile photo uploaded successfully.',
             'profile_photo_url' => $url,
             'avatar_url'        => $url, // backward-compat alias
-            'user'              => $this->userShape($user->fresh()),
+            'user'              => UserResource::make($user->fresh()),
         ]);
     }
 
@@ -170,27 +170,4 @@ class ProfileController extends Controller
         ]);
     }
 
-    // ─── Shared response shape ────────────────────────────────────────────────
-
-    private function userShape(\App\Models\User $user): array
-    {
-        return [
-            'id'                        => $user->id,
-            'name'                      => $user->name,
-            'email'                     => $user->email,
-            'phone'                     => $user->phone,
-            'city'                      => $user->city,
-            'country'                   => $user->country,
-            'role'                      => $user->role,
-            'department'                => $user->department,
-            'is_active'                 => $user->is_active ?? true,
-            'profile_photo_url'         => $user->avatar_url,
-            'avatar_url'                => $user->avatar_url,
-            'how_did_you_hear_about_us' => $user->how_did_you_hear_about_us,
-            'email_verified_at'         => $user->email_verified_at,
-            'last_login_at'             => $user->last_login_at,
-            'created_at'                => $user->created_at,
-            'updated_at'                => $user->updated_at,
-        ];
-    }
 }
