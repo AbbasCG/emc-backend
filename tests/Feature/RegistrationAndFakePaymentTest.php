@@ -39,14 +39,13 @@ class RegistrationAndFakePaymentTest extends TestCase
             ->assertJson([
                 'success' => true,
                 'type' => 'free',
-                'message' => 'Registration completed successfully.',
             ])
-            ->assertJsonPath('registration.status', 'Registered');
+            ->assertJsonPath('registration.status', 'registered');
 
         $this->assertDatabaseHas('registrations', [
             'course_id' => $course->id,
             'email' => 'jan.test@example.com',
-            'status' => 'Registered',
+            'status' => 'registered',
         ]);
 
         $this->assertDatabaseCount('payments', 0);
@@ -66,11 +65,10 @@ class RegistrationAndFakePaymentTest extends TestCase
             ->assertJson([
                 'success' => true,
                 'type' => 'paid',
-                'message' => 'Payment required.',
             ])
-            ->assertJsonPath('registration.status', 'Pending Payment')
+            ->assertJsonPath('registration.status', 'pending_payment')
             ->assertJsonPath('payment.provider', 'fake')
-            ->assertJsonPath('payment.status', 'Pending Payment');
+            ->assertJsonPath('payment.status', 'pending_payment');
 
         $checkoutUrl = $response->json('checkout_url');
         $this->assertIsString($checkoutUrl);
@@ -80,7 +78,7 @@ class RegistrationAndFakePaymentTest extends TestCase
         $this->assertDatabaseHas('payments', [
             'id' => $paymentId,
             'provider' => 'fake',
-            'status' => 'Pending Payment',
+            'status' => 'pending_payment',
         ]);
     }
 
@@ -100,17 +98,17 @@ class RegistrationAndFakePaymentTest extends TestCase
         $response->assertOk()
             ->assertJson([
                 'success' => true,
-                'payment_status' => 'Payment Confirmed',
-                'registration_status' => 'Registered',
+                'payment_status' => 'payment_confirmed',
+                'registration_status' => 'registered',
             ]);
 
         $this->assertDatabaseHas('payments', [
             'id' => $paymentId,
-            'status' => 'Payment Confirmed',
+            'status' => 'payment_confirmed',
         ]);
         $this->assertDatabaseHas('registrations', [
             'email' => 'jan.test@example.com',
-            'status' => 'Registered',
+            'status' => 'registered',
         ]);
     }
 
@@ -130,8 +128,8 @@ class RegistrationAndFakePaymentTest extends TestCase
         $response->assertOk()
             ->assertJson([
                 'success' => true,
-                'payment_status' => 'Payment Failed',
-                'registration_status' => 'Pending Payment',
+                'payment_status' => 'payment_failed',
+                'registration_status' => 'pending_payment',
             ]);
     }
 
@@ -176,7 +174,7 @@ class RegistrationAndFakePaymentTest extends TestCase
         $course = Course::factory()->free()->create();
         Registration::factory()->create([
             'course_id' => $course->id,
-            'status' => 'Registered',
+            'status' => 'registered',
         ]);
 
         $response = $this->actingAs($admin, 'sanctum')

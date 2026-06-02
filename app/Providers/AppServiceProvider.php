@@ -191,9 +191,11 @@ class AppServiceProvider extends ServiceProvider
                 ->by($request->user()?->id ?: $request->ip());
         });
 
-        // Auth endpoints — 10 req/min per IP (brute-force protection)
+        // Auth endpoints — 5 req/min per IP (brute-force protection)
+        // Covers login, forgot-password, reset-password.
+        // 5 attempts per minute is sufficient for legitimate users and blocks credential stuffing.
         RateLimiter::for('auth', function (Request $request) {
-            return Limit::perMinute(10)->by($request->ip());
+            return Limit::perMinute(5)->by($request->ip());
         });
 
         // Course registration — 5 req/min per IP

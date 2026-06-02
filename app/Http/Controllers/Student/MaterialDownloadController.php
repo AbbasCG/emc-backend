@@ -18,6 +18,12 @@ class MaterialDownloadController extends Controller
 
         $user = $request->user();
 
+        // Hidden materials are invisible to students/instructors even when enrolled.
+        // Admins bypass this so they can verify material content before publishing.
+        if (! $material->is_visible && ! $user->isAdmin()) {
+            abort(403, 'This material is not currently available.');
+        }
+
         abort_unless($this->canAccess($user, $material), 403, 'You are not enrolled in this course.');
 
         [$disk, $path] = $this->resolveDisk($material->file_path);

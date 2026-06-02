@@ -25,6 +25,7 @@ class LmsSession extends Model
         'meeting_url',
         'recording_url',
         'status',
+        'location',
     ];
 
     protected $casts = [

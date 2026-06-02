@@ -128,12 +128,12 @@ return [
             'path' => storage_path('logs/laravel.log'),
         ],
 
-        // Sentry channel — active only when SENTRY_LARAVEL_DSN is set.
-        // Requires: composer require sentry/sentry-laravel
-        // Then add 'sentry' to LOG_STACK in .env and run: php artisan sentry:publish --dsn=<DSN>
+        // Sentry channel — active only when SENTRY_LARAVEL_DSN is set AND sentry/sentry-laravel is installed.
+        // Install: composer require sentry/sentry-laravel
+        // Enable:  set SENTRY_LARAVEL_DSN in .env and add 'sentry' to LOG_STACK
         'sentry' => [
-            'driver' => env('SENTRY_LARAVEL_DSN') ? 'sentry' : 'null',
-            'level'  => env('LOG_LEVEL', 'error'),
+            'driver' => (env('SENTRY_LARAVEL_DSN') && class_exists(\Sentry\Laravel\Integration::class)) ? 'sentry' : 'null',
+            'level'  => env('SENTRY_LOG_LEVEL', 'error'),
             'bubble' => true,
         ],
 

@@ -19,13 +19,16 @@ Exit code 0 = all checks passed (warnings may exist). Exit code 1 = critical fai
 ## Application
 
 - [ ] `php artisan emc:production-check` exits with code 0
-- [ ] `GET /api/health` returns HTTP 200 with all checks `"status": "ok"`
+- [ ] `GET /api/health` returns HTTP 200 with `"status": "ok"` (or `"warn"` with 0 failed_jobs)
 - [ ] `APP_ENV=production`
 - [ ] `APP_DEBUG=false`
 - [ ] `APP_KEY` is set (run `php artisan key:generate` if missing)
 - [ ] `APP_URL` is set to the production API URL (e.g. `https://api.emc.sa`)
 - [ ] `APP_VERSION` is set (used by health endpoint)
 - [ ] `FRONTEND_URL` is set to the React app URL (e.g. `https://app.emc.sa`)
+- [ ] `LOG_LEVEL=warning` (not `debug`)
+- [ ] `ALLOW_FAKE_PAYMENTS` is `false` or not set
+- [ ] `SESSION_SECURE_COOKIE=true` (required for HTTPS-only cookie auth)
 
 ## Database
 
@@ -148,6 +151,21 @@ Exit code 0 = all checks passed (warnings may exist). Exit code 1 = critical fai
   - `emc:backup` — daily 01:00 (if `ENABLE_SCHEDULED_BACKUP=true`)
 - [ ] Scheduler log exists: `storage/logs/scheduler.log`
 
+## Deployment Script
+
+Use `scripts/deploy.sh` for zero-downtime deployments:
+
+```bash
+# Standard deploy (includes pre-deploy DB backup):
+sudo bash scripts/deploy.sh
+
+# Deploy a specific branch:
+sudo BRANCH=release/v2.1 bash scripts/deploy.sh
+
+# Skip backup (faster, use only when backup was just taken):
+sudo bash scripts/deploy.sh --skip-backup
+```
+
 ## Quick Commands
 
 ```bash
@@ -156,6 +174,9 @@ php artisan emc:production-check
 
 # Full deploy optimization:
 php artisan optimize:clear && php artisan optimize
+
+# Health endpoint (human-readable):
+curl -s https://api.emc.sa/api/health | python3 -m json.tool
 
 # Check queue status:
 php artisan queue:monitor
@@ -166,8 +187,8 @@ php artisan queue:flush
 # Manually trigger scheduler:
 php artisan schedule:run
 
-# Manual backup:
-php artisan emc:backup --all
+# Manual backup + prune files older than 30 days:
+php artisan emc:backup --all --prune-days=30
 
 # Prune old notifications manually:
 php artisan emc:prune-notifications --days=90

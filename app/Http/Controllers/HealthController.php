@@ -6,13 +6,14 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 
 class HealthController extends Controller
 {
     public function __invoke(Request $request): JsonResponse
     {
+        $start = microtime(true);
+
         $checks = [
             'database' => $this->checkDatabase(),
             'cache'    => $this->checkCache(),
@@ -20,15 +21,21 @@ class HealthController extends Controller
             'storage'  => $this->checkStorage(),
         ];
 
-        $allOk      = collect($checks)->every(fn ($c) => $c['status'] === 'ok');
-        $httpStatus = $allOk ? 200 : 503;
+        $anyFailed  = collect($checks)->contains(fn ($c) => $c['status'] === 'fail');
+        $anyWarn    = collect($checks)->contains(fn ($c) => $c['status'] === 'warn');
+        $httpStatus = $anyFailed ? 503 : 200;
 
         return response()->json([
-            'status'    => $allOk ? 'ok' : 'degraded',
-            'timestamp' => now()->toIso8601String(),
-            'version'   => env('APP_VERSION', '1.0.0'),
-            'env'       => app()->environment(),
-            'checks'    => $checks,
+            'status'         => $anyFailed ? 'fail' : ($anyWarn ? 'warn' : 'ok'),
+            'timestamp'      => now()->toIso8601String(),
+            'response_ms'    => round((microtime(true) - $start) * 1000, 1),
+            'app_version'    => config('app.version', env('APP_VERSION', '1.0.0')),
+            'laravel_version'=> app()->version(),
+            'php_version'    => PHP_VERSION,
+            'env'            => app()->environment(),
+            'memory_mb'      => round(memory_get_usage(true) / 1024 / 1024, 1),
+            'peak_memory_mb' => round(memory_get_peak_usage(true) / 1024 / 1024, 1),
+            'checks'         => $checks,
         ], $httpStatus);
     }
 
@@ -76,17 +83,17 @@ class HealthController extends Controller
 
         try {
             if ($driver === 'sync') {
-                return ['status' => 'ok', 'driver' => 'sync', 'note' => 'sync driver — jobs run inline'];
+                return ['status' => 'warn', 'driver' => 'sync', 'note' => 'sync driver — jobs run inline, not suitable for production'];
             }
 
             if ($driver === 'database') {
                 $pending = DB::table(config('queue.connections.database.table', 'jobs'))->count();
                 $failed  = DB::table('failed_jobs')->count();
                 return [
-                    'status'         => 'ok',
-                    'driver'         => 'database',
-                    'pending_jobs'   => $pending,
-                    'failed_jobs'    => $failed,
+                    'status'       => $failed > 0 ? 'warn' : 'ok',
+                    'driver'       => 'database',
+                    'pending_jobs' => $pending,
+                    'failed_jobs'  => $failed,
                 ];
             }
 

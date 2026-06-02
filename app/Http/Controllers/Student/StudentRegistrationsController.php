@@ -141,15 +141,15 @@ class StudentRegistrationsController extends Controller
             'payment_status'      => $reg->payments->last()?->status ?? ($reg->course?->type === 'free' ? 'free' : null),
             'registered_at'       => $reg->created_at,
             'next_session'        => $nextSessionsMap[$reg->course_id] ?? null,
-            'progress'            => $progressMap[$reg->course_id] ? [
-                'percentage'                     => $progressMap[$reg->course_id]->progress_percentage,
-                'completed_sessions'             => $progressMap[$reg->course_id]->completed_sessions,
-                'total_sessions'                 => $progressMap[$reg->course_id]->total_sessions,
-                'attendance_percentage'          => $progressMap[$reg->course_id]->attendance_percentage,
-                'assignment_completion_percentage' => $progressMap[$reg->course_id]->assignment_completion_percentage,
-                'status'                         => $progressMap[$reg->course_id]->status,
+            'progress'            => ($p = $progressMap->get($reg->course_id)) ? [
+                'percentage'                       => $p->progress_percentage,
+                'completed_sessions'               => $p->completed_sessions,
+                'total_sessions'                   => $p->total_sessions,
+                'attendance_percentage'             => $p->attendance_percentage,
+                'assignment_completion_percentage'  => $p->assignment_completion_percentage,
+                'status'                           => $p->status,
             ] : null,
-            'certificate_status'  => $certificateMap[$reg->course_id]?->status ?? null,
+            'certificate_status'  => $certificateMap->get($reg->course_id)?->status ?? null,
         ])->values()->all();
 
         return response()->json([

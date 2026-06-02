@@ -7,7 +7,6 @@ use App\Models\Course;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class CourseController extends Controller
@@ -15,8 +14,6 @@ class CourseController extends Controller
     public function index(Request $request): AnonymousResourceCollection
     {
         $perPage = min((int) $request->query('per_page', 15), 100);
-
-        Log::info('Public courses count', ['total_in_db' => Course::count()]);
 
         $query = Course::with(['instructor.user', 'features', 'track'])
             ->withCount('registrations')
@@ -47,12 +44,6 @@ class CourseController extends Controller
         }
 
         $courses = $query->paginate($perPage);
-
-        Log::info('Public courses returned', [
-            'count'   => $courses->count(),
-            'total'   => $courses->total(),
-            'filters' => $request->only(['track_id', 'type', 'search']),
-        ]);
 
         return CourseResource::collection($courses)
             ->additional([

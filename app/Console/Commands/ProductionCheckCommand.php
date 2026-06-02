@@ -64,6 +64,15 @@ class ProductionCheckCommand extends Command
             $this->warnings++;
         }
 
+        $this->checkSection('Logging');
+        $logLevel = strtolower((string) env('LOG_LEVEL', 'debug'));
+        if ($logLevel === 'debug') {
+            $this->warnLine('LOG_LEVEL=debug — verbose logging enabled; use warning or error in production');
+        } else {
+            $this->passLine("LOG_LEVEL={$logLevel}");
+        }
+        $this->checkEnvNotValue('LOG_CHANNEL', 'null', 'LOG_CHANNEL=null — all logs are silenced', critical: true);
+
         $this->checkSection('Security');
         $this->checkEnvExists('SANCTUM_TOKEN_EXPIRATION');
         $bcrypt = (int) env('BCRYPT_ROUNDS', 10);
@@ -71,6 +80,18 @@ class ProductionCheckCommand extends Command
             $this->warnLine("BCRYPT_ROUNDS={$bcrypt} (recommend ≥12 for production)");
         } else {
             $this->passLine("BCRYPT_ROUNDS={$bcrypt}");
+        }
+        $fakePayments = filter_var(env('ALLOW_FAKE_PAYMENTS', false), FILTER_VALIDATE_BOOLEAN);
+        if ($fakePayments) {
+            $this->failLine('ALLOW_FAKE_PAYMENTS=true — fake payments are accepted; must be disabled in production');
+        } else {
+            $this->passLine('ALLOW_FAKE_PAYMENTS is disabled');
+        }
+        $sessionSecure = filter_var(env('SESSION_SECURE_COOKIE', false), FILTER_VALIDATE_BOOLEAN);
+        if (! $sessionSecure && env('APP_ENV') === 'production') {
+            $this->warnLine('SESSION_SECURE_COOKIE is not true — cookies may be sent over HTTP');
+        } else {
+            $this->passLine('SESSION_SECURE_COOKIE=' . ($sessionSecure ? 'true' : 'false (non-production)'));
         }
 
         $this->checkSection('Error Tracking');

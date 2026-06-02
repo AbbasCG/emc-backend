@@ -39,8 +39,9 @@ Schedule::call(function () {
 })->dailyAt('04:00')->name('rotate-log')->withoutOverlapping();
 
 // Optional: daily database backup at 01:00 (enable by setting ENABLE_SCHEDULED_BACKUP=true)
+// --prune-days=30 removes backup files older than 30 days after each successful run.
 if (env('ENABLE_SCHEDULED_BACKUP', false)) {
-    Schedule::command('emc:backup --db')
+    Schedule::command('emc:backup --db --prune-days=30')
         ->dailyAt('01:00')
         ->withoutOverlapping()
         ->appendOutputTo(storage_path('logs/scheduler.log'));

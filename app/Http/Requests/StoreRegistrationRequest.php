@@ -6,7 +6,6 @@ use App\Support\FakePaymentEnvironment;
 use App\Models\Course;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Support\Facades\Log;
 
 class StoreRegistrationRequest extends FormRequest
 {
@@ -41,12 +40,6 @@ class StoreRegistrationRequest extends FormRequest
             ]);
         }
 
-        // Temporary: log every registration attempt for debugging
-        Log::debug('Registration payload after prepare', [
-            'user_id'         => $user?->id,
-            'route_course_id' => $routeCourse instanceof Course ? $routeCourse->id : $routeCourse,
-            'payload'         => $this->except(['receipt']),
-        ]);
     }
 
     public function rules(): array

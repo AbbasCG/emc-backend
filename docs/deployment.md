@@ -10,10 +10,10 @@ This document covers deploying the EMC backend to a production Linux server (Ubu
 
 | Component | Version |
 |-----------|---------|
-| PHP | 8.2+ |
+| PHP | 8.3+ |
 | PHP extensions | BCMath, Ctype, Curl, DOM, Fileinfo, JSON, Mbstring, OpenSSL, PCRE, PDO, PDO_MySQL, Tokenizer, XML |
 | MySQL / MariaDB | 8.0+ / 10.6+ |
-| Nginx or Apache | latest |
+| Nginx | latest |
 | Composer | 2.x |
 | Supervisor | (queue workers) |
 
@@ -69,7 +69,7 @@ php artisan view:cache
 php artisan event:cache
 ```
 
-> Clear all caches after every deployment:
+> Clear and rebuild after every deployment:
 > ```bash
 > php artisan optimize:clear && php artisan optimize
 > ```
@@ -83,9 +83,6 @@ server {
     listen 80;
     server_name api.emc.sa;
     root /var/www/emc-backend/public;
-    index index.php;
-
-    # Force HTTPS redirect
     return 301 https://$host$request_uri;
 }
 
@@ -108,7 +105,7 @@ server {
     }
 
     location ~ \.php$ {
-        fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
+        fastcgi_pass unix:/var/run/php/php8.3-fpm.sock;
         fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
         include fastcgi_params;
@@ -118,7 +115,7 @@ server {
         deny all;
     }
 
-    # Block direct access to storage private files
+    # Block direct access to private storage files
     location ^~ /storage/private {
         deny all;
     }
@@ -133,7 +130,7 @@ Use the ready-made config in `docs/supervisor.conf`:
 
 ```bash
 sudo cp docs/supervisor.conf /etc/supervisor/conf.d/emc.conf
-# Edit the file to confirm /var/www/emc-backend paths are correct
+# Verify /var/www/emc-backend paths match your server
 sudo supervisorctl reread
 sudo supervisorctl update
 sudo supervisorctl start emc:*
@@ -156,11 +153,21 @@ sudo supervisorctl restart emc:* # supervisor brings fresh workers up
 
 ## 8. Scheduler (Laravel Cron)
 
-Add to `/etc/crontab` or `crontab -e` for `www-data`:
+Add to `crontab -e` for `www-data`:
 
 ```cron
-* * * * * www-data php /var/www/emc-backend/artisan schedule:run >> /dev/null 2>&1
+* * * * * php /var/www/emc-backend/artisan schedule:run >> /dev/null 2>&1
 ```
+
+Scheduled jobs (defined in `routes/console.php`):
+
+| Job | Schedule |
+|-----|----------|
+| `emc:prune-notifications --days=90` | Daily 02:30 |
+| `queue:prune-failed --hours=168` | Weekly Sunday 03:00 |
+| `sanctum:prune-expired --hours=24` | Daily 03:30 |
+| Log rotation (>100 MB) | Daily 04:00 |
+| `emc:backup --db --prune-days=30` | Daily 01:00 (if `ENABLE_SCHEDULED_BACKUP=true`) |
 
 ---
 
@@ -175,59 +182,26 @@ Auto-renewal is handled by Certbot's systemd timer.
 
 ---
 
-## 10. Zero-Downtime Deployment Script
+## 10. Zero-Downtime Deployment
+
+Use the bundled `scripts/deploy.sh` script:
 
 ```bash
-#!/bin/bash
-set -e
+sudo bash /var/www/emc-backend/scripts/deploy.sh
+```
 
+Or run steps manually:
+
+```bash
 cd /var/www/emc-backend
 
 git pull origin main
 composer install --no-dev --optimize-autoloader
 
-php artisan down --secret="deploy-token-here"
-php artisan migrate --force
-php artisan optimize:clear
-php artisan optimize
-php artisan up
-
-sudo supervisorctl restart emc-queue-worker:*
-
-echo "Deployment complete."
-```
-
----
-
-## 11. Logging
-
-Logs are in `storage/logs/laravel.log`.
-
-In production, set:
-```env
-LOG_CHANNEL=daily
-LOG_LEVEL=warning
-```
-
-Consider integrating with Papertrail, Logtail, or Datadog for centralized logging.
-
----
-
-## 10. Zero-Downtime Deployment Script (updated)
-
-```bash
-#!/bin/bash
-set -e
-cd /var/www/emc-backend
-
-git pull origin main
-composer install --no-dev --optimize-autoloader
+# Production readiness gate — aborts if critical failures found
+php artisan emc:production-check || exit 1
 
 php artisan down --refresh=15
-
-# Production readiness gate — abort if critical failures found
-php artisan emc:production-check || { php artisan up; echo "Deploy aborted: production check failed."; exit 1; }
-
 php artisan migrate --force
 php artisan optimize:clear && php artisan optimize
 
@@ -236,9 +210,8 @@ sudo supervisorctl restart emc:*
 
 php artisan up
 
-# Verify health
-curl -sf https://api.emc.sa/api/health | grep '"status":"ok"' || echo "WARNING: health check degraded"
-echo "Deployment complete."
+# Verify
+curl -sf https://api.emc.sa/api/health | python3 -m json.tool
 ```
 
 ---
@@ -246,14 +219,17 @@ echo "Deployment complete."
 ## 11. Backups
 
 ```bash
-# Database backup (output to storage/app/backups/):
+# Database backup (→ storage/app/backups/):
 php artisan emc:backup --db
 
-# Storage backup:
+# Storage backup (excludes the backups dir itself):
 php artisan emc:backup --storage
 
 # Both:
 php artisan emc:backup --all
+
+# With pruning — remove backup files older than 30 days:
+php artisan emc:backup --db --prune-days=30
 
 # Enable nightly automated backups via scheduler:
 # Set ENABLE_SCHEDULED_BACKUP=true in .env
@@ -261,7 +237,89 @@ php artisan emc:backup --all
 
 ---
 
-## Post-Deployment Verification
+## 12. Restore from Backup
+
+### Database restore
+
+```bash
+# 1. Locate the backup file
+ls -lh storage/app/backups/*.sql
+
+# 2. Restore to a temporary database first to verify integrity
+mysql -u root -p -e "CREATE DATABASE emc_restore;"
+mysql -u root -p emc_restore < storage/app/backups/2026-05-31_01-00-00_db_emc_db.sql
+
+# 3. Spot-check row counts
+mysql -u root -p emc_restore -e "
+  SELECT 'users' AS tbl, COUNT(*) FROM users
+  UNION ALL SELECT 'registrations', COUNT(*) FROM registrations
+  UNION ALL SELECT 'payments', COUNT(*) FROM payments;
+"
+
+# 4. If counts look right, restore to production DB (DESTRUCTIVE)
+# php artisan down
+# mysql -u root -p emc_db < storage/app/backups/2026-05-31_01-00-00_db_emc_db.sql
+# php artisan migrate --force   # apply any pending migrations on top
+# php artisan up
+```
+
+### Storage restore
+
+```bash
+# 1. Locate the archive
+ls -lh storage/app/backups/*.tar.gz
+
+# 2. Extract to a temp location to verify
+mkdir /tmp/emc_storage_restore
+tar -xzf storage/app/backups/2026-05-31_01-00-00_storage.tar.gz -C /tmp/emc_storage_restore
+
+# 3. Inspect key subdirectories
+ls /tmp/emc_storage_restore/
+
+# 4. If correct, replace storage/app (excluding backups dir)
+# rsync -av --exclude='backups/' /tmp/emc_storage_restore/ storage/app/
+# chown -R www-data:www-data storage/
+```
+
+---
+
+## 13. Logging
+
+Logs are in `storage/logs/laravel.log`.
+
+In production, set:
+```env
+LOG_CHANNEL=daily
+LOG_LEVEL=warning
+LOG_DAILY_DAYS=14
+```
+
+For centralized logging, configure `LOG_STACK=daily,slack` with a `LOG_SLACK_WEBHOOK_URL`.
+
+---
+
+## 14. Error Tracking (Sentry — optional)
+
+```bash
+composer require sentry/sentry-laravel
+```
+
+Set in `.env`:
+```env
+SENTRY_LARAVEL_DSN=https://your-dsn@sentry.io/project
+SENTRY_TRACES_SAMPLE_RATE=0.1
+SENTRY_LOG_LEVEL=error
+LOG_STACK=daily,sentry
+```
+
+Verify:
+```bash
+php artisan sentry:test
+```
+
+---
+
+## 15. Post-Deployment Verification
 
 ```bash
 # Full production check (exit 1 on failures):
@@ -270,11 +328,24 @@ php artisan emc:production-check
 # Health endpoint — checks DB, cache, queue, storage:
 curl -s https://api.emc.sa/api/health | python3 -m json.tool
 
-# Test auth endpoint
+# Expected response shape:
+# {
+#   "status": "ok",
+#   "app_version": "1.0.0",
+#   "php_version": "8.3.x",
+#   "checks": {
+#     "database": {"status": "ok", "latency": "2.1ms"},
+#     "cache":    {"status": "ok", "latency": "0.8ms"},
+#     "queue":    {"status": "ok", "pending_jobs": 0, "failed_jobs": 0},
+#     "storage":  {"status": "ok", "latency": "1.2ms"}
+#   }
+# }
+
+# Test auth:
 curl -X POST https://api.emc.sa/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"admin@emc.sa","password":"your-password"}'
 
-# Check scheduled tasks are wired up:
+# Check scheduled tasks:
 php artisan schedule:list
 ```
