@@ -16,10 +16,15 @@ class AuthController extends Controller
     public function register(RegisterRequest $request): JsonResponse
     {
         $user = User::create([
-            'name'     => $request->name,
-            'email'    => $request->email,
-            'password' => Hash::make($request->password),
-            'role'     => 'student', // Self-registration always creates a student
+            'name'               => $request->name,
+            'email'              => $request->email,
+            'password'           => Hash::make($request->password),
+            'role'               => 'student', // Self-registration always creates a student
+            'country_code'       => $request->country_code,
+            'phone_country_code' => $request->phone_country_code,
+            'phone'              => $request->phone,
+            'city'               => $request->city,
+            'gender'             => $request->gender,
         ]);
 
         $token = $user->createToken('api-token')->plainTextToken;
