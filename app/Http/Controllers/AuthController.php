@@ -43,12 +43,19 @@ class AuthController extends Controller
 
     public function login(LoginRequest $request): JsonResponse
     {
-        $user = User::where('email', $request->email)->first();
+        $user = User::withTrashed()->where('email', $request->email)->first();
 
         if (! $user || ! Hash::check($request->password, $user->password)) {
             throw ValidationException::withMessages([
                 'email' => ['البريد الإلكتروني أو كلمة المرور غير صحيحة'],
             ]);
+        }
+
+        if (! $user->is_active || $user->trashed()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Account is suspended.',
+            ], 403);
         }
 
         // Revoke previous tokens (single-session enforcement)

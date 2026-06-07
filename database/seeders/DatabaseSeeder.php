@@ -75,6 +75,9 @@ class DatabaseSeeder extends Seeder
             }
         }
 
+        // ── Team profiles (public-facing EMC V3 team page) ────────────────────
+        $this->call(TeamMemberSeeder::class);
+
         // ── Development seed data (local / testing only) ──────────────────────
         if (app()->environment(['local', 'testing'])) {
             $this->call(EMCDevelopmentSeeder::class);

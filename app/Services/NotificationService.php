@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Enums\RegistrationStatus;
+use App\Models\Department;
 use App\Models\PlatformNotification;
 use App\Models\Registration;
 use App\Models\User;
@@ -282,5 +283,116 @@ class NotificationService
                 'color'       => 'blue',
             ]
         );
+    }
+
+    // ── Volunteer request ────────────────────────────────────────────────────
+
+    public static function volunteerRequestSubmitted(int $requestId, string $fullName, string $desiredDepartment): void
+    {
+        // Base: super_admin + admin + executive_admin + hr_manager always notified
+        $baseIds = User::whereIn('role', ['super_admin', 'admin', 'executive_admin', 'hr_manager'])
+            ->pluck('id')
+            ->all();
+
+        // Department-specific additional roles based on the free-text department name
+        $extraRoles = self::rolesForVolunteerDepartment($desiredDepartment);
+        $extraIds   = $extraRoles
+            ? User::whereIn('role', $extraRoles)->pluck('id')->all()
+            : [];
+
+        // If the department exists in the DB and has a designated leader, include them
+        $leaderIds = self::volunteerDepartmentLeaderIds($desiredDepartment);
+
+        $recipients = array_values(array_unique(array_merge($baseIds, $extraIds, $leaderIds)));
+
+        self::send(
+            $recipients,
+            'volunteer_request',
+            'طلب تطوع جديد',
+            "تم استلام طلب تطوع جديد من {$fullName} لقسم {$desiredDepartment}.",
+            [
+                'entity_type' => 'volunteer_request',
+                'entity_id'   => $requestId,
+                'action_url'  => "/dashboard/super-admin/volunteer-requests/{$requestId}",
+                'icon'        => 'hand-raised',
+                'color'       => 'green',
+            ]
+        );
+    }
+
+    // ── Volunteer → member conversion ────────────────────────────────────────
+
+    public static function volunteerConvertedToMember(
+        int $requestId,
+        int $memberId,
+        string $fullName,
+        string $departmentName,
+        ?int $departmentLeaderId = null
+    ): void {
+        $baseIds = User::whereIn('role', ['super_admin', 'admin', 'hr_manager'])
+            ->pluck('id')
+            ->all();
+
+        $leaderIds = $departmentLeaderId ? [$departmentLeaderId] : [];
+
+        $recipients = array_values(array_unique(array_merge($baseIds, $leaderIds)));
+
+        self::send(
+            $recipients,
+            'member_converted',
+            'تم إضافة عضو جديد',
+            "تم تحويل طلب التطوع الخاص بـ {$fullName} إلى عضو في قسم {$departmentName}.",
+            [
+                'entity_type' => 'team_profile',
+                'entity_id'   => $memberId,
+                'action_url'  => "/dashboard/super-admin/volunteer-requests/{$requestId}",
+                'icon'        => 'user-plus',
+                'color'       => 'blue',
+            ]
+        );
+    }
+
+    // Maps a free-text desired_department string to platform roles that should be notified.
+    private static function rolesForVolunteerDepartment(string $department): array
+    {
+        $d = mb_strtolower($department);
+
+        if (str_contains($d, 'موارد بشري') || str_contains($d, 'hr')) {
+            return ['hr_manager'];
+        }
+        if (str_contains($d, 'تقني') || str_contains($d, 'دعم فني')) {
+            return ['support_agent'];
+        }
+        if (str_contains($d, 'تسويق') || str_contains($d, 'إعلام')) {
+            return ['marketing_manager'];
+        }
+        if (str_contains($d, 'شراك') || str_contains($d, 'علاقات')) {
+            return ['department_manager'];
+        }
+        if (str_contains($d, 'برامج') || str_contains($d, 'مسارات')) {
+            return ['department_manager'];
+        }
+        if (str_contains($d, 'مالي') || str_contains($d, 'finance')) {
+            return ['finance_manager'];
+        }
+        if (str_contains($d, 'جودة') || str_contains($d, 'حوكمة')) {
+            return ['quality_manager'];
+        }
+
+        // Unknown department — base recipients (super_admin/admin/hr) already cover it
+        return [];
+    }
+
+    // Finds the leader of the matching department row, if one is set.
+    private static function volunteerDepartmentLeaderIds(string $departmentName): array
+    {
+        $dept = Department::where(function ($q) use ($departmentName) {
+            $q->where('name_ar', 'like', "%{$departmentName}%")
+              ->orWhere('name',    'like', "%{$departmentName}%");
+        })
+        ->whereNotNull('leader_id')
+        ->first();
+
+        return $dept?->leader_id ? [$dept->leader_id] : [];
     }
 }

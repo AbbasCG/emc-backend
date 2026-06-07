@@ -10,6 +10,7 @@ class TeamProfile extends Model
 {
     protected $fillable = [
         'department_id',
+        'user_id',
         'name_ar',
         'name_en',
         'position_ar',
@@ -22,17 +23,41 @@ class TeamProfile extends Model
         'is_leader',
         'is_executive',
         'is_active',
+        // Volunteer-conversion fields
+        'phone',
+        'email',
+        'city',
+        'gender',
+        'skills',
+        'cv_file_path',
+        'member_type',
+        'source',
+        'source_id',
+        'is_new_member',
+        'joined_at',
     ];
 
     protected $casts = [
-        'is_leader'    => 'boolean',
-        'is_executive' => 'boolean',
-        'is_active'    => 'boolean',
+        'is_leader'     => 'boolean',
+        'is_executive'  => 'boolean',
+        'is_active'     => 'boolean',
+        'is_new_member' => 'boolean',
+        'joined_at'     => 'datetime',
     ];
 
     public function department(): BelongsTo
     {
         return $this->belongsTo(Department::class);
+    }
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(\App\Models\User::class);
+    }
+
+    public function hasUserAccount(): bool
+    {
+        return $this->user_id !== null;
     }
 
     /** Scope: only active members. */

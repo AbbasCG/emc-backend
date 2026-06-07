@@ -1,0 +1,196 @@
+<?php
+
+namespace App\Http\Controllers\Admin;
+
+use App\Http\Controllers\Controller;
+use App\Http\Resources\VolunteerRequestResource;
+use App\Models\Department;
+use App\Models\TeamProfile;
+use App\Models\VolunteerRequest;
+use App\Services\NotificationService;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+
+class AdminVolunteerRequestController extends Controller
+{
+    // GET /api/admin/volunteer-requests
+    // ?status= &desired_department= &search= &date_from= &date_to= &per_page=
+    public function index(Request $request): JsonResponse
+    {
+        $query = VolunteerRequest::with('reviewer')
+            ->when($request->status, fn ($q) => $q->where('status', $request->status))
+            ->when($request->desired_department, fn ($q) => $q->where('desired_department', $request->desired_department))
+            ->when($request->search, function ($q) use ($request) {
+                $term = $request->search;
+                $q->where(function ($sub) use ($term) {
+                    $sub->where('full_name', 'like', "%{$term}%")
+                        ->orWhere('email',     'like', "%{$term}%")
+                        ->orWhere('phone',     'like', "%{$term}%");
+                });
+            })
+            ->when($request->date_from, fn ($q) => $q->whereDate('created_at', '>=', $request->date_from))
+            ->when($request->date_to,   fn ($q) => $q->whereDate('created_at', '<=', $request->date_to))
+            ->latest();
+
+        $perPage  = min((int) $request->query('per_page', 20), 100);
+        $requests = $query->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'data'    => VolunteerRequestResource::collection($requests)->response()->getData(true),
+        ]);
+    }
+
+    // GET /api/admin/volunteer-requests/{id}
+    public function show(VolunteerRequest $volunteerRequest): JsonResponse
+    {
+        return response()->json([
+            'success' => true,
+            'data'    => new VolunteerRequestResource($volunteerRequest->load('reviewer')),
+        ]);
+    }
+
+    // PATCH /api/admin/volunteer-requests/{id}/status
+    public function updateStatus(Request $request, VolunteerRequest $volunteerRequest): JsonResponse
+    {
+        $data = $request->validate([
+            'status'      => 'required|string|in:' . implode(',', VolunteerRequest::allowedStatuses()),
+            'admin_notes' => 'nullable|string',
+        ]);
+
+        $volunteerRequest->update([
+            'status'      => $data['status'],
+            'admin_notes' => $data['admin_notes'] ?? $volunteerRequest->admin_notes,
+            'reviewed_by' => $request->user()->id,
+            'reviewed_at' => now(),
+        ]);
+
+        $fresh = $volunteerRequest->fresh()->load('reviewer');
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Status updated.',
+            'data'    => new VolunteerRequestResource($fresh),
+            // Tells the frontend it can offer the "Convert to member" action
+            'can_convert_to_member' => $fresh->status === 'accepted' && $fresh->converted_to_member_at === null,
+        ]);
+    }
+
+    // POST /api/admin/volunteer-requests/{id}/convert-to-member
+    public function convertToMember(Request $request, VolunteerRequest $volunteerRequest): JsonResponse
+    {
+        // Role guard — admin/super_admin covered by route middleware; also allow hr_manager.
+        $user = $request->user();
+        if (! in_array($user->role, ['super_admin', 'admin', 'hr_manager'], true)) {
+            return response()->json(['success' => false, 'message' => 'غير مصرح لك بهذا الإجراء.'], 403);
+        }
+
+        // 1. Must be accepted before converting.
+        if ($volunteerRequest->status !== 'accepted') {
+            return response()->json([
+                'success' => false,
+                'message' => 'لا يمكن تحويل الطلب إلا إذا كان مقبولاً. الحالة الحالية: ' . $volunteerRequest->status,
+            ], 422);
+        }
+
+        // 2. Prevent duplicate conversion.
+        if ($volunteerRequest->isConverted()) {
+            return response()->json([
+                'success'           => false,
+                'already_converted' => true,
+                'message'           => 'تم تحويل هذا الطلب مسبقاً إلى عضو.',
+                'volunteer_request' => new VolunteerRequestResource($volunteerRequest->load('reviewer')),
+            ], 409);
+        }
+
+        try {
+            // 3. Resolve department — best-effort match on name_ar / name; null is fine.
+            $dept = $volunteerRequest->desired_department
+                ? Department::where('name_ar', $volunteerRequest->desired_department)
+                    ->orWhere('name_ar', 'like', '%' . $volunteerRequest->desired_department . '%')
+                    ->orWhere('name', 'like', '%' . $volunteerRequest->desired_department . '%')
+                    ->first()
+                : null;
+
+            // 4. sort_order: append after the last member in the department.
+            $maxSort = $dept
+                ? (TeamProfile::where('department_id', $dept->id)->max('sort_order') ?? 0)
+                : (TeamProfile::whereNull('department_id')->max('sort_order') ?? 0);
+
+            // 5. Create team_profiles row with full data mapping.
+            $member = TeamProfile::create([
+                'department_id' => $dept?->id,
+                'name_ar'       => $volunteerRequest->full_name,
+                'position_ar'   => 'متطوع',
+                'role_key'      => 'volunteer',
+                'phone'         => $volunteerRequest->phone,
+                'email'         => $volunteerRequest->email,
+                'country'       => $volunteerRequest->country,
+                'city'          => $volunteerRequest->city,
+                'gender'        => $volunteerRequest->gender,
+                'skills'        => $volunteerRequest->skills,
+                'cv_file_path'  => $volunteerRequest->cv_file_path,
+                'sort_order'    => $maxSort + 1,
+                'is_leader'     => false,
+                'is_executive'  => false,
+                'is_active'     => true,
+                'is_new_member' => true,
+                'member_type'   => 'volunteer',
+                'source'        => 'volunteer_request',
+                'source_id'     => $volunteerRequest->id,
+                'joined_at'     => now(),
+            ]);
+
+            // 6. Stamp the volunteer request.
+            $volunteerRequest->update([
+                'converted_to_member_at' => now(),
+                'converted_member_id'    => $member->id,
+            ]);
+
+            // 7. Notify admins and department leader.
+            NotificationService::volunteerConvertedToMember(
+                $volunteerRequest->id,
+                $member->id,
+                $volunteerRequest->full_name,
+                $volunteerRequest->desired_department ?? '',
+                $dept?->leader_id,
+            );
+
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('convertToMember failed', [
+                'volunteer_request_id' => $volunteerRequest->id,
+                'error'                => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'فشل تحويل المتطوع: ' . $e->getMessage(),
+            ], 500);
+        }
+
+        $updatedVr = $volunteerRequest->fresh()->load('reviewer');
+
+        return response()->json([
+            'success'           => true,
+            'message'           => 'تم تحويل المتطوع إلى عضو بنجاح.',
+            // Frontend convertVolunteerToMember() reads raw.volunteer_request first.
+            'volunteer_request' => new VolunteerRequestResource($updatedVr),
+            // Backward-compatible data key with the member snapshot.
+            'data'              => [
+                'id'              => $member->id,
+                'name_ar'         => $member->name_ar,
+                'position_ar'     => $member->position_ar,
+                'role_key'        => $member->role_key,
+                'department_id'   => $member->department_id,
+                'department_name' => $dept?->name_ar,
+                'member_type'     => $member->member_type,
+                'source'          => $member->source,
+                'source_id'       => $member->source_id,
+                'is_new_member'   => $member->is_new_member,
+                'joined_at'       => $member->joined_at,
+                'is_active'       => $member->is_active,
+                'has_user_account'=> false,
+            ],
+        ], 201);
+    }
+}

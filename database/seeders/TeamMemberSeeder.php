@@ -53,10 +53,10 @@ class TeamMemberSeeder extends Seeder
     {
         return [
             // 1. الإدارة العليا
-            ['dept_slug' => 'executive-leadership', 'name_ar' => 'طارق جعبل طعيمان',   'position_ar' => 'المدير العام CEO',                     'role_key' => 'ceo',                           'is_executive' => true,  'is_leader' => false, 'sort_order' => 1],
-            ['dept_slug' => 'executive-leadership', 'name_ar' => 'مازن الجعدي',          'position_ar' => 'نائب المدير العام',                    'role_key' => 'deputy_ceo',                    'is_executive' => true,  'is_leader' => false, 'sort_order' => 2],
-            ['dept_slug' => 'executive-leadership', 'name_ar' => 'رابية الراوي',          'position_ar' => 'المديرة التنفيذية COO',                 'role_key' => 'coo',                           'is_executive' => true,  'is_leader' => false, 'sort_order' => 3],
-            ['dept_slug' => 'executive-leadership', 'name_ar' => 'أروى أحمد',             'position_ar' => 'مديرة الاستراتيجية والمالية CSO & CFO', 'role_key' => 'cso_cfo',                       'is_executive' => true,  'is_leader' => false, 'sort_order' => 4],
+            ['dept_slug' => 'executive-management', 'name_ar' => 'طارق جعبل طعيمان',   'position_ar' => 'المدير العام CEO',                     'role_key' => 'ceo',                           'is_executive' => true,  'is_leader' => false, 'sort_order' => 1],
+            ['dept_slug' => 'executive-management', 'name_ar' => 'مازن الجعدي',          'position_ar' => 'نائب المدير العام',                    'role_key' => 'deputy_ceo',                    'is_executive' => true,  'is_leader' => false, 'sort_order' => 2],
+            ['dept_slug' => 'executive-management', 'name_ar' => 'رابية الراوي',          'position_ar' => 'المديرة التنفيذية COO',                 'role_key' => 'coo',                           'is_executive' => true,  'is_leader' => false, 'sort_order' => 3],
+            ['dept_slug' => 'executive-management', 'name_ar' => 'أروى أحمد',             'position_ar' => 'مديرة الاستراتيجية والمالية CSO & CFO', 'role_key' => 'cso_cfo',                       'is_executive' => true,  'is_leader' => false, 'sort_order' => 4],
 
             // 2. إدارة البرامج والمسارات
             ['dept_slug' => 'programs-tracks',      'name_ar' => 'كفاح',                  'position_ar' => 'مديرة تطوير البرامج',                  'role_key' => 'department_director',           'is_executive' => false, 'is_leader' => true,  'sort_order' => 1],

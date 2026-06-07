@@ -7,7 +7,6 @@ use App\Models\User;
 use App\Services\AuditLogService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 
@@ -112,13 +111,8 @@ class ProfileController extends Controller
     // ─── DELETE /api/profile ──────────────────────────────────────────────────
 
     /**
-     * GDPR-style self-deletion.
-     *
-     * Rules:
-     * - super_admin can only delete own account if at least one other super_admin exists
-     * - PII is anonymized before deletion (name, email, phone, avatar, city, country)
-     * - Payment/audit/legal records are retained (they no longer reference personal data)
-     * - Tokens revoked, avatar deleted from storage
+     * Self-deletion: sets is_active=false, revokes tokens, removes avatar, soft-deletes.
+     * super_admin cannot delete if they are the only one.
      */
     public function destroy(Request $request): JsonResponse
     {
@@ -138,35 +132,23 @@ class ProfileController extends Controller
             }
         }
 
-        // Anonymize PII before hard delete (retains audit/payment foreign keys as null)
-        $anonymizedEmail = 'deleted_' . $user->id . '_' . time() . '@emc.deleted';
-
         if ($user->avatar) {
             Storage::disk('public')->delete($user->avatar);
+            $user->update(['avatar' => null]);
         }
 
         $user->tokens()->delete();
 
-        $user->update([
-            'name'                      => 'Deleted User',
-            'email'                     => $anonymizedEmail,
-            'phone'                     => null,
-            'avatar'                    => null,
-            'city'                      => null,
-            'country'                   => null,
-            'how_did_you_hear_about_us' => null,
-            'password'                  => Hash::make(\Illuminate\Support\Str::random(64)),
-            'is_active'                 => false,
-        ]);
+        $user->update(['is_active' => false]);
 
-        AuditLogService::log('deleted', 'User', $user->id, 'self-deleted user #' . $user->id,
-            ['role' => $user->role], null, ['self_deletion' => true], $request);
+        AuditLogService::log('deleted', 'User', $user->id, $user->name,
+            ['role' => $user->role, 'email' => $user->email], null, ['self_deletion' => true], $request);
 
         $user->delete();
 
         return response()->json([
             'success' => true,
-            'message' => 'Your account has been deleted. Personal data has been anonymized.',
+            'message' => 'Your account has been deleted.',
         ]);
     }
 

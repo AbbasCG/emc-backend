@@ -57,6 +57,11 @@ class Department extends Model
             ->orderBy('sort_order');
     }
 
+    public function courses(): HasMany
+    {
+        return $this->hasMany(Course::class);
+    }
+
     public function volunteers(): HasMany
     {
         return $this->hasMany(VolunteerProfile::class);

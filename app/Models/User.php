@@ -18,7 +18,7 @@ class User extends Authenticatable
     use HasApiTokens, HasFactory, Notifiable, SoftDeletes;
 
     protected $fillable = [
-        'name', 'email', 'password', 'role',
+        'name', 'email', 'password', 'must_change_password', 'role',
         'phone', 'phone_country_code', 'is_active', 'department', 'avatar',
         'city', 'country', 'country_code', 'gender',
         'how_did_you_hear_about_us', 'last_login_at',
@@ -42,9 +42,10 @@ class User extends Authenticatable
     protected function casts(): array
     {
         return [
-            'email_verified_at' => 'datetime',
-            'last_login_at'     => 'datetime',
-            'is_active'         => 'boolean',
+            'email_verified_at'     => 'datetime',
+            'last_login_at'         => 'datetime',
+            'is_active'             => 'boolean',
+            'must_change_password'  => 'boolean',
         ];
     }
 

@@ -22,9 +22,19 @@ class AdminUserController extends Controller
     ];
 
     // GET /api/admin/users
+    // ?status=active (default) | inactive | deleted | all
     public function index(Request $request): JsonResponse
     {
-        $users = User::query()
+        $status = $request->string('status', 'active')->toString();
+
+        $query = match ($status) {
+            'deleted'  => User::onlyTrashed(),
+            'all'      => User::withTrashed(),
+            'inactive' => User::query()->where('is_active', false),
+            default    => User::query()->where('is_active', true),   // 'active'
+        };
+
+        $query
             ->when($request->role, fn ($q) => $q->where('role', $request->role))
             ->when($request->search, function ($q) use ($request) {
                 $q->where(function ($sub) use ($request) {
@@ -32,8 +42,9 @@ class AdminUserController extends Controller
                         ->orWhere('email', 'like', "%{$request->search}%");
                 });
             })
-            ->orderBy('name')
-            ->paginate(min((int) $request->query('per_page', 20), 100));
+            ->orderBy('name');
+
+        $users = $query->paginate(min((int) $request->query('per_page', 20), 100));
 
         return response()->json([
             'success' => true,
@@ -209,6 +220,7 @@ class AdminUserController extends Controller
         $snap = ['name' => $user->name, 'email' => $user->email, 'role' => $user->role];
 
         $user->tokens()->delete();
+        $user->update(['is_active' => false]);
         $user->delete();
 
         AuditLogService::log('deleted', 'User', $user->id, $user->name, $snap, null, null, $request);
@@ -219,6 +231,31 @@ class AdminUserController extends Controller
         ]);
     }
 
+    // POST /api/admin/users/{id}/restore  — super_admin only
+    public function restore(Request $request, int $id): JsonResponse
+    {
+        $user = User::withTrashed()->findOrFail($id);
+
+        if (! $user->trashed()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User is not deleted.',
+            ], 422);
+        }
+
+        $user->restore();
+        $user->update(['is_active' => true]);
+
+        AuditLogService::log('restored', 'User', $user->id, $user->name,
+            null, ['name' => $user->name, 'email' => $user->email], null, $request);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'User restored successfully.',
+            'data'    => $this->formatUser($user->fresh()),
+        ]);
+    }
+
     private function formatUser(User $user, bool $withPermissions = false): array
     {
         $data = [
@@ -226,15 +263,19 @@ class AdminUserController extends Controller
             'name'                       => $user->name,
             'email'                      => $user->email,
             'phone'                      => $user->phone,
+            'phone_country_code'         => $user->phone_country_code,
             'role'                       => $user->role,
             'department'                 => $user->department,
             'is_active'                  => $user->is_active ?? true,
             'city'                       => $user->city,
             'country'                    => $user->country,
+            'country_code'               => $user->country_code,
+            'gender'                     => $user->gender,
             'how_did_you_hear_about_us'  => $user->how_did_you_hear_about_us,
             'avatar_url'                 => $user->avatar_url,
             'email_verified_at'          => $user->email_verified_at,
             'last_login_at'              => $user->last_login_at,
+            'deleted_at'                 => $user->deleted_at,
             'created_at'                 => $user->created_at,
             'updated_at'                 => $user->updated_at,
         ];

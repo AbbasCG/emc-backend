@@ -45,6 +45,10 @@ use App\Http\Controllers\Admin\PartnershipRequestAdminController;
 use App\Http\Controllers\Admin\SupportTicketController as AdminSupportTicketController;
 use App\Http\Controllers\Admin\TaskController;
 use App\Http\Controllers\Admin\VolunteerController;
+use App\Http\Controllers\Admin\AdminVolunteerRequestController;
+use App\Http\Controllers\Admin\AdminMemberController;
+use App\Http\Controllers\Admin\AdminTeamProfileController;
+use App\Http\Controllers\Public\VolunteerRequestController as PublicVolunteerRequestController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AdminPaymentController;
 use App\Http\Controllers\AdminTrackController;
@@ -367,6 +371,10 @@ Route::middleware('throttle:api')->group(function () {
 Route::post('/partnership-requests', [PublicPartnershipRequestController::class, 'store'])
     ->middleware('throttle:workshop');
 
+// ─── Public: Volunteer requests (throttle:workshop — 5 req/min per IP) ────────
+Route::post('/volunteer-requests', [PublicVolunteerRequestController::class, 'store'])
+    ->middleware('throttle:workshop');
+
 // ─── Public: Support tickets ─────────────────────────────────────────────────
 Route::post('/support-tickets', [PublicSupportTicketController::class, 'store'])
     ->middleware('throttle:workshop');
@@ -417,6 +425,17 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
     Route::get('partnership-requests',                           [PartnershipRequestAdminController::class, 'index']);
     Route::get('partnership-requests/{partnershipRequest}',      [PartnershipRequestAdminController::class, 'show']);
     Route::put('partnership-requests/{partnershipRequest}/status', [PartnershipRequestAdminController::class, 'updateStatus']);
+
+    // Volunteer requests (public form submissions — طلب التطوع)
+    Route::get('volunteer-requests',                                           [AdminVolunteerRequestController::class, 'index']);
+    Route::get('volunteer-requests/{volunteerRequest}',                        [AdminVolunteerRequestController::class, 'show']);
+    Route::patch('volunteer-requests/{volunteerRequest}/status',               [AdminVolunteerRequestController::class, 'updateStatus']);
+    Route::post('volunteer-requests/{volunteerRequest}/convert-to-member',     [AdminVolunteerRequestController::class, 'convertToMember']);
+
+    // Internal members / team-profiles (الأعضاء page reads from team_profiles)
+    Route::get('members',                                          [AdminMemberController::class,      'index']);
+    Route::get('members/{member}',                                 [AdminMemberController::class,      'show']);
+    Route::post('team-profiles/{teamProfile}/create-user-account', [AdminTeamProfileController::class, 'createUserAccount']);
 
     // Marketing planner
     Route::apiResource('marketing-items', MarketingItemController::class);
@@ -839,8 +858,10 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->
     Route::patch('users/{user}',  [AdminUserController::class, 'update']);
 });
 
-// ─── Delete user — super_admin only ──────────────────────────────────────────
+// ─── Delete / restore user — super_admin only ────────────────────────────────
 Route::delete('admin/users/{user}', [AdminUserController::class, 'destroy'])
+    ->middleware(['auth:sanctum', 'role:super_admin']);
+Route::post('admin/users/{id}/restore', [AdminUserController::class, 'restore'])
     ->middleware(['auth:sanctum', 'role:super_admin']);
 
 // ─── Admin Courses CRUD — full management with filters + instructor assignment ─

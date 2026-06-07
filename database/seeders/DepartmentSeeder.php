@@ -13,10 +13,10 @@ class DepartmentSeeder extends Seeder
 {
     private const DEPARTMENTS = [
         [
-            'slug'        => 'executive-leadership',
+            'slug'        => 'executive-management',
             'name'        => 'الإدارة العليا',
             'name_ar'     => 'الإدارة العليا',
-            'name_en'     => 'Executive Leadership',
+            'name_en'     => 'Executive Management',
             'description_ar' => 'القيادة العليا للمركز وصنع القرار الاستراتيجي.',
             'icon'        => 'crown',
             'sort_order'  => 1,
