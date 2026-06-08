@@ -108,6 +108,11 @@ use App\Http\Controllers\Admin\ImpersonationController;
 use App\Http\Controllers\Instructor\InstructorWorkshopController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\Student\StudentRegistrationsController;
+use App\Http\Controllers\Student\StudentPlacementTestController;
+use App\Http\Controllers\Student\StudentOralAssessmentController;
+use App\Http\Controllers\Instructor\InstructorPlacementController;
+use App\Http\Controllers\Instructor\InstructorAvailabilityController;
+use App\Http\Controllers\Admin\AdminPlacementController;
 use Illuminate\Support\Facades\Route;
 
 // ─── Health (no throttle — used by uptime monitors) ──────────────────────────
@@ -150,22 +155,35 @@ Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(fu
     Route::post('/evaluations',  [StudentEvaluationController::class, 'store']);
     Route::get('/certificates',  [StudentCertificateController::class, 'index']);
 
-    // Enrolled courses, registration history, and discovery
+    // Enrolled courses, registration history, discovery, and completed exams
     Route::get('/registrations',    [StudentRegistrationsController::class, 'index']);
     Route::get('/courses',          [StudentRegistrationsController::class, 'courses']);
     Route::get('/available-courses',[StudentRegistrationsController::class, 'availableCourses']);
     Route::get('/upcoming-sessions',[StudentSessionController::class, 'index']);
+    Route::get('/exams',            [StudentRegistrationsController::class, 'exams']);
 
     // Advanced LMS
     Route::get('/learning',                    [\App\Http\Controllers\Student\StudentLearningController::class, 'index']);
-    Route::get('/courses/{courseId}/modules',  [\App\Http\Controllers\Student\StudentLearningController::class, 'modules']);
     Route::get('/lessons/{lesson}',            [\App\Http\Controllers\Student\StudentLearningController::class, 'lesson']);
     Route::post('/quizzes/{quiz}/submit',      [\App\Http\Controllers\Student\StudentLearningController::class, 'submitQuiz']);
 
-    // Course content learning view (modules + sessions + materials + assignments)
-    // Both patterns supported: frontend uses /courses/{courseId}/learn following existing convention
-    Route::get('/courses/{courseId}/learn',    [\App\Http\Controllers\Student\StudentLearnController::class, 'show']);
-    Route::get('/learn/{courseId}',            [\App\Http\Controllers\Student\StudentLearnController::class, 'show']);
+    // Placement-gated course content — blocked until placement complete
+    Route::middleware('placement.required')->group(function () {
+        Route::get('/courses/{courseId}/modules', [\App\Http\Controllers\Student\StudentLearningController::class, 'modules']);
+        Route::get('/courses/{courseId}/learn',   [\App\Http\Controllers\Student\StudentLearnController::class, 'show']);
+        Route::get('/learn/{courseId}',           [\App\Http\Controllers\Student\StudentLearnController::class, 'show']);
+    });
+
+    // ── Placement test ───────────────────────────────────────────────────────
+    Route::get( '/courses/{course}/placement-test/status', [StudentPlacementTestController::class, 'status']);
+    Route::get( '/courses/{course}/placement-test/result', [StudentPlacementTestController::class, 'result']);
+    Route::post('/courses/{course}/placement-test/start',  [StudentPlacementTestController::class, 'start']);
+    Route::get( '/courses/{course}/placement-test',        [StudentPlacementTestController::class, 'show']);
+    Route::post('/courses/{course}/placement-test/submit', [StudentPlacementTestController::class, 'submit']);
+
+    // ── Oral assessment ──────────────────────────────────────────────────────
+    Route::get( '/courses/{course}/oral-assessment/slots', [StudentOralAssessmentController::class, 'slots']);
+    Route::post('/courses/{course}/oral-assessment/book',  [StudentOralAssessmentController::class, 'book']);
 });
 
 // ─── Protected material download (auth:sanctum, access checked inside) ────────
@@ -237,6 +255,19 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:teacher,admin'])-
     Route::get('/assignments', [InstructorAssignmentController::class, 'index']);
     Route::put('/submissions/{submission}/review', [InstructorSubmissionController::class, 'review']);
     Route::get('/notifications', [NotificationController::class, 'index']);
+
+    // ── Placement: per-course student list + oral assessment management ───────
+    Route::get( '/courses/{course}/placement-students',       [InstructorPlacementController::class, 'students']);
+    Route::get( '/courses/{course}/students',                 [InstructorPlacementController::class, 'students']);
+    Route::get( '/placement-tests',                           [InstructorPlacementController::class, 'placementTests']);
+    Route::get( '/oral-assessments',                          [InstructorPlacementController::class, 'assessments']);
+    Route::patch('/oral-assessments/{booking}/complete',      [InstructorPlacementController::class, 'complete']);
+
+    // ── Availability (oral assessment slots CRUD) ─────────────────────────────
+    Route::get(   '/availability',             [InstructorAvailabilityController::class, 'index']);
+    Route::post(  '/availability/bulk',        [InstructorAvailabilityController::class, 'bulk']);
+    Route::post(  '/availability',             [InstructorAvailabilityController::class, 'store']);
+    Route::delete('/availability/{slot}',      [InstructorAvailabilityController::class, 'destroy']);
 
     // ── Course content: nested CRUD (POST /instructor/courses/{course}/…) ────────
     Route::get('/courses/{course}/content',                              [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'content']);
@@ -969,4 +1000,13 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::put('/profile',        [ProfileController::class, 'update']);
     Route::post('/profile/avatar', [ProfileController::class, 'uploadAvatar']);
     Route::delete('/profile',     [ProfileController::class, 'destroy']);
+});
+
+// ─── Placement tests — admin management ──────────────────────────────────────
+Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->group(function () {
+    Route::get( 'placement-tests',                                        [AdminPlacementController::class, 'indexTests']);
+    Route::post('courses/{course}/oral-assessment-slots',                 [AdminPlacementController::class, 'storeSlot']);
+    Route::get( 'courses/{course}/oral-assessment-slots',                 [AdminPlacementController::class, 'indexSlots']);
+    Route::delete('oral-assessment-slots/{slot}',                         [AdminPlacementController::class, 'destroySlot']);
+    Route::get( 'oral-assessments',                                       [AdminPlacementController::class, 'indexBookings']);
 });

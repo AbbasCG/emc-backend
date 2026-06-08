@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Student;
 use App\Http\Controllers\Controller;
 use App\Models\Certificate;
 use App\Models\LmsSession;
+use App\Models\OralAssessmentBooking;
+use App\Models\PlacementTestAttempt;
 use App\Models\Registration;
 use App\Models\StudentProgress;
 use Illuminate\Http\JsonResponse;
@@ -86,7 +88,7 @@ class StudentRegistrationsController extends Controller
     /**
      * GET /api/student/courses
      *
-     * Active enrolled courses (status=Registered) with full detail.
+     * Active enrolled courses (status=Registered) with full detail, including placement status.
      */
     public function courses(Request $request): JsonResponse
     {
@@ -105,7 +107,6 @@ class StudentRegistrationsController extends Controller
         $courseIds       = $registrations->pluck('course_id')->unique()->filter()->values();
         $nextSessionsMap = $this->nextSessionsForCourses($courseIds->all());
 
-        // Pre-load progress and certificates for enrolled courses in bulk
         $progressMap = StudentProgress::where('user_id', $user->id)
             ->whereIn('course_id', $courseIds->all())
             ->get()
@@ -117,40 +118,119 @@ class StudentRegistrationsController extends Controller
             ->get()
             ->keyBy('course_id');
 
-        $data = $registrations->map(fn ($reg) => [
-            'course_id'           => $reg->course_id,
-            'title'               => $reg->course?->title,
-            'slug'                => $reg->course?->slug,
-            'description'         => $reg->course?->description,
-            'type'                => $reg->course?->type,
-            'level'               => $reg->course?->level,
-            'thumbnail'           => $reg->course?->course_image,
-            'location_type'       => $reg->course?->location_type,
-            'meeting_link'        => $reg->course?->meeting_link,
-            'start_date'          => $reg->course?->start_date,
-            'end_date'            => $reg->course?->end_date,
-            'next_cohort_pending' => $reg->course?->start_date === null,
-            'track'               => $reg->course?->track ? [
-                'id'   => $reg->course->track->id,
-                'name' => $reg->course->track->title,
-            ] : null,
-            'instructor_name'     => $reg->course?->instructor?->user?->name
-                ?? $reg->course?->instructor?->name,
-            'registration_id'     => $reg->id,
-            'registration_status' => $reg->status,
-            'payment_status'      => $reg->payments->last()?->status ?? ($reg->course?->type === 'free' ? 'free' : null),
-            'registered_at'       => $reg->created_at,
-            'next_session'        => $nextSessionsMap[$reg->course_id] ?? null,
-            'progress'            => ($p = $progressMap->get($reg->course_id)) ? [
-                'percentage'                       => $p->progress_percentage,
-                'completed_sessions'               => $p->completed_sessions,
-                'total_sessions'                   => $p->total_sessions,
-                'attendance_percentage'             => $p->attendance_percentage,
-                'assignment_completion_percentage'  => $p->assignment_completion_percentage,
-                'status'                           => $p->status,
-            ] : null,
-            'certificate_status'  => $certificateMap->get($reg->course_id)?->status ?? null,
-        ])->values()->all();
+        // Bulk-load placement data for this student across all enrolled courses
+        $attemptMap = PlacementTestAttempt::where('user_id', $user->id)
+            ->whereIn('course_id', $courseIds->all())
+            ->get()
+            ->keyBy('course_id');
+
+        $bookingMap = OralAssessmentBooking::where('user_id', $user->id)
+            ->whereIn('course_id', $courseIds->all())
+            ->get()
+            ->keyBy('course_id');
+
+        $data = $registrations->map(function ($reg) use (
+            $progressMap, $certificateMap, $nextSessionsMap, $attemptMap, $bookingMap
+        ) {
+            $course  = $reg->course;
+            $attempt = $attemptMap->get($reg->course_id);
+            $booking = $bookingMap->get($reg->course_id);
+
+            $requiresPlacement = (bool) ($course?->requires_placement_test ?? false);
+            $placementStatus   = $this->computePlacementStatus($attempt, $booking);
+            $canStartLearning  = ! $requiresPlacement || $placementStatus === 'completed';
+
+            return [
+                'course_id'                => $reg->course_id,
+                'title'                    => $course?->title,
+                'slug'                     => $course?->slug,
+                'description'              => $course?->description,
+                'type'                     => $course?->type,
+                'level'                    => $course?->level,
+                'thumbnail'                => $course?->course_image,
+                'location_type'            => $course?->location_type,
+                'meeting_link'             => $course?->meeting_link,
+                'start_date'               => $course?->start_date,
+                'end_date'                 => $course?->end_date,
+                'next_cohort_pending'      => $course?->start_date === null,
+                'track'                    => $course?->track ? [
+                    'id'   => $course->track->id,
+                    'name' => $course->track->title,
+                ] : null,
+                'instructor_name'          => $course?->instructor?->user?->name
+                    ?? $course?->instructor?->name,
+                'registration_id'          => $reg->id,
+                'registration_status'      => $reg->status,
+                'payment_status'           => $reg->payments->last()?->status
+                    ?? ($course?->type === 'free' ? 'free' : null),
+                'registered_at'            => $reg->created_at,
+                'next_session'             => $nextSessionsMap[$reg->course_id] ?? null,
+                'progress'                 => ($p = $progressMap->get($reg->course_id)) ? [
+                    'percentage'                      => $p->progress_percentage,
+                    'completed_sessions'              => $p->completed_sessions,
+                    'total_sessions'                  => $p->total_sessions,
+                    'attendance_percentage'            => $p->attendance_percentage,
+                    'assignment_completion_percentage' => $p->assignment_completion_percentage,
+                    'status'                          => $p->status,
+                ] : null,
+                'certificate_status'       => $certificateMap->get($reg->course_id)?->status ?? null,
+                // Placement fields
+                'requires_placement_test'  => $requiresPlacement,
+                'placement_status'         => $requiresPlacement ? $placementStatus : null,
+                'can_start_learning'       => $canStartLearning,
+                'written_score'            => $attempt?->score,
+                'estimated_level'          => $attempt?->estimated_level,
+                'oral_booking_status'      => $booking?->status,
+                'placement_attempt'        => $attempt ? [
+                    'id'              => $attempt->id,
+                    'status'          => $attempt->status,
+                    'score'           => $attempt->score,
+                    'percentage'      => $attempt->percentage,
+                    'estimated_level' => $attempt->estimated_level,
+                    'submitted_at'    => $attempt->submitted_at,
+                ] : null,
+            ];
+        })->values()->all();
+
+        return response()->json([
+            'success' => true,
+            'data'    => $data,
+        ]);
+    }
+
+    /**
+     * GET /api/student/exams
+     *
+     * Completed placement test attempts only (no in-progress or not-started).
+     */
+    public function exams(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $attempts = PlacementTestAttempt::with(['course', 'oralBooking'])
+            ->where('user_id', $user->id)
+            ->where('status', 'completed')
+            ->orderByDesc('submitted_at')
+            ->get();
+
+        $data = $attempts->map(function ($attempt) {
+            $booking = $attempt->oralBooking;
+            return [
+                'id'                  => $attempt->id,
+                'course'              => $attempt->course ? [
+                    'id'    => $attempt->course->id,
+                    'title' => $attempt->course->title,
+                    'slug'  => $attempt->course->slug,
+                ] : null,
+                'score'               => $attempt->score,
+                'total_questions'     => $attempt->total_questions,
+                'percentage'          => $attempt->percentage,
+                'estimated_level'     => $attempt->estimated_level,
+                'submitted_at'        => $attempt->submitted_at,
+                'oral_booking_status' => $booking?->status,
+                'final_level'         => $booking?->final_level,
+            ];
+        })->values()->all();
 
         return response()->json([
             'success' => true,
@@ -167,7 +247,6 @@ class StudentRegistrationsController extends Controller
     {
         $user = $request->user();
 
-        // Courses the student already registered for (to exclude)
         $enrolledCourseIds = Registration::where(function ($q) use ($user) {
             $q->where('user_id', $user->id)->orWhere('email', $user->email);
         })->whereNotIn('status', ['Cancelled'])->pluck('course_id')->all();
@@ -218,6 +297,44 @@ class StudentRegistrationsController extends Controller
                 'last_page'    => $courses->lastPage(),
             ],
         ]);
+    }
+
+    /**
+     * Derive a single placement_status string from an attempt and oral booking.
+     *
+     * Statuses (in ascending completeness):
+     *   not_started       — no attempt at all
+     *   in_progress       — written test started but not submitted
+     *   written_completed — written test done, oral not yet booked
+     *   oral_booked       — oral slot reserved, awaiting interview
+     *   oral_completed    — interview done, final_level not yet recorded
+     *   completed         — final level recorded; student ready to start
+     */
+    private function computePlacementStatus(
+        ?PlacementTestAttempt $attempt,
+        ?OralAssessmentBooking $booking
+    ): string {
+        if (! $attempt) {
+            return 'not_started';
+        }
+
+        if ($attempt->status !== 'completed') {
+            return 'in_progress';
+        }
+
+        if (! $booking) {
+            return 'written_completed';
+        }
+
+        if ($booking->status === 'booked') {
+            return 'oral_booked';
+        }
+
+        if ($booking->status === 'completed' && ! $booking->final_level) {
+            return 'oral_completed';
+        }
+
+        return 'completed';
     }
 
     /** Returns a map of course_id => next scheduled session for the given course IDs. */

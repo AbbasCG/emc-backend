@@ -352,6 +352,102 @@ class NotificationService
         );
     }
 
+    // ── Placement test notifications ─────────────────────────────────────────
+
+    /** Notify enrolled students that an instructor or schedule was assigned to their course. */
+    public static function courseScheduleUpdated(int $courseId, string $courseTitle): void
+    {
+        $recipients = self::enrolledStudentUserIds($courseId);
+
+        if (empty($recipients)) {
+            return;
+        }
+
+        self::send($recipients, 'course_schedule_updated',
+            'تم تحديث بيانات الدورة',
+            "تم تعيين موعد أو مدرب لدورتك: {$courseTitle}",
+            [
+                'entity_type' => 'course',
+                'entity_id'   => $courseId,
+                'action_url'  => '/dashboard/student/courses',
+                'icon'        => 'calendar',
+                'color'       => 'blue',
+            ]
+        );
+    }
+
+    /** Notify the course instructor that a student has completed the written placement test. */
+    public static function placementTestCompleted(
+        int $instructorUserId,
+        int $courseId,
+        string $courseTitle,
+        string $studentName,
+        int $score,
+        int $totalQuestions,
+        string $estimatedLevel
+    ): void {
+        self::send($instructorUserId, 'placement_test_completed',
+            'اختبار تحديد مستوى مكتمل',
+            "أكمل الطالب {$studentName} اختبار تحديد المستوى بنتيجة {$score}/{$totalQuestions} وينتظر المقابلة الشفوية.",
+            [
+                'entity_type' => 'course',
+                'entity_id'   => $courseId,
+                'action_url'  => "/dashboard/instructor/courses/{$courseId}/placement-students",
+                'icon'        => 'academic-cap',
+                'color'       => 'purple',
+            ]
+        );
+    }
+
+    /** Notify a student that their oral assessment slot has been booked. */
+    public static function oralAssessmentBooked(int $studentUserId, string $courseTitle, string $slotDatetime): void
+    {
+        self::send($studentUserId, 'oral_assessment_booked',
+            'تم حجز موعد المقابلة الشفهية',
+            "تم حجز موعد مقابلتك الشفهية لدورة \"{$courseTitle}\" في: {$slotDatetime}",
+            [
+                'entity_type' => 'course',
+                'action_url'  => '/dashboard/student/courses',
+                'icon'        => 'microphone',
+                'color'       => 'green',
+            ]
+        );
+    }
+
+    /** Notify a student that their oral assessment has been completed and a final level assigned. */
+    public static function oralAssessmentCompleted(int $studentUserId, string $courseTitle, string $finalLevel): void
+    {
+        self::send($studentUserId, 'oral_assessment_completed',
+            'تم إكمال تقييمك الشفهي',
+            "تم إكمال تقييمك الشفهي لدورة \"{$courseTitle}\" ومستواك المحدد هو: {$finalLevel}",
+            [
+                'entity_type' => 'course',
+                'action_url'  => '/dashboard/student/courses',
+                'icon'        => 'check-circle',
+                'color'       => 'green',
+            ]
+        );
+    }
+
+    /** Notify the instructor that a student has booked an oral assessment slot. */
+    public static function oralAssessmentBookedInstructor(
+        int $instructorUserId,
+        string $studentName,
+        string $courseTitle,
+        string $startsAt
+    ): void {
+        self::send($instructorUserId, 'oral_assessment_booked',
+            'تم حجز مقابلة شفوية',
+            "حجز الطالب {$studentName} مقابلة شفوية لدورة {$courseTitle} بتاريخ {$startsAt}.",
+            [
+                'entity_type' => 'course',
+                'action_url'  => '/dashboard/instructor/oral-assessments',
+                'icon'        => 'calendar',
+                'color'       => 'blue',
+            ]
+        );
+    }
+
     // Maps a free-text desired_department string to platform roles that should be notified.
     private static function rolesForVolunteerDepartment(string $department): array
     {

@@ -78,7 +78,7 @@ class CourseResource extends JsonResource
             'instructor_name'       => $this->buildInstructorName(),
 
             // Relations
-            'track'                 => TrackResource::make($this->whenLoaded('track')),
+            'track'                 => $this->whenLoaded('track', fn () => $this->track ? TrackResource::make($this->track) : null),
 
             'created_at'            => $this->created_at,
             'updated_at'            => $this->updated_at,

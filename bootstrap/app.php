@@ -17,6 +17,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'permission'         => \App\Http\Middleware\PermissionMiddleware::class,
             'optional.sanctum'   => \App\Http\Middleware\OptionalSanctumAuth::class,
             'active'             => \App\Http\Middleware\EnsureUserIsActive::class,
+            'placement.required' => \App\Http\Middleware\PlacementTestRequired::class,
         ]);
 
         // Run on every api/* request — detects impersonation tokens and annotates

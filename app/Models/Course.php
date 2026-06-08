@@ -57,6 +57,8 @@ class Course extends Model
         'curriculum_topics',
         'keywords',
         'course_image',
+        'requires_placement_test',
+        'placement_test_type',
     ];
 
     protected $casts = [
@@ -69,7 +71,8 @@ class Course extends Model
         'is_online'             => 'boolean',
         'is_free'               => 'boolean',
         'registration_open'     => 'boolean',
-        'certificate_available' => 'boolean',
+        'certificate_available'  => 'boolean',
+        'requires_placement_test'=> 'boolean',
     ];
 
     public function instructor()
@@ -145,5 +148,25 @@ class Course extends Model
     public function quizzes(): HasMany
     {
         return $this->hasMany(Quiz::class);
+    }
+
+    public function placementTestAttempts(): HasMany
+    {
+        return $this->hasMany(PlacementTestAttempt::class);
+    }
+
+    public function oralAssessmentSlots(): HasMany
+    {
+        return $this->hasMany(OralAssessmentSlot::class);
+    }
+
+    public function oralAssessmentBookings(): HasMany
+    {
+        return $this->hasMany(OralAssessmentBooking::class);
+    }
+
+    public function requiresPlacement(): bool
+    {
+        return (bool) $this->requires_placement_test;
     }
 }

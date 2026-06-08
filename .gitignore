@@ -30,3 +30,9 @@ Thumbs.db
 ./claude
 .settings.local.json
 
+./graphify
+/.graphify 
+/graphify-out/
+
+/..gitattributes
+
