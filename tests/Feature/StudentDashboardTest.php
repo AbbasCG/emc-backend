@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Course;
+use App\Models\Evaluation;
 use App\Models\Registration;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -132,6 +133,66 @@ class StudentDashboardTest extends TestCase
             ->getJson('/api/student/certificates')
             ->assertOk()
             ->assertJson(['success' => true]);
+    }
+
+    // ─── Reviews (GET /api/student/reviews) ──────────────────────────────────
+
+    public function test_student_can_list_own_reviews(): void
+    {
+        $student = User::factory()->create(['role' => 'student']);
+        $course  = Course::factory()->free()->create();
+
+        Evaluation::create([
+            'user_id'   => $student->id,
+            'course_id' => $course->id,
+            'rating'    => 5,
+        ]);
+
+        $response = $this->actingAs($student, 'sanctum')
+            ->getJson('/api/student/reviews');
+
+        $response->assertOk()
+            ->assertJson(['success' => true]);
+
+        $items = $response->json('data');
+        $this->assertCount(1, $items);
+        $this->assertEquals($course->id, $items[0]['course_id']);
+    }
+
+    public function test_student_reviews_are_scoped_to_own_records(): void
+    {
+        $studentA = User::factory()->create(['role' => 'student']);
+        $studentB = User::factory()->create(['role' => 'student']);
+        $course   = Course::factory()->free()->create();
+
+        Evaluation::create([
+            'user_id'   => $studentA->id,
+            'course_id' => $course->id,
+            'rating'    => 4,
+        ]);
+
+        $response = $this->actingAs($studentB, 'sanctum')
+            ->getJson('/api/student/reviews');
+
+        $response->assertOk();
+
+        $items = $response->json('data');
+        $this->assertEmpty($items, 'Student B should see zero reviews');
+    }
+
+    public function test_unauthenticated_cannot_access_student_reviews(): void
+    {
+        $this->getJson('/api/student/reviews')
+            ->assertStatus(401);
+    }
+
+    public function test_instructor_cannot_access_student_reviews(): void
+    {
+        $instructor = User::factory()->create(['role' => 'instructor']);
+
+        $this->actingAs($instructor, 'sanctum')
+            ->getJson('/api/student/reviews')
+            ->assertStatus(403);
     }
 
     // ─── Progress & Assignments ───────────────────────────────────────────────

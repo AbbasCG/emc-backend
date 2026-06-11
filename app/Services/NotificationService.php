@@ -230,6 +230,54 @@ class NotificationService
         );
     }
 
+    public static function workshopRequestMovedToStep(
+        int $requestId,
+        string $programName,
+        string $requesterName,
+        int $stepNumber,
+        string $departmentKey,
+        string $departmentLabel
+    ): void {
+        $recipients = User::where('department', $departmentKey)
+            ->pluck('id')
+            ->all();
+
+        if (empty($recipients)) {
+            return;
+        }
+
+        self::send($recipients, 'workshop_request_step',
+            'طلب برنامج تدريبي يحتاج مراجعتك',
+            "طلب \"{$programName}\" من {$requesterName} وصل للمرحلة {$stepNumber}: {$departmentLabel}",
+            [
+                'entity_type' => 'workshop_request',
+                'entity_id'   => $requestId,
+                'action_url'  => "/dashboard/admin/workshop-requests/{$requestId}",
+                'icon'        => 'clipboard-check',
+                'color'       => 'blue',
+            ]
+        );
+    }
+
+    public static function workshopRequestRejected(
+        int $requestId,
+        string $programName,
+        string $requesterName,
+        int $atStep
+    ): void {
+        self::send(self::adminUserIds(), 'workshop_request_rejected',
+            'رُفض طلب برنامج تدريبي',
+            "تم رفض طلب \"{$programName}\" من {$requesterName} عند المرحلة {$atStep}",
+            [
+                'entity_type' => 'workshop_request',
+                'entity_id'   => $requestId,
+                'action_url'  => "/dashboard/admin/workshop-requests/{$requestId}",
+                'icon'        => 'x-circle',
+                'color'       => 'red',
+            ]
+        );
+    }
+
     public static function courseCancelled(int $courseId, string $courseTitle): void
     {
         $recipients = array_unique(array_merge(

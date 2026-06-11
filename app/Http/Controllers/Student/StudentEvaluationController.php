@@ -10,6 +10,26 @@ use Illuminate\Http\Request;
 
 class StudentEvaluationController extends Controller
 {
+    /**
+     * GET /api/student/reviews
+     *
+     * Returns all evaluations submitted by the authenticated student.
+     * Scoped strictly to the current user — students cannot see other students' reviews.
+     */
+    public function index(Request $request): JsonResponse
+    {
+        $evaluations = Evaluation::query()
+            ->where('user_id', $request->user()->id)
+            ->select(['id', 'course_id', 'workshop_id', 'created_at'])
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data'    => $evaluations,
+        ]);
+    }
+
     public function store(Request $request): JsonResponse
     {
         $this->authorize('create', Evaluation::class);

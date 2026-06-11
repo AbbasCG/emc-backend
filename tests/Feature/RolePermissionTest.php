@@ -183,31 +183,112 @@ class RolePermissionTest extends TestCase
 
     // ─── Finance ──────────────────────────────────────────────────────────────
 
-    public function test_finance_role_cannot_access_general_admin_dashboard(): void
+    public function test_finance_manager_cannot_access_general_admin_dashboard(): void
     {
-        // 'finance' is not in the admin group (admin/super_admin/executive_admin)
-        $finance = User::factory()->create(['role' => 'finance']);
+        $finance = User::factory()->create(['role' => 'finance_manager']);
 
         $this->actingAs($finance, 'sanctum')
             ->getJson('/api/admin/dashboard')
             ->assertStatus(403);
     }
 
-    public function test_finance_role_cannot_access_admin_registrations(): void
+    public function test_finance_manager_cannot_access_admin_registrations(): void
     {
-        $finance = User::factory()->create(['role' => 'finance']);
+        $finance = User::factory()->create(['role' => 'finance_manager']);
 
         $this->actingAs($finance, 'sanctum')
             ->getJson('/api/admin/registrations')
             ->assertStatus(403);
     }
 
-    public function test_finance_role_cannot_access_admin_users(): void
+    public function test_finance_manager_cannot_access_admin_users(): void
     {
-        $finance = User::factory()->create(['role' => 'finance']);
+        $finance = User::factory()->create(['role' => 'finance_manager']);
 
         $this->actingAs($finance, 'sanctum')
             ->getJson('/api/admin/users')
+            ->assertStatus(403);
+    }
+
+    public function test_finance_manager_can_access_finance_dashboard(): void
+    {
+        $finance = User::factory()->create(['role' => 'finance_manager']);
+
+        $this->actingAs($finance, 'sanctum')
+            ->getJson('/api/finance/dashboard')
+            ->assertOk()
+            ->assertJson(['success' => true]);
+    }
+
+    public function test_finance_manager_can_access_finance_payments(): void
+    {
+        $finance = User::factory()->create(['role' => 'finance_manager']);
+
+        $this->actingAs($finance, 'sanctum')
+            ->getJson('/api/finance/payments')
+            ->assertOk()
+            ->assertJson(['success' => true]);
+    }
+
+    public function test_finance_manager_can_access_finance_transactions(): void
+    {
+        $finance = User::factory()->create(['role' => 'finance_manager']);
+
+        $this->actingAs($finance, 'sanctum')
+            ->getJson('/api/finance/transactions')
+            ->assertOk()
+            ->assertJson(['success' => true]);
+    }
+
+    public function test_student_cannot_access_finance_routes(): void
+    {
+        $student = User::factory()->create(['role' => 'student']);
+
+        foreach (['/api/finance/dashboard', '/api/finance/payments', '/api/finance/transactions'] as $route) {
+            $this->actingAs($student, 'sanctum')
+                ->getJson($route)
+                ->assertStatus(403, "Student should be blocked from {$route}");
+        }
+    }
+
+    public function test_instructor_cannot_access_finance_routes(): void
+    {
+        $instructor = User::factory()->create(['role' => 'instructor']);
+
+        foreach (['/api/finance/dashboard', '/api/finance/payments', '/api/finance/transactions'] as $route) {
+            $this->actingAs($instructor, 'sanctum')
+                ->getJson($route)
+                ->assertStatus(403, "Instructor should be blocked from {$route}");
+        }
+    }
+
+    // ─── Admin AI routes ──────────────────────────────────────────────────────
+
+    public function test_admin_can_access_ai_generations(): void
+    {
+        $admin = User::factory()->admin()->create();
+
+        $this->actingAs($admin, 'sanctum')
+            ->getJson('/api/admin/ai/usage')
+            ->assertOk()
+            ->assertJson(['success' => true]);
+    }
+
+    public function test_student_cannot_access_admin_ai_routes(): void
+    {
+        $student = User::factory()->create(['role' => 'student']);
+
+        $this->actingAs($student, 'sanctum')
+            ->getJson('/api/admin/ai/usage')
+            ->assertStatus(403);
+    }
+
+    public function test_instructor_cannot_access_admin_ai_routes(): void
+    {
+        $instructor = User::factory()->create(['role' => 'instructor']);
+
+        $this->actingAs($instructor, 'sanctum')
+            ->getJson('/api/admin/ai/usage')
             ->assertStatus(403);
     }
 

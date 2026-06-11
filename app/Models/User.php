@@ -233,10 +233,11 @@ class User extends Authenticatable
     // ─── Internal Helpers ────────────────────────────────────────────────────
 
     /**
-     * Map legacy role slugs to their canonical form for DB lookups.
-     * 'teacher' → 'instructor' (the canonical DB role name).
+     * Map legacy role slugs to their canonical form.
+     * 'teacher' → 'instructor' (canonical DB role name and API response value).
+     * Safe to call from resources and controllers.
      */
-    private function effectiveRole(): string
+    public function effectiveRole(): string
     {
         return match ($this->role) {
             'teacher' => 'instructor',

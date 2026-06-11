@@ -1,37 +1,12 @@
 <?php
 
 use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
 
-/**
- * Phase 8 — add type, visibility, and ai fields to Phase 5 AI tables.
- */
+// Consolidated into:
+//   2026_05_16_100016_create_ai_conversations_table.php  (type, visibility)
+//   2026_05_16_100017_create_ai_messages_table.php       (token_usage, model)
 return new class extends Migration
 {
-    public function up(): void
-    {
-        Schema::table('ai_conversations', function (Blueprint $table) {
-            if (! Schema::hasColumn('ai_conversations', 'type')) {
-                $table->string('type')->default('student_assistant')->after('title');
-            }
-            if (! Schema::hasColumn('ai_conversations', 'visibility')) {
-                $table->string('visibility')->default('private')->after('type');
-            }
-        });
-
-        Schema::table('ai_messages', function (Blueprint $table) {
-            if (! Schema::hasColumn('ai_messages', 'token_usage')) {
-                $table->unsignedInteger('token_usage')->nullable()->after('metadata');
-            }
-            if (! Schema::hasColumn('ai_messages', 'model')) {
-                $table->string('model')->nullable()->after('token_usage');
-            }
-        });
-    }
-
-    public function down(): void
-    {
-        // No destructive rollback
-    }
+    public function up(): void {}
+    public function down(): void {}
 };

@@ -1,24 +1,9 @@
 <?php
 
 use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
 
-return new class extends Migration
-{
-    public function up(): void
-    {
-        Schema::table('users', function (Blueprint $table) {
-            // Set to true for accounts provisioned by admins so the user
-            // is forced to set their own password on first login.
-            $table->boolean('must_change_password')->default(false)->after('password');
-        });
-    }
-
-    public function down(): void
-    {
-        Schema::table('users', function (Blueprint $table) {
-            $table->dropColumn('must_change_password');
-        });
-    }
+// Consolidated into 0001_01_01_000000_create_users_table.php
+return new class extends Migration {
+    public function up(): void {}
+    public function down(): void {}
 };

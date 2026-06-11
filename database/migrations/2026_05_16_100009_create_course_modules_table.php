@@ -16,6 +16,8 @@ return new class extends Migration
             $table->integer('sort_order')->default(0);
             // active|inactive|draft
             $table->string('status')->default('active');
+            $table->boolean('is_active')->default(true);
+            $table->softDeletes();
             $table->timestamps();
         });
     }

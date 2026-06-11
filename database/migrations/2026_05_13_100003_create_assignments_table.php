@@ -18,6 +18,9 @@ return new class extends Migration
             $table->decimal('max_score', 8, 2)->nullable();
             $table->string('status')->default('active');
             $table->timestamps();
+
+            $table->index('course_id');
+            $table->index('due_date');
         });
     }
 

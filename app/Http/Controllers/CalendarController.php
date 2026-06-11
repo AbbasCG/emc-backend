@@ -41,6 +41,27 @@ class CalendarController extends Controller
     }
 
     /**
+     * GET /api/calendar/export.ics
+     *
+     * Download a single ICS file containing all calendar events for the authenticated user.
+     */
+    public function exportAll(Request $request): Response
+    {
+        $events = CalendarEvent::query()
+            ->where('user_id', $request->user()->id)
+            ->orderBy('start_at')
+            ->get();
+
+        $ics = $this->calendarService->toBulkIcs($events);
+
+        return response($ics, 200, [
+            'Content-Type'        => 'text/calendar; charset=utf-8',
+            'Content-Disposition' => 'attachment; filename="emc-calendar.ics"',
+            'Cache-Control'       => 'no-store',
+        ]);
+    }
+
+    /**
      * GET /api/calendar/events/{id}/ics
      *
      * Download ICS file for a single event.

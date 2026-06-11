@@ -11,13 +11,17 @@ use App\Models\PlacementTest;
 use App\Models\PlacementTestAttempt;
 use App\Models\Registration;
 use App\Services\NotificationService;
+use App\Services\PlacementProgressService;
 use App\Services\PlacementScoringService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class StudentPlacementTestController extends Controller
 {
-    public function __construct(private PlacementScoringService $scorer) {}
+    public function __construct(
+        private readonly PlacementScoringService $scorer,
+        private readonly PlacementProgressService $placement,
+    ) {}
 
     // ─── GET /api/student/courses/{course}/placement-test/status ─────────────
 
@@ -33,19 +37,19 @@ class StudentPlacementTestController extends Controller
 
         $booking = $attempt?->oralBooking;
 
-        $placementStatus = $this->deriveStatus($attempt, $booking);
+        $status   = $this->placement->deriveStatus($attempt, $booking);
+        $progress = $this->placement->progress($attempt, $booking);
 
         return response()->json([
             'success' => true,
             'data'    => [
-                'requires_placement'   => $course->requires_placement_test,
-                'placement_status'     => $placementStatus,
-                'can_start_learning'   => $placementStatus === 'oral_completed',
-                'can_take_written_test'=> in_array($placementStatus, ['not_started', 'in_progress']),
-                'can_book_oral'        => $placementStatus === 'written_completed',
-                'final_level'          => ($booking && $booking->isCompleted()) ? $booking->final_level : null,
-                'attempt'              => $attempt ? $this->attemptShape($attempt) : null,
-                'oral_booking'         => $booking  ? $this->bookingShape($booking)  : null,
+                'requires_placement'    => $course->requires_placement_test,
+                'placement_progress'    => $progress,
+                'can_take_written_test' => in_array($status, [
+                    PlacementProgressService::STATUS_NOT_STARTED,
+                    PlacementProgressService::STATUS_IN_PROGRESS,
+                ]),
+                'can_book_oral' => $status === PlacementProgressService::STATUS_WRITTEN_COMPLETED,
             ],
         ]);
     }
@@ -69,19 +73,15 @@ class StudentPlacementTestController extends Controller
                 ->where('course_id', $course->id)
                 ->first();
 
-            $derivedStatus = $this->deriveStatus($existing, $existingBooking);
+            $status = $this->placement->deriveStatus($existing, $existingBooking);
 
             return response()->json([
-                'success'              => false,
-                'message'              => 'لقد أكملت اختبار تحديد المستوى لهذه الدورة مسبقاً.',
-                'data'                 => [
-                    'placement_status'     => $derivedStatus,
-                    'can_take_written_test'=> false,
-                    'can_book_oral'        => $existingBooking === null,
-                    'can_start_learning'   => $derivedStatus === 'oral_completed',
-                    'final_level'          => ($existingBooking && $existingBooking->isCompleted()) ? $existingBooking->final_level : null,
-                    'attempt'              => $this->attemptShape($existing),
-                    'oral_booking'         => $existingBooking ? $this->bookingShape($existingBooking) : null,
+                'success' => false,
+                'message' => 'لقد أكملت اختبار تحديد المستوى لهذه الدورة مسبقاً.',
+                'data'    => [
+                    'placement_progress'    => $this->placement->progress($existing, $existingBooking),
+                    'can_take_written_test' => false,
+                    'can_book_oral'         => $status === PlacementProgressService::STATUS_WRITTEN_COMPLETED,
                 ],
             ], 409);
         }
@@ -161,13 +161,13 @@ class StudentPlacementTestController extends Controller
         }
 
         $booking = $attempt->oralBooking;
+        $status  = $this->placement->deriveStatus($attempt, $booking);
 
         return response()->json([
             'success' => true,
             'data'    => [
-                'attempt'      => $this->attemptShape($attempt),
-                'oral_booking' => $booking ? $this->bookingShape($booking) : null,
-                'can_book_oral'=> $booking === null,
+                'placement_progress' => $this->placement->progress($attempt, $booking),
+                'can_book_oral'      => $status === PlacementProgressService::STATUS_WRITTEN_COMPLETED,
             ],
         ]);
     }
@@ -198,18 +198,15 @@ class StudentPlacementTestController extends Controller
                 ->where('course_id', $course->id)
                 ->first();
 
-            $derivedStatus = $this->deriveStatus($attempt, $existingBooking);
+            $status = $this->placement->deriveStatus($attempt, $existingBooking);
 
             return response()->json([
-                'success'      => false,
-                'message'      => 'لقد قدّمت هذا الاختبار مسبقاً. لا يمكن إعادة تقديمه.',
-                'data'         => [
-                    'placement_status'   => $derivedStatus,
-                    'can_start_learning' => $derivedStatus === 'oral_completed',
-                    'can_book_oral'      => $existingBooking === null,
-                    'final_level'        => ($existingBooking && $existingBooking->isCompleted()) ? $existingBooking->final_level : null,
-                    'attempt'            => $this->attemptShape($attempt),
-                    'oral_booking'       => $existingBooking ? $this->bookingShape($existingBooking) : null,
+                'success' => false,
+                'message' => 'لقد قدّمت هذا الاختبار مسبقاً. لا يمكن إعادة تقديمه.',
+                'data'    => [
+                    'placement_progress'    => $this->placement->progress($attempt, $existingBooking),
+                    'can_take_written_test' => false,
+                    'can_book_oral'         => $status === PlacementProgressService::STATUS_WRITTEN_COMPLETED,
                 ],
             ], 409);
         }
@@ -253,9 +250,9 @@ class StudentPlacementTestController extends Controller
             'success' => true,
             'message' => 'تم تسليم الاختبار بنجاح.',
             'data'    => [
-                'attempt'      => $this->attemptShape($fresh),
-                'can_book_oral'=> true,
-                'next_step'    => 'يرجى حجز موعد المقابلة الشفهية لإكمال عملية تحديد المستوى.',
+                'placement_progress' => $this->placement->progress($fresh, null),
+                'can_book_oral'      => true,
+                'next_step'          => 'يرجى حجز موعد المقابلة الشفهية لإكمال عملية تحديد المستوى.',
             ],
         ]);
     }
@@ -292,60 +289,4 @@ class StudentPlacementTestController extends Controller
         ], $status);
     }
 
-    private function deriveStatus(?PlacementTestAttempt $attempt, ?OralAssessmentBooking $booking): string
-    {
-        if (! $attempt) {
-            return 'not_started';
-        }
-        if (! $attempt->isCompleted()) {
-            return 'in_progress';
-        }
-        if (! $booking) {
-            return 'written_completed';
-        }
-        if ($booking->isCompleted()) {
-            return 'oral_completed';
-        }
-        return 'oral_booked';
-    }
-
-    /** Consistent attempt shape used across status, result, start-blocked, and submit-blocked. */
-    private function attemptShape(PlacementTestAttempt $attempt): array
-    {
-        $levelDetails = ($attempt->isCompleted() && $attempt->estimated_level)
-            ? \App\Services\PlacementScoringService::levelFromCode($attempt->estimated_level)
-            : null;
-
-        return [
-            'id'                   => $attempt->id,
-            'status'               => $attempt->status,
-            'score'                => $attempt->isCompleted() ? $attempt->score       : null,
-            'total_questions'      => $attempt->total_questions,
-            'percentage'           => $attempt->isCompleted() ? $attempt->percentage  : null,
-            'estimated_level'      => $attempt->isCompleted() ? $attempt->estimated_level : null,
-            'estimated_level_code' => $levelDetails ? $levelDetails['code'] : null,
-            'estimated_level_en'   => $levelDetails ? $levelDetails['en']   : null,
-            'estimated_level_ar'   => $levelDetails ? $levelDetails['ar']   : null,
-            'submitted_at'         => $attempt->submitted_at?->toIso8601String(),
-        ];
-    }
-
-    /** Consistent oral booking shape used across status and result endpoints. */
-    private function bookingShape(OralAssessmentBooking $booking): array
-    {
-        $slot       = $booking->relationLoaded('slot')       ? $booking->slot       : null;
-        $instructor = $booking->relationLoaded('instructor') ? $booking->instructor : null;
-
-        return [
-            'id'               => $booking->id,
-            'status'           => $booking->status,
-            'starts_at'        => $slot?->starts_at->toIso8601String(),
-            'ends_at'          => $slot?->ends_at->toIso8601String(),
-            'meeting_link'     => $slot?->meeting_link,
-            'instructor_name'  => $instructor?->name,
-            'final_level'      => $booking->final_level,
-            'oral_score'       => $booking->oral_score,
-            'instructor_notes' => $booking->instructor_notes,
-        ];
-    }
 }

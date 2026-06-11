@@ -12,6 +12,15 @@ use Illuminate\Support\Facades\DB;
 
 class InstructorSubmissionController extends Controller
 {
+    public function show(Request $request, AssignmentSubmission $submission): JsonResponse
+    {
+        $this->authorize('review', $submission);
+
+        return (new AssignmentSubmissionResource($submission->load(['assignment', 'user'])))
+            ->additional(['success' => true])
+            ->response();
+    }
+
     public function review(Request $request, AssignmentSubmission $submission, StudentProgressService $progress): JsonResponse
     {
         $this->authorize('review', $submission);

@@ -26,6 +26,11 @@ return new class extends Migration
             $table->unsignedBigInteger('related_id')->nullable();
             $table->json('tags')->nullable();
             $table->timestamps();
+
+            $table->index('status');
+            $table->index('assigned_to');
+            $table->index('due_date');
+            $table->index('department_id');
         });
     }
 

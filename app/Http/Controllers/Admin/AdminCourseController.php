@@ -250,8 +250,17 @@ class AdminCourseController extends Controller
     public function assignInstructor(Request $request, Course $course): JsonResponse
     {
         $data = $request->validate([
-            'instructor_id' => 'required|exists:instructors,id',
+            'instructor_id' => ['nullable', 'integer', 'exists:instructors,id'],
+            'user_id'       => ['nullable', 'integer', 'exists:users,id'],
         ]);
+
+        if (empty($data['instructor_id']) && ! empty($data['user_id'])) {
+            $found = Instructor::where('user_id', $data['user_id'])->first();
+            abort_unless($found, 422, 'المستخدم ليس لديه ملف مدرب.');
+            $data['instructor_id'] = $found->id;
+        }
+
+        abort_unless(! empty($data['instructor_id']), 422, 'instructor_id أو user_id مطلوب.');
 
         $oldInstructorId = $course->instructor_id;
 
@@ -336,6 +345,8 @@ class AdminCourseController extends Controller
             'price'                 => 'nullable|numeric|min:0',
             'is_free'               => 'nullable|boolean',
             'program_type'          => 'nullable|in:course,workshop,one_session,full_program',
+            'content_type'          => 'nullable|in:course,workshop,one_session,full_program',
+            'session_format'        => 'nullable|in:online,offline,hybrid,workshop_single_session',
             'location'              => 'nullable|string|max:255',
             // Accept both delivery_type (frontend alias) and location_type (DB column name)
             'delivery_type'         => 'nullable|in:online,offline,hybrid,unknown',
@@ -373,6 +384,8 @@ class AdminCourseController extends Controller
             'keywords.*'            => 'string|max:100',
             'features'              => 'nullable|array',
             'features.*'            => 'string|max:255',
+            'requires_placement_test' => 'nullable|boolean',
+            'course_thumbnail'        => 'nullable|string',
         ];
 
         if ($request->hasFile('course_image')) {
@@ -408,6 +421,12 @@ class AdminCourseController extends Controller
             $data['training_hours'] = $data['hours_count'];
         }
         unset($data['hours_count']);
+
+        // Map content_type → program_type (frontend alias)
+        if (isset($data['content_type']) && ! isset($data['program_type'])) {
+            $data['program_type'] = $data['content_type'];
+        }
+        unset($data['content_type']);
 
         return $data;
     }
@@ -456,6 +475,9 @@ class AdminCourseController extends Controller
             'price'                 => (float) $course->price,
             'is_free'               => (bool) $course->is_free,
             'program_type'          => $course->program_type,
+            'content_type'          => $course->program_type,
+            'session_format'        => $course->session_format,
+            'requires_placement_test' => (bool) $course->requires_placement_test,
             'location'              => $course->location,
             'delivery_type'         => $course->location_type ?? 'online',
             'location_type'         => $course->location_type ?? 'online',
@@ -485,6 +507,7 @@ class AdminCourseController extends Controller
             'certificate_type'      => $course->certificate_type,
             'course_image'          => $imageUrl,
             'image_url'             => $imageUrl,
+            'thumbnail_url'         => $this->storageUrl($course->course_thumbnail),
             'learning_outcomes'     => $course->learning_outcomes   ?? [],
             'requirements'          => $course->requirements        ?? [],
             'curriculum_topics'     => $course->curriculum_topics   ?? [],

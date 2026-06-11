@@ -26,6 +26,10 @@ return new class extends Migration
             $table->json('tags')->nullable();
             $table->timestamp('published_at')->nullable();
             $table->timestamps();
+
+            $table->index('slug');
+            $table->index('visibility');
+            $table->index('category_id');
         });
     }
 

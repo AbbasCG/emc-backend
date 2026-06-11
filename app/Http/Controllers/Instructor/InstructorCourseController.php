@@ -66,12 +66,21 @@ class InstructorCourseController extends Controller
             ->selectRaw('course_id, count(distinct user_id) as cnt')
             ->pluck('cnt', 'course_id');
 
+        // final_level_count: oral completed with a final level recorded
+        $finalLevelCounts = OralAssessmentBooking::whereIn('course_id', $courseIds)
+            ->where('status', 'completed')
+            ->whereNotNull('final_level')
+            ->groupBy('course_id')
+            ->selectRaw('course_id, count(*) as cnt')
+            ->pluck('cnt', 'course_id');
+
         $items = $courses->map(function (Course $course) use (
             $enrolledCounts,
             $writtenCompletedCounts,
             $oralBookedCounts,
             $oralCompletedCounts,
-            $studentsWithAnyBooking
+            $studentsWithAnyBooking,
+            $finalLevelCounts
         ) {
             $resource = (new CourseResource($course))->toArray(request());
 
@@ -79,10 +88,11 @@ class InstructorCourseController extends Controller
             $withBooking    = (int) ($studentsWithAnyBooking[$course->id] ?? 0);
 
             $resource['enrolled_students_count']  = (int) ($enrolledCounts[$course->id] ?? 0);
-            $resource['written_completed_count']  = $writtenCount;
+            $resource['written_tests_count']      = $writtenCount;
             $resource['oral_pending_count']       = max(0, $writtenCount - $withBooking);
             $resource['oral_booked_count']        = (int) ($oralBookedCounts[$course->id] ?? 0);
             $resource['oral_completed_count']     = (int) ($oralCompletedCounts[$course->id] ?? 0);
+            $resource['final_level_count']        = (int) ($finalLevelCounts[$course->id] ?? 0);
 
             return $resource;
         });

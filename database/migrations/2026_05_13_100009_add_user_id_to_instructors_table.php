@@ -1,22 +1,9 @@
 <?php
 
 use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
 
-return new class extends Migration
-{
-    public function up(): void
-    {
-        Schema::table('instructors', function (Blueprint $table) {
-            $table->foreignId('user_id')->nullable()->after('id')->constrained('users')->nullOnDelete();
-        });
-    }
-
-    public function down(): void
-    {
-        Schema::table('instructors', function (Blueprint $table) {
-            $table->dropConstrainedForeignId('user_id');
-        });
-    }
+// Consolidated into 2026_04_27_154506_create_instructors_table.php
+return new class extends Migration {
+    public function up(): void {}
+    public function down(): void {}
 };

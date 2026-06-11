@@ -18,6 +18,7 @@ return new class extends Migration
             $table->foreignId('booked_by')->nullable()->constrained('users')->nullOnDelete();
             $table->string('booking_status')->default('available'); // available | booked | completed | cancelled
             $table->string('meeting_link')->nullable();
+            $table->text('notes')->nullable();
             $table->timestamps();
         });
     }

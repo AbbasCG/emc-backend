@@ -13,11 +13,15 @@ return new class extends Migration
     {
         Schema::create('instructors', function (Blueprint $table) {
             $table->id();
+            $table->foreignId('user_id')->nullable()->constrained('users')->nullOnDelete();
             $table->string('name');
             $table->string('title')->nullable();
             $table->text('bio')->nullable();
             $table->string('image')->nullable();
+            $table->softDeletes();
             $table->timestamps();
+
+            $table->unique('user_id', 'instructors_user_id_unique');
         });
     }
 

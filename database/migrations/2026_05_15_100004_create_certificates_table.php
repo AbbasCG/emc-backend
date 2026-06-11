@@ -26,7 +26,12 @@ return new class extends Migration
             $table->string('status')->default('pending');
             $table->foreignId('approved_by')->nullable()->constrained('users')->nullOnDelete();
             $table->json('metadata')->nullable();
+            $table->softDeletes();
             $table->timestamps();
+
+            $table->index('user_id');
+            $table->index('status');
+            $table->index('verification_code');
         });
     }
 

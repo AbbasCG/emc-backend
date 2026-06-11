@@ -24,6 +24,9 @@ return new class extends Migration
             $table->unsignedBigInteger('related_id')->nullable();
             $table->json('tags')->nullable();
             $table->timestamps();
+
+            $table->index('visibility');
+            $table->index('uploaded_by');
         });
     }
 

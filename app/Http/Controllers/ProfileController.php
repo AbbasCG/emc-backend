@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Resources\UserResource;
+use App\Models\Instructor;
 use App\Models\User;
 use App\Services\AuditLogService;
 use Illuminate\Http\JsonResponse;
@@ -16,9 +17,14 @@ class ProfileController extends Controller
 
     public function show(Request $request): JsonResponse
     {
+        $user = $request->user();
+        if ($user->isTeacher()) {
+            $user->loadMissing('instructorProfile');
+        }
+
         return response()->json([
             'success' => true,
-            'user'    => UserResource::make($request->user()),
+            'user'    => UserResource::make($user),
         ]);
     }
 
@@ -29,20 +35,30 @@ class ProfileController extends Controller
         $user = $request->user();
 
         $data = $request->validate([
-            'name'                      => 'sometimes|string|max:255',
-            'email'                     => [
+            'name'           => 'sometimes|string|max:255',
+            'email'          => [
                 'sometimes', 'email', 'max:255',
                 Rule::unique('users', 'email')->ignore($user->id),
             ],
-            'phone'                     => 'sometimes|nullable|string|max:30',
-            'city'                      => 'sometimes|nullable|string|max:100',
-            'country'                   => 'sometimes|nullable|string|max:100',
-            'how_did_you_hear_about_us' => 'sometimes|nullable|string|max:255',
+            'phone'          => 'sometimes|nullable|string|max:30',
+            'city'           => 'sometimes|nullable|string|max:100',
+            'country'        => 'sometimes|nullable|string|max:100',
+            'instructor_bio' => 'sometimes|nullable|string|max:2000',
         ]);
 
-        // how_did_you_hear_about_us: only allow setting once
-        if (isset($data['how_did_you_hear_about_us']) && $user->how_did_you_hear_about_us !== null) {
-            unset($data['how_did_you_hear_about_us']);
+        // Update instructor bio for teacher/instructor roles
+        $instructorBio = null;
+        $hasBioUpdate  = array_key_exists('instructor_bio', $data);
+        if ($hasBioUpdate) {
+            $instructorBio = $data['instructor_bio'];
+            unset($data['instructor_bio']);
+
+            if ($user->isTeacher()) {
+                Instructor::updateOrCreate(
+                    ['user_id' => $user->id],
+                    ['bio' => $instructorBio, 'name' => $user->name],
+                );
+            }
         }
 
         $emailChanged = isset($data['email']) && $data['email'] !== $user->email;
@@ -61,6 +77,9 @@ class ProfileController extends Controller
 
         $user->update($data);
         $fresh = $user->fresh();
+        if ($fresh->isTeacher()) {
+            $fresh->loadMissing('instructorProfile');
+        }
 
         AuditLogService::log('updated', 'User', $user->id, $fresh->name, $oldSnap, [
             'name'    => $fresh->name,

@@ -22,7 +22,10 @@ return new class extends Migration
             $table->unsignedInteger('sort_order')->default(0);
             $table->string('status')->default('draft'); // draft|published|archived
             $table->boolean('is_visible')->default(true);
+            $table->softDeletes();
             $table->timestamps();
+
+            $table->index(['course_id', 'status']);
         });
     }
 

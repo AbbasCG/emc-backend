@@ -40,12 +40,22 @@ return new class extends Migration
             $table->timestamp('reviewed_at')->nullable();
             $table->text('admin_notes')->nullable();
 
+            // Volunteer-to-member conversion tracking
+            $table->timestamp('converted_to_member_at')->nullable();
+            $table->unsignedBigInteger('converted_member_id')->nullable();
+
             $table->timestamps();
             $table->softDeletes();
 
             $table->index('status');
             $table->index('desired_department');
             $table->index('email');
+            $table->index('converted_member_id');
+
+            $table->foreign('converted_member_id')
+                ->references('id')
+                ->on('team_profiles')
+                ->nullOnDelete();
         });
     }
 

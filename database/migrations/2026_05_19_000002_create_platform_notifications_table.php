@@ -20,6 +20,7 @@ return new class extends Migration
             $table->string('icon', 60)->nullable()->default('bell');
             $table->string('color', 30)->nullable()->default('blue');
             $table->boolean('is_read')->default(false);
+            $table->timestamp('read_at')->nullable();
             $table->unsignedBigInteger('created_by')->nullable();
             $table->timestamps();
 

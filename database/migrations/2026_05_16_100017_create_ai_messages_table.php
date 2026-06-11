@@ -15,6 +15,8 @@ return new class extends Migration
             $table->string('role')->default('user');
             $table->longText('content');
             $table->json('metadata')->nullable();
+            $table->unsignedInteger('token_usage')->nullable();
+            $table->string('model')->nullable();
             $table->timestamps();
         });
     }

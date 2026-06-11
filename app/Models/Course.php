@@ -29,6 +29,7 @@ class Course extends Model
         'price',
         'is_free',
         'program_type',
+        'session_format',
         'location',
         'location_type',
         'meeting_link',
@@ -57,6 +58,7 @@ class Course extends Model
         'curriculum_topics',
         'keywords',
         'course_image',
+        'course_thumbnail',
         'requires_placement_test',
         'placement_test_type',
     ];

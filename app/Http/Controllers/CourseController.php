@@ -17,11 +17,7 @@ class CourseController extends Controller
 
         $query = Course::with(['instructor.user', 'features', 'track'])
             ->withCount('registrations')
-            // Show active/published/scheduled; treat missing status as visible (fallback)
-            ->where(function ($q) {
-                $q->whereIn('status', ['active', 'published', 'scheduled'])
-                  ->orWhereNull('status');
-            })
+            ->where('status', 'published')
             // registration_open defaults true; NULL means old row created before column existed
             ->where(function ($q) {
                 $q->whereNull('registration_open')
@@ -57,6 +53,7 @@ class CourseController extends Controller
         $course = Course::with(['instructor.user', 'features', 'track'])
             ->withCount('registrations')
             ->where('slug', $slug)
+            ->where('status', 'published')
             ->firstOrFail();
 
         return (new CourseResource($course))

@@ -14,6 +14,10 @@ return new class extends Migration
             $table->string('context_type')->nullable();
             $table->unsignedBigInteger('context_id')->nullable();
             $table->string('title')->nullable();
+            // student_assistant|course_tutor|admin_chat|etc.
+            $table->string('type')->default('student_assistant');
+            // private|shared
+            $table->string('visibility')->default('private');
             // active|archived
             $table->string('status')->default('active');
             $table->timestamps();

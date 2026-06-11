@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Admin\ActivityLogController;
+use App\Http\Controllers\UploadController;
 use App\Http\Controllers\Admin\AdminLmsAssignmentController;
 use App\Http\Controllers\Admin\AdminPartnerPortalController;
 use App\Http\Controllers\Admin\AuditLogController;
@@ -153,6 +154,7 @@ Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(fu
     Route::post('/assignments/{assignment}/submit', [StudentAssignmentController::class, 'submit']);
     Route::get('/progress',      [StudentProgressController::class, 'index']);
     Route::post('/evaluations',  [StudentEvaluationController::class, 'store']);
+    Route::get('/reviews',       [StudentEvaluationController::class, 'index']);
     Route::get('/certificates',  [StudentCertificateController::class, 'index']);
 
     // Enrolled courses, registration history, discovery, and completed exams
@@ -251,8 +253,10 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:teacher,admin'])-
     Route::get('/courses',     [InstructorCourseController::class, 'index']);
     Route::get('/workshops',   [InstructorWorkshopController::class, 'index']);
     Route::get('/students',    [InstructorStudentController::class, 'index']);
-    Route::put('/attendance/{session}', [SessionAttendanceController::class, 'update']);
-    Route::get('/assignments', [InstructorAssignmentController::class, 'index']);
+    Route::get('/attendance/{session}',            [SessionAttendanceController::class,    'show']);
+    Route::put('/attendance/{session}',            [SessionAttendanceController::class,    'update']);
+    Route::get('/assignments',                     [InstructorAssignmentController::class, 'index']);
+    Route::get('/submissions/{submission}',        [InstructorSubmissionController::class, 'show']);
     Route::put('/submissions/{submission}/review', [InstructorSubmissionController::class, 'review']);
     Route::get('/notifications', [NotificationController::class, 'index']);
 
@@ -657,6 +661,7 @@ Route::middleware(['auth:sanctum'])->prefix('mobile')->group(function () {
 
 // ─── Phase 7: Calendar (auth required) ───────────────────────────────────────
 Route::middleware(['auth:sanctum'])->prefix('calendar')->group(function () {
+    Route::get('export.ics',                         [CalendarController::class, 'exportAll']);
     Route::get('events',                             [CalendarController::class, 'index']);
     Route::get('events/{calendarEvent}/ics',         [CalendarController::class, 'downloadIcs']);
 });
@@ -732,7 +737,8 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('operations')->group(f
 });
 
 // ─── Finance aliases (frontend uses /finance/*, backend uses /admin/finance/*) ─
-Route::middleware(['auth:sanctum', 'role:admin'])->prefix('finance')->group(function () {
+// finance_manager role has full finance permissions (VIEW_PAYMENTS, MANAGE_PAYMENTS, etc.)
+Route::middleware(['auth:sanctum', 'role:admin,finance_manager'])->prefix('finance')->group(function () {
     Route::get('dashboard',               [FinanceController::class,    'overview']);
     Route::get('payments',                [FinanceController::class,    'payments']);
     Route::get('transactions',            [FinanceController::class,    'transactions']);
@@ -745,11 +751,13 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('finance')->group(func
 });
 
 // ─── KPI unified endpoint (?tab=overview|education|finance|…) ────────────────
+// finance_manager and quality_manager have VIEW_KPI permission; include them
 Route::get('kpi', [KpiController::class, 'unified'])
-    ->middleware(['auth:sanctum', 'role:admin']);
+    ->middleware(['auth:sanctum', 'role:admin,finance_manager,quality_manager']);
 
 // ─── Quality aliases (frontend uses /quality/*, backend uses /admin/quality-reviews/*) ─
-Route::middleware(['auth:sanctum', 'role:admin'])->prefix('quality')->group(function () {
+// quality_manager role has MANAGE_QUALITY and APPROVE_QUALITY_REVIEWS permissions
+Route::middleware(['auth:sanctum', 'role:admin,quality_manager'])->prefix('quality')->group(function () {
     Route::get('reviews',                    [QualityReviewController::class, 'index']);
     Route::post('reviews',                   [QualityReviewController::class, 'store']);
     Route::patch('reviews/{qualityReview}',  [QualityReviewController::class, 'update']);
@@ -962,15 +970,25 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->
     Route::delete('team-members/{teamMember}',  [AdminTeamMemberController::class, 'destroy']);
 });
 
-// ─── Workshop Requests admin CRUD (admin + super_admin) ───────────────────────
-// Public submissions from POST /workshop-requests land in workshop_requests table.
-// These routes expose that table for admin review/management.
+// ─── Workshop Requests: bulk operations (admin + super_admin only) ────────────
 Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->group(function () {
     Route::get('workshop-requests',                        [WorkshopRequestController::class, 'index']);
-    Route::get('workshop-requests/{workshopRequest}',      [WorkshopRequestController::class, 'show']);
     Route::put('workshop-requests/{workshopRequest}',      [WorkshopRequestController::class, 'update']);
     Route::patch('workshop-requests/{workshopRequest}',    [WorkshopRequestController::class, 'update']);
     Route::delete('workshop-requests/{workshopRequest}',   [WorkshopRequestController::class, 'destroy']);
+});
+
+// ─── Workshop Requests: workflow routes (any authenticated user — controller enforces dept/role) ──
+Route::middleware(['auth:sanctum'])->prefix('admin')->group(function () {
+    Route::get('workshop-requests/{workshopRequest}',                      [WorkshopRequestController::class, 'show']);
+    Route::post('workshop-requests/{workshopRequest}/approve',             [WorkshopRequestController::class, 'approve']);
+    Route::post('workshop-requests/{workshopRequest}/reject',              [WorkshopRequestController::class, 'reject']);
+    Route::get('workshop-requests/{workshopRequest}/workflow-history',     [WorkshopRequestController::class, 'workflowHistory']);
+});
+
+// ─── Workshop Requests: department-scoped list (any authenticated user) ───────
+Route::middleware(['auth:sanctum'])->group(function () {
+    Route::get('admin/workshop-requests-queue',            [WorkshopRequestController::class, 'index']);
 });
 
 // ─── Audit Logs (super_admin read-only) ───────────────────────────────────────
@@ -1009,4 +1027,12 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->
     Route::get( 'courses/{course}/oral-assessment-slots',                 [AdminPlacementController::class, 'indexSlots']);
     Route::delete('oral-assessment-slots/{slot}',                         [AdminPlacementController::class, 'destroySlot']);
     Route::get( 'oral-assessments',                                       [AdminPlacementController::class, 'indexBookings']);
+});
+
+// ─── Compressed uploads (images + PDFs, all authenticated roles) ─────────────
+Route::middleware('auth:sanctum')->group(function () {
+    // Status and download must be declared before the wildcard {context} POST route.
+    Route::get( 'uploads/status/{record}',   [UploadController::class, 'status'])->name('api.uploads.status');
+    Route::get( 'uploads/download/{record}', [UploadController::class, 'download'])->name('api.uploads.download');
+    Route::post('uploads/{context}',         [UploadController::class, 'store'])->name('api.uploads.store');
 });

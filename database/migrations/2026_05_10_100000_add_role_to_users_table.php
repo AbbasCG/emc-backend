@@ -1,23 +1,9 @@
 <?php
 
 use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
 
-return new class extends Migration
-{
-    public function up(): void
-    {
-        Schema::table('users', function (Blueprint $table) {
-            // Allowed roles: student, teacher, admin
-            $table->string('role')->default('student')->after('email');
-        });
-    }
-
-    public function down(): void
-    {
-        Schema::table('users', function (Blueprint $table) {
-            $table->dropColumn('role');
-        });
-    }
+// Consolidated into 0001_01_01_000000_create_users_table.php
+return new class extends Migration {
+    public function up(): void {}
+    public function down(): void {}
 };

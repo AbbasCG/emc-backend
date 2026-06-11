@@ -9,11 +9,14 @@ use App\Models\OralAssessmentBooking;
 use App\Models\PlacementTestAttempt;
 use App\Models\Registration;
 use App\Models\StudentProgress;
+use App\Services\PlacementProgressService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class StudentRegistrationsController extends Controller
 {
+    public function __construct(private readonly PlacementProgressService $placement) {}
+
     /**
      * GET /api/student/registrations
      *
@@ -137,8 +140,8 @@ class StudentRegistrationsController extends Controller
             $booking = $bookingMap->get($reg->course_id);
 
             $requiresPlacement = (bool) ($course?->requires_placement_test ?? false);
-            $placementStatus   = $this->computePlacementStatus($attempt, $booking);
-            $canStartLearning  = ! $requiresPlacement || $placementStatus === 'completed';
+            $placementProgress = $this->placement->progress($attempt, $booking, $requiresPlacement);
+            $canStartLearning  = ! $requiresPlacement || ($placementProgress['can_access_course'] ?? false);
 
             return [
                 'course_id'                => $reg->course_id,
@@ -175,20 +178,9 @@ class StudentRegistrationsController extends Controller
                 ] : null,
                 'certificate_status'       => $certificateMap->get($reg->course_id)?->status ?? null,
                 // Placement fields
-                'requires_placement_test'  => $requiresPlacement,
-                'placement_status'         => $requiresPlacement ? $placementStatus : null,
-                'can_start_learning'       => $canStartLearning,
-                'written_score'            => $attempt?->score,
-                'estimated_level'          => $attempt?->estimated_level,
-                'oral_booking_status'      => $booking?->status,
-                'placement_attempt'        => $attempt ? [
-                    'id'              => $attempt->id,
-                    'status'          => $attempt->status,
-                    'score'           => $attempt->score,
-                    'percentage'      => $attempt->percentage,
-                    'estimated_level' => $attempt->estimated_level,
-                    'submitted_at'    => $attempt->submitted_at,
-                ] : null,
+                'requires_placement_test' => $requiresPlacement,
+                'placement_progress'      => $placementProgress,
+                'can_start_learning'      => $canStartLearning,
             ];
         })->values()->all();
 
@@ -207,7 +199,7 @@ class StudentRegistrationsController extends Controller
     {
         $user = $request->user();
 
-        $attempts = PlacementTestAttempt::with(['course', 'oralBooking'])
+        $attempts = PlacementTestAttempt::with(['course', 'oralBooking.slot'])
             ->where('user_id', $user->id)
             ->where('status', 'completed')
             ->orderByDesc('submitted_at')
@@ -216,19 +208,13 @@ class StudentRegistrationsController extends Controller
         $data = $attempts->map(function ($attempt) {
             $booking = $attempt->oralBooking;
             return [
-                'id'                  => $attempt->id,
-                'course'              => $attempt->course ? [
+                'id'                 => $attempt->id,
+                'course'             => $attempt->course ? [
                     'id'    => $attempt->course->id,
                     'title' => $attempt->course->title,
                     'slug'  => $attempt->course->slug,
                 ] : null,
-                'score'               => $attempt->score,
-                'total_questions'     => $attempt->total_questions,
-                'percentage'          => $attempt->percentage,
-                'estimated_level'     => $attempt->estimated_level,
-                'submitted_at'        => $attempt->submitted_at,
-                'oral_booking_status' => $booking?->status,
-                'final_level'         => $booking?->final_level,
+                'placement_progress' => $this->placement->progress($attempt, $booking),
             ];
         })->values()->all();
 
@@ -252,7 +238,7 @@ class StudentRegistrationsController extends Controller
         })->whereNotIn('status', ['Cancelled'])->pluck('course_id')->all();
 
         $query = \App\Models\Course::with(['instructor.user', 'track'])
-            ->whereIn('status', ['published', 'active', 'scheduled'])
+            ->where('status', 'published')
             ->where('registration_open', true)
             ->whereNotIn('id', $enrolledCourseIds);
 
@@ -297,44 +283,6 @@ class StudentRegistrationsController extends Controller
                 'last_page'    => $courses->lastPage(),
             ],
         ]);
-    }
-
-    /**
-     * Derive a single placement_status string from an attempt and oral booking.
-     *
-     * Statuses (in ascending completeness):
-     *   not_started       — no attempt at all
-     *   in_progress       — written test started but not submitted
-     *   written_completed — written test done, oral not yet booked
-     *   oral_booked       — oral slot reserved, awaiting interview
-     *   oral_completed    — interview done, final_level not yet recorded
-     *   completed         — final level recorded; student ready to start
-     */
-    private function computePlacementStatus(
-        ?PlacementTestAttempt $attempt,
-        ?OralAssessmentBooking $booking
-    ): string {
-        if (! $attempt) {
-            return 'not_started';
-        }
-
-        if ($attempt->status !== 'completed') {
-            return 'in_progress';
-        }
-
-        if (! $booking) {
-            return 'written_completed';
-        }
-
-        if ($booking->status === 'booked') {
-            return 'oral_booked';
-        }
-
-        if ($booking->status === 'completed' && ! $booking->final_level) {
-            return 'oral_completed';
-        }
-
-        return 'completed';
     }
 
     /** Returns a map of course_id => next scheduled session for the given course IDs. */

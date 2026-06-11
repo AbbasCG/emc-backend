@@ -21,6 +21,9 @@ class CourseResource extends JsonResource
             'is_free'               => (bool) $this->is_free,
             'status'                => $this->status,
             'program_type'          => $this->program_type,
+            'content_type'          => $this->program_type,
+            'session_format'        => $this->session_format,
+            'requires_placement_test' => (bool) $this->requires_placement_test,
 
             // Dates — always formatted as Y-m-d strings (cast returns Carbon, must format here)
             'start_date'            => $this->start_date?->format('Y-m-d'),
@@ -43,9 +46,10 @@ class CourseResource extends JsonResource
             'registration_open'     => (bool) ($this->registration_open ?? true),
             'registration_status'   => $this->registration_status ?? 'open',
 
-            // Image — raw path AND resolved full URL
+            // Image — raw path, resolved full URL, and thumbnail
             'course_image'          => $this->course_image,
             'image_url'             => $this->resolveImageUrl($this->course_image),
+            'thumbnail_url'         => $this->resolveImageUrl($this->course_thumbnail),
 
             // Learning content — always arrays, never null or JSON strings
             'learning_outcomes'     => $this->ensureArray($this->learning_outcomes),
@@ -104,6 +108,9 @@ class CourseResource extends JsonResource
             'email'             => $user?->email,
             'role'              => $user?->role ?? 'instructor',
             'title'             => $profile->title,
+            'bio'               => $profile->bio,
+            'image'             => $photoUrl,
+            'avatar_url'        => $photoUrl,
             'profile_photo_url' => $photoUrl,
         ];
     }

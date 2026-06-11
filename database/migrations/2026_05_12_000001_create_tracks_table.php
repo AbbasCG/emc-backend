@@ -20,6 +20,7 @@ return new class extends Migration
             $table->string('image')->nullable();
             $table->decimal('price', 10, 2)->nullable();
             $table->boolean('is_free')->default(true);
+            $table->softDeletes();
             $table->timestamps();
         });
     }

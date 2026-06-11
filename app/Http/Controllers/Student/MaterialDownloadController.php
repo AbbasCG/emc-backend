@@ -41,7 +41,7 @@ class MaterialDownloadController extends Controller
             return true;
         }
 
-        if ($user->role === 'instructor') {
+        if ($user->isTeacher()) {
             $profile = $user->instructorProfile;
             if ($profile && $material->course_id) {
                 return \App\Models\Course::where('id', $material->course_id)

@@ -25,6 +25,7 @@ class AuthController extends Controller
             'phone'              => $request->phone,
             'city'               => $request->city,
             'gender'             => $request->gender,
+            'how_did_you_hear_about_us' => $request->how_did_you_hear_about_us,
         ]);
 
         $token = $user->createToken('api-token')->plainTextToken;
@@ -34,7 +35,7 @@ class AuthController extends Controller
             'message' => 'Registration successful',
             'data'    => [
                 'user'        => new UserResource($user),
-                'role'        => $user->role,
+                'role'        => $user->effectiveRole(),
                 'permissions' => $user->allPermissions(),
                 'token'       => $token,
             ],
@@ -70,7 +71,7 @@ class AuthController extends Controller
             'message' => 'Login successful',
             'data'    => [
                 'user'        => new UserResource($user),
-                'role'        => $user->role,
+                'role'        => $user->effectiveRole(),
                 'permissions' => $user->allPermissions(),
                 'token'       => $token,
             ],
@@ -106,7 +107,7 @@ class AuthController extends Controller
             $data['impersonator'] = $impersonator ? [
                 'id'   => $impersonator->id,
                 'name' => $impersonator->name,
-                'role' => $impersonator->role,
+                'role' => $impersonator->effectiveRole(),
             ] : null;
         }
 

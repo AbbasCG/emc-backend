@@ -10,7 +10,10 @@ class WorkshopAnnouncementService
     {
         $locationTypes = implode(' / ', $workshopRequest->location_types ?? []);
         $categories = implode(' / ', $workshopRequest->categories ?? []);
-        $proposedDate = $workshopRequest->proposed_date?->format('Y-m-d') ?? $workshopRequest->getAttribute('proposed_date');
+        $proposedDate = $workshopRequest->proposed_date_1?->format('Y-m-d')
+            ?? $workshopRequest->proposed_date?->format('Y-m-d')
+            ?? $workshopRequest->getAttribute('proposed_date_1')
+            ?? $workshopRequest->getAttribute('proposed_date');
 
         $priceText = $workshopRequest->price_type === 'paid'
             ? 'مدفوع - ' . $workshopRequest->price_amount . ' ريال'
@@ -31,11 +34,11 @@ class WorkshopAnnouncementService
 الفئة المستهدفة:
 {$workshopRequest->target_audience}
 
-التاريخ المقترح:
+التاريخ المقترح (الخيار الأول):
 {$proposedDate}
 
-التوقيت المقترح:
-{$workshopRequest->proposed_time}
+التوقيت المقترح (الخيار الأول):
+{$workshopRequest->proposed_time_1}
 
 المكان / المنصة:
 {$locationTypes}

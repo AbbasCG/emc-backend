@@ -16,12 +16,13 @@ return new class extends Migration
             $table->foreignId('instructor_id')->nullable()->constrained('instructors')->nullOnDelete();
             $table->string('title');
             $table->text('description')->nullable();
-            $table->date('session_date');
+            $table->date('session_date')->index();
             $table->time('start_time');
             $table->time('end_time');
             $table->string('meeting_url')->nullable();
             $table->string('recording_url')->nullable();
-            $table->string('status')->default('scheduled');
+            $table->string('status')->default('scheduled')->index();
+            $table->string('location')->nullable();
             $table->timestamps();
         });
     }

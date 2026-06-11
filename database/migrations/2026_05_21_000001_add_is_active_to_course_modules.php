@@ -1,22 +1,10 @@
 <?php
 
 use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
 
+// Consolidated into 2026_05_16_100009_create_course_modules_table.php
 return new class extends Migration
 {
-    public function up(): void
-    {
-        Schema::table('course_modules', function (Blueprint $table) {
-            $table->boolean('is_active')->default(true)->after('status');
-        });
-    }
-
-    public function down(): void
-    {
-        Schema::table('course_modules', function (Blueprint $table) {
-            $table->dropColumn('is_active');
-        });
-    }
+    public function up(): void {}
+    public function down(): void {}
 };

@@ -1,22 +1,10 @@
 <?php
 
 use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
 
+// Consolidated into 2026_05_19_000002_create_platform_notifications_table.php
 return new class extends Migration
 {
-    public function up(): void
-    {
-        Schema::table('platform_notifications', function (Blueprint $table) {
-            $table->timestamp('read_at')->nullable()->after('is_read');
-        });
-    }
-
-    public function down(): void
-    {
-        Schema::table('platform_notifications', function (Blueprint $table) {
-            $table->dropColumn('read_at');
-        });
-    }
+    public function up(): void {}
+    public function down(): void {}
 };

@@ -73,9 +73,11 @@ class PlacementDemoSeeder extends Seeder
                 'description'            => 'A structured English language course that begins with a comprehensive placement test to determine the student\'s current level (Beginner through Advanced). Students complete a 70-question written diagnostic followed by an oral assessment interview before accessing course materials.',
                 'type'                   => 'free',
                 'program_type'           => 'course',
+                'session_format'         => 'online',
                 'status'                 => 'published',
-                'language'               => 'English',
-                'level'                  => 'All Levels',
+                'language'               => 'أنجليزي',
+                'level'                  => 'مبتدئ',
+                'certificate_type'       => 'شهادة إتمام',
                 'is_free'                => true,
                 'is_online'              => true,
                 'registration_open'      => true,
@@ -86,6 +88,60 @@ class PlacementDemoSeeder extends Seeder
                 'training_hours'         => 60,
                 'capacity'               => 30,
                 'notes'                  => 'Demo course for English placement test flow testing.',
+                'course_image'           => 'https://placehold.co/1200x675/2563eb/ffffff?text=English+Course',
+                'course_thumbnail'       => 'https://placehold.co/400x225/2563eb/ffffff?text=English+Course',
+            ]
+        );
+
+        // ── 4b. Example workshop (no placement test, no course-only fields) ──────
+        $workshop = Course::updateOrCreate(
+            ['slug' => 'example-workshop-demo'],
+            [
+                'title'                  => 'مثال على ورشة عمل',
+                'short_description'      => 'ورشة عمل تجريبية للتحقق من صحة النموذج',
+                'description'            => 'ورشة عمل مثال لاختبار أن الحقول الخاصة بالدورات (مثل training_hours وlevel) ليست مطلوبة للورش.',
+                'type'                   => 'free',
+                'program_type'           => 'workshop',
+                'session_format'         => 'workshop_single_session',
+                'status'                 => 'published',
+                'language'               => 'عربي',
+                'is_free'                => true,
+                'is_online'              => true,
+                'registration_open'      => true,
+                'registration_status'    => 'open',
+                'requires_placement_test'=> false,
+                'certificate_type'       => 'شهادة حضور',
+                'capacity'               => 50,
+                'notes'                  => 'Demo workshop — level and training_hours intentionally left null.',
+                'course_image'           => 'https://placehold.co/1200x675/16a34a/ffffff?text=Workshop',
+                'course_thumbnail'       => 'https://placehold.co/400x225/16a34a/ffffff?text=Workshop',
+            ]
+        );
+
+        // ── 4c. Regular course without placement test ─────────────────────────
+        $regularCourse = Course::updateOrCreate(
+            ['slug' => 'digital-skills-no-placement'],
+            [
+                'title'                  => 'Digital Skills Fundamentals',
+                'short_description'      => 'دورة المهارات الرقمية الأساسية',
+                'description'            => 'A practical course covering core digital skills including computer literacy, internet usage, and productivity software. No placement test required — open to all levels.',
+                'type'                   => 'free',
+                'program_type'           => 'course',
+                'session_format'         => 'online',
+                'status'                 => 'published',
+                'language'               => 'عربي',
+                'level'                  => 'مبتدئ',
+                'certificate_type'       => 'شهادة إتمام',
+                'is_free'                => true,
+                'is_online'              => true,
+                'registration_open'      => true,
+                'registration_status'    => 'open',
+                'requires_placement_test'=> false,
+                'training_hours'         => 20,
+                'capacity'               => 100,
+                'notes'                  => 'Demo course with requires_placement_test = false.',
+                'course_image'           => 'https://placehold.co/1200x675/dc2626/ffffff?text=Digital+Skills',
+                'course_thumbnail'       => 'https://placehold.co/400x225/dc2626/ffffff?text=Digital+Skills',
             ]
         );
 
@@ -145,7 +201,9 @@ class PlacementDemoSeeder extends Seeder
         $this->command->info('  ✓ Placement test : ' . ($test ? $test->title : 'not found'));
         $this->command->info('  ✓ Instructor     : ' . $instructorUser->email . ' (ID ' . $instructorProfile->id . ')');
         $this->command->info('  ✓ Student        : ' . $student->email . ' (ID ' . $student->id . ')');
-        $this->command->info('  ✓ Course         : ' . $course->title . ' (ID ' . $course->id . ', slug: ' . $course->slug . ')');
+        $this->command->info('  ✓ Course (placement=true)  : ' . $course->title . ' (ID ' . $course->id . ')');
+        $this->command->info('  ✓ Course (placement=false) : ' . $regularCourse->title . ' (ID ' . $regularCourse->id . ')');
+        $this->command->info('  ✓ Workshop                 : ' . $workshop->title . ' (ID ' . $workshop->id . ')');
         $this->command->info('  ✓ Enrollment     : student registered in course');
         $this->command->info('  ✓ Oral slots     : ' . $slotCount . ' available slot(s) for this course');
         $this->command->info('');

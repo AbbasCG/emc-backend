@@ -8,12 +8,14 @@ use App\Models\Instructor;
 use App\Models\OralAssessmentBooking;
 use App\Models\PlacementTestAttempt;
 use App\Models\Registration;
-use App\Services\PlacementScoringService;
+use App\Services\PlacementProgressService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class InstructorStudentController extends Controller
 {
+    public function __construct(private readonly PlacementProgressService $placement) {}
+
     // ─── GET /api/instructor/students ────────────────────────────────────────
     //
     // All students from all courses assigned to this instructor.
@@ -69,7 +71,8 @@ class InstructorStudentController extends Controller
             ->get()
             ->keyBy(fn ($a) => (string) $a->course_id . '_' . (string) $a->user_id);
 
-        $bookings = OralAssessmentBooking::whereIn('course_id', $courseIds)
+        $bookings = OralAssessmentBooking::with('slot')
+            ->whereIn('course_id', $courseIds)
             ->whereIn('user_id', $userIds)
             ->get()
             ->keyBy(fn ($b) => (string) $b->course_id . '_' . (string) $b->user_id);
@@ -81,67 +84,47 @@ class InstructorStudentController extends Controller
             $booking = $reg->user_id ? $bookings->get($key) : null;
 
             $requiresPlacement = (bool) ($course?->requires_placement_test ?? false);
-            $placementStatus   = $requiresPlacement ? $this->deriveStatus($attempt, $booking) : null;
 
-            $levelDetails = ($attempt && $attempt->isCompleted() && $attempt->estimated_level)
-                ? PlacementScoringService::levelFromCode($attempt->estimated_level)
-                : null;
+            $progress = $this->placement->progress($attempt, $booking, $requiresPlacement);
 
             return [
-                'student_id'        => $reg->user_id,
-                'student_name'      => $reg->user?->name ?? $reg->full_name,
-                'student_email'     => $reg->user?->email ?? $reg->email,
-                'student_phone'     => $reg->user?->phone ?? $reg->phone,
-                'course_id'         => $reg->course_id,
-                'course_title'      => $course?->title,
-                'enrollment_status' => strtolower($reg->status),
-                'placement_status'  => $placementStatus,
-                'placement_attempt' => ($attempt && $attempt->isCompleted()) ? [
-                    'score'                => $attempt->score,
-                    'total_questions'      => $attempt->total_questions,
-                    'percentage'           => $attempt->percentage,
-                    'estimated_level'      => $attempt->estimated_level,
-                    'estimated_level_code' => $levelDetails ? $levelDetails['code'] : null,
-                    'estimated_level_en'   => $levelDetails ? $levelDetails['en']   : null,
-                    'estimated_level_ar'   => $levelDetails ? $levelDetails['ar']   : null,
-                    'submitted_at'         => $attempt->submitted_at?->toIso8601String(),
-                ] : null,
-                'oral_booking' => $booking ? [
-                    'id'          => $booking->id,
-                    'status'      => $booking->status,
-                    'final_level' => $booking->final_level,
-                ] : null,
+                'student_id'         => $reg->user_id,
+                'student_name'       => $reg->user?->name ?? $reg->full_name,
+                'student_email'      => $reg->user?->email ?? $reg->email,
+                'student_phone'      => $reg->user?->phone ?? $reg->phone,
+                'course_id'          => $reg->course_id,
+                'course_title'       => $course?->title,
+                'enrollment_status'  => strtolower($reg->status),
+                // Flat fields so frontend normalizers work without placement_progress nesting
+                'placement_status'   => $progress ? $progress['status'] : null,
+                'written_score'      => $progress ? ($progress['written_test']['score'] ?? null) : null,
+                'total_questions'    => $progress ? ($progress['written_test']['total_questions'] ?? null) : null,
+                'written_level'      => $progress ? ($progress['written_test']['estimated_level'] ?? null) : null,
+                'oral_booking_at'    => $progress ? ($progress['oral_assessment']['starts_at'] ?? null) : null,
+                'final_level'        => $progress ? ($progress['oral_assessment']['final_level'] ?? null) : null,
+                'placement_progress' => $progress,
             ];
         })->values();
+
+        $statusCounts = array_fill_keys([
+            PlacementProgressService::STATUS_NOT_STARTED,
+            PlacementProgressService::STATUS_IN_PROGRESS,
+            PlacementProgressService::STATUS_WRITTEN_COMPLETED,
+            PlacementProgressService::STATUS_ORAL_BOOKED,
+            PlacementProgressService::STATUS_ORAL_COMPLETED,
+            PlacementProgressService::STATUS_COMPLETED,
+        ], 0);
+        foreach ($data as $row) {
+            $key = $row['placement_progress']['status'] ?? null;
+            if ($key && isset($statusCounts[$key])) {
+                $statusCounts[$key]++;
+            }
+        }
 
         return response()->json([
             'success' => true,
             'data'    => $data,
-            'meta'    => [
-                'total'          => $data->count(),
-                'not_started'    => $data->where('placement_status', 'not_started')->count(),
-                'in_progress'    => $data->where('placement_status', 'in_progress')->count(),
-                'waiting_oral'   => $data->where('placement_status', 'waiting_oral')->count(),
-                'oral_scheduled' => $data->where('placement_status', 'oral_scheduled')->count(),
-                'completed'      => $data->where('placement_status', 'completed')->count(),
-            ],
+            'meta'    => ['total' => $data->count()] + $statusCounts,
         ]);
-    }
-
-    private function deriveStatus(?PlacementTestAttempt $attempt, ?OralAssessmentBooking $booking): string
-    {
-        if (! $attempt) {
-            return 'not_started';
-        }
-        if (! $attempt->isCompleted()) {
-            return 'in_progress';
-        }
-        if (! $booking) {
-            return 'waiting_oral';
-        }
-        if ($booking->isCompleted()) {
-            return 'completed';
-        }
-        return 'oral_scheduled';
     }
 }

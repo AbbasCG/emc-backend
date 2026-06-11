@@ -12,6 +12,21 @@ use Illuminate\Support\Facades\DB;
 
 class SessionAttendanceController extends Controller
 {
+    public function show(Request $request, LmsSession $session): JsonResponse
+    {
+        $this->authorize('updateAttendance', $session);
+
+        $session->load('attendances.user');
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'session_id'  => $session->id,
+                'attendances' => AttendanceResource::collection($session->attendances),
+            ],
+        ]);
+    }
+
     public function update(Request $request, LmsSession $session): JsonResponse
     {
         $this->authorize('updateAttendance', $session);

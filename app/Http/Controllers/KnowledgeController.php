@@ -3,9 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Resources\KnowledgeArticleResource;
-use App\Http\Resources\KnowledgeCategoryResource;
 use App\Models\KnowledgeArticle;
-use App\Models\KnowledgeCategory;
 use Illuminate\Http\Request;
 
 class KnowledgeController extends Controller
@@ -15,7 +13,7 @@ class KnowledgeController extends Controller
         $articles = KnowledgeArticle::with(['category', 'author'])
             ->where('status', 'published')
             ->when(
-                ! in_array($request->user()?->role, ['admin', 'teacher']),
+                ! in_array($request->user()?->role, ['admin', 'teacher', 'instructor']),
                 fn ($q) => $q->whereIn('visibility', ['public', 'internal'])
             )
             ->when($request->category, fn ($q) => $q->whereHas('category', fn ($q2) => $q2->where('slug', $request->category)))

@@ -45,43 +45,32 @@ class CalendarService
      */
     public function toIcs(CalendarEvent $event): string
     {
-        $uid     = 'emc-event-' . $event->id . '@emc.sa';
-        $now     = $this->formatIcsDate(now());
-        $start   = $this->formatIcsDate($event->start_at);
-        $end     = $event->end_at
-            ? $this->formatIcsDate($event->end_at)
-            : $this->formatIcsDate($event->start_at->copy()->addHour());
+        $now = $this->formatIcsDate(now());
 
-        $summary     = $this->escapeIcs($event->title);
-        $description = $event->description ? $this->escapeIcs($event->description) : '';
-        $location    = $event->location ? $this->escapeIcs($event->location) : '';
-        $url         = $event->meeting_url ?? '';
+        $lines = array_merge(
+            $this->vcalendarHeader(),
+            $this->eventLines($event, $now),
+            ['END:VCALENDAR'],
+        );
 
-        $lines = [
-            'BEGIN:VCALENDAR',
-            'VERSION:2.0',
-            'PRODID:-//EMC Platform//EN',
-            'CALSCALE:GREGORIAN',
-            'METHOD:PUBLISH',
-            'BEGIN:VEVENT',
-            "UID:{$uid}",
-            "DTSTAMP:{$now}",
-            "DTSTART:{$start}",
-            "DTEND:{$end}",
-            "SUMMARY:{$summary}",
-        ];
+        return implode("\r\n", $lines) . "\r\n";
+    }
 
-        if ($description) {
-            $lines[] = "DESCRIPTION:{$description}";
-        }
-        if ($location) {
-            $lines[] = "LOCATION:{$location}";
-        }
-        if ($url) {
-            $lines[] = "URL:{$url}";
+    /**
+     * Generate a single RFC 5545-compliant ICS string containing all given events.
+     * Used by GET /api/calendar/export.ics for bulk calendar download.
+     *
+     * @param  iterable<CalendarEvent>  $events
+     */
+    public function toBulkIcs(iterable $events): string
+    {
+        $now   = $this->formatIcsDate(now());
+        $lines = $this->vcalendarHeader();
+
+        foreach ($events as $event) {
+            array_push($lines, ...$this->eventLines($event, $now));
         }
 
-        $lines[] = 'END:VEVENT';
         $lines[] = 'END:VCALENDAR';
 
         return implode("\r\n", $lines) . "\r\n";
@@ -98,6 +87,49 @@ class CalendarService
     }
 
     // -----------------------------------------------------------------------
+
+    private function vcalendarHeader(): array
+    {
+        return [
+            'BEGIN:VCALENDAR',
+            'VERSION:2.0',
+            'PRODID:-//EMC Platform//EN',
+            'CALSCALE:GREGORIAN',
+            'METHOD:PUBLISH',
+        ];
+    }
+
+    private function eventLines(CalendarEvent $event, string $now): array
+    {
+        $uid   = 'emc-event-' . $event->id . '@emc.sa';
+        $start = $this->formatIcsDate($event->start_at);
+        $end   = $event->end_at
+            ? $this->formatIcsDate($event->end_at)
+            : $this->formatIcsDate($event->start_at->copy()->addHour());
+
+        $lines = [
+            'BEGIN:VEVENT',
+            "UID:{$uid}",
+            "DTSTAMP:{$now}",
+            "DTSTART:{$start}",
+            "DTEND:{$end}",
+            'SUMMARY:' . $this->escapeIcs($event->title),
+        ];
+
+        if ($event->description) {
+            $lines[] = 'DESCRIPTION:' . $this->escapeIcs($event->description);
+        }
+        if ($event->location) {
+            $lines[] = 'LOCATION:' . $this->escapeIcs($event->location);
+        }
+        if ($event->meeting_url) {
+            $lines[] = 'URL:' . $event->meeting_url;
+        }
+
+        $lines[] = 'END:VEVENT';
+
+        return $lines;
+    }
 
     private function formatIcsDate(\DateTimeInterface $dt): string
     {

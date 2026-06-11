@@ -28,6 +28,7 @@ class RegisterRequest extends FormRequest
             'phone'                 => 'required|string|max:30',
             'city'                  => 'required|string|max:100',
             'gender'                => 'required|string|in:male,female',
+            'how_did_you_hear_about_us' => 'nullable|string|max:255',
         ];
     }
 

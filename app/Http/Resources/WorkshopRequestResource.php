@@ -28,12 +28,34 @@ class WorkshopRequestResource extends JsonResource
             'target_audience'            => $this->target_audience,
             'proposed_date'              => $this->proposed_date,
             'proposed_time'              => $this->proposed_time,
+            'proposed_date_1'            => $this->proposed_date_1,
+            'proposed_time_1'            => $this->proposed_time_1,
+            'proposed_date_2'            => $this->proposed_date_2,
+            'proposed_time_2'            => $this->proposed_time_2,
+            'proposed_date_3'            => $this->proposed_date_3,
+            'proposed_time_3'            => $this->proposed_time_3,
             'location_types'             => $this->location_types,
             'price_type'                 => $this->price_type,
             'price_amount'               => $this->price_amount,
             'generated_announcement_text' => $this->generated_announcement_text,
             'status'                     => $this->status,
+            'current_step'               => $this->current_step,
+            'current_department'         => $this->current_department,
+            'workflow_status'            => $this->workflow_status,
             'created_at'                 => $this->created_at,
+            'updated_at'                 => $this->updated_at,
+            'workflow_steps'             => $this->whenLoaded('workflowSteps', function () {
+                return $this->workflowSteps->map(fn ($step) => [
+                    'step_number'      => $step->step_number,
+                    'department_key'   => $step->department_key,
+                    'department_label' => $step->department_label,
+                    'status'           => $step->status,
+                    'actor_name'       => $step->actor?->name,
+                    'actor_email'      => $step->actor?->email,
+                    'acted_at'         => $step->acted_at,
+                    'notes'            => $step->notes,
+                ]);
+            }),
         ];
     }
 }
