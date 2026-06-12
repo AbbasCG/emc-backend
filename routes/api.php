@@ -156,6 +156,8 @@ Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(fu
     Route::post('/assignments/{assignment}/submit', [StudentAssignmentController::class, 'submit']);
     Route::post('/lessons/{lesson}/complete', [StudentLessonController::class, 'complete']);
     Route::get('/progress',      [StudentProgressController::class, 'index']);
+    Route::get('/attendance',           [\App\Http\Controllers\Student\StudentAttendanceController::class, 'index']);
+    Route::get('/attendance/{session}', [\App\Http\Controllers\Student\StudentAttendanceController::class, 'show']);
     Route::post('/evaluations',  [StudentEvaluationController::class, 'store']);
     Route::get('/reviews',       [StudentEvaluationController::class, 'index']);
     Route::get('/certificates',  [StudentCertificateController::class, 'index']);
@@ -189,7 +191,17 @@ Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(fu
     // ── Oral assessment ──────────────────────────────────────────────────────
     Route::get( '/courses/{course}/oral-assessment/slots', [StudentOralAssessmentController::class, 'slots']);
     Route::post('/courses/{course}/oral-assessment/book',  [StudentOralAssessmentController::class, 'book']);
+
+    // ── Learning Paths (student) ─────────────────────────────────────────────
+    Route::get('/learning-paths',      [\App\Http\Controllers\Student\StudentLearningPathController::class, 'index']);
+    Route::get('/learning-paths/{id}', [\App\Http\Controllers\Student\StudentLearningPathController::class, 'show']);
 });
+
+// ─── Generic dashboard alias: GET /api/dashboard ─────────────────────────────
+// Serves the student dashboard. Authenticated students only.
+// The student frontend calls this URL; role check is enforced via auth:sanctum + role:student.
+Route::middleware(['auth:sanctum', 'role:student'])
+    ->get('/dashboard', \App\Http\Controllers\Student\StudentDashboardController::class);
 
 // ─── Protected material download (auth:sanctum, access checked inside) ────────
 Route::middleware('auth:sanctum')->get(
@@ -311,6 +323,14 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:teacher,admin'])-
     Route::patch('/courses/{course}/assignments/{courseAssignment}',     [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateAssignment']);
     Route::delete('/courses/{course}/assignments/{courseAssignment}',    [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'destroyAssignment']);
 
+    // ── Learning Paths (instructor) ───────────────────────────────────────────
+    Route::get(   '/learning-paths',                                    [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'index']);
+    Route::get(   '/learning-paths/{id}',                               [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'show']);
+    Route::put(   '/learning-paths/{id}/curriculum',                    [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'updateCurriculum']);
+    Route::post(  '/learning-paths/{id}/items',                         [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'addItem']);
+    Route::delete('/learning-paths/{id}/items/{item}',                  [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'removeItem']);
+    Route::get(   '/learning-paths/{id}/students',                      [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'students']);
+
     // ── Course content: flat routes (PUT /instructor/modules|sessions|…/{id}) ──
     Route::put('/modules/{module}',                                      [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateModule']);
     Route::patch('/modules/{module}',                                    [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateModule']);
@@ -329,6 +349,13 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:teacher,admin'])-
 // ─── Public: Tracks (LMS) ────────────────────────────────────────────────────
 Route::get('/tracks',       [TrackController::class, 'index']);
 Route::get('/tracks/{slug}', [TrackController::class, 'show']);
+
+// ─── Public: Workshops ───────────────────────────────────────────────────────
+// optional.sanctum: show enrollment_status when user is logged in
+Route::middleware('optional.sanctum')->group(function () {
+    Route::get('/workshops',        [\App\Http\Controllers\Public\WorkshopController::class, 'index']);
+    Route::get('/workshops/{slug}', [\App\Http\Controllers\Public\WorkshopController::class, 'show']);
+});
 
 // ─── Public: Courses ─────────────────────────────────────────────────────────
 Route::get('/courses',        [CourseController::class, 'index']);
@@ -700,6 +727,9 @@ Route::middleware(['auth:sanctum'])->prefix('mobile')->group(function () {
 Route::middleware(['auth:sanctum'])->prefix('calendar')->group(function () {
     Route::get('export.ics',                         [CalendarController::class, 'exportAll']);
     Route::get('events',                             [CalendarController::class, 'index']);
+    Route::post('events',                            [CalendarController::class, 'store']);
+    Route::put('events/{calendarEvent}',             [CalendarController::class, 'update']);
+    Route::delete('events/{calendarEvent}',          [CalendarController::class, 'destroy']);
     Route::get('events/{calendarEvent}/ics',         [CalendarController::class, 'downloadIcs']);
 });
 
@@ -1002,6 +1032,30 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->
     Route::patch('workshops/{workshop}',                    [AdminWorkshopController::class, 'update']);
     Route::delete('workshops/{workshop}',                   [AdminWorkshopController::class, 'destroy']);
     Route::post('workshops/{workshop}/assign-instructor',   [AdminWorkshopController::class, 'assignInstructor']);
+});
+
+// ─── Learning Paths (public) ─────────────────────────────────────────────────
+// optional.sanctum: publicShow includes enrollment_status when authenticated
+Route::middleware(['throttle:api', 'optional.sanctum'])->group(function () {
+    Route::get('/learning-paths',        [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'publicIndex']);
+    Route::get('/learning-paths/{slug}', [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'publicShow']);
+});
+
+// ─── Learning Path enrollment & status (auth:sanctum + role:student) ─────────
+Route::middleware(['auth:sanctum', 'role:student'])->group(function () {
+    Route::post('/learning-paths/{slug}/enroll',             [\App\Http\Controllers\Student\StudentLearningPathController::class, 'enroll']);
+    Route::get('/learning-paths/{slug}/enrollment-status',   [\App\Http\Controllers\Student\StudentLearningPathController::class, 'enrollmentStatus']);
+});
+
+// ─── Learning Paths CRUD (admin + super_admin) ───────────────────────────────
+Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->group(function () {
+    Route::get('learning-paths',                               [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'index']);
+    Route::post('learning-paths',                              [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'store']);
+    Route::get('learning-paths/{learningPath}',                [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'show']);
+    Route::put('learning-paths/{learningPath}',                [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'update']);
+    Route::patch('learning-paths/{learningPath}',              [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'update']);
+    Route::delete('learning-paths/{learningPath}',             [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'destroy']);
+    Route::post('learning-paths/{learningPath}/courses',       [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'attachCourses']);
 });
 
 // ─── Team members CRUD (admin + super_admin) ─────────────────────────────────

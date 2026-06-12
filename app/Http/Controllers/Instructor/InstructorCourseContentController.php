@@ -13,6 +13,7 @@ use App\Models\CourseMaterial;
 use App\Models\CourseModule;
 use App\Models\CourseSession;
 use App\Services\CourseAssignmentBridgeService;
+use App\Services\NotificationService;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -144,6 +145,15 @@ class InstructorCourseContentController extends Controller
 
         $session = CourseSession::create($data);
 
+        // Notify enrolled students about the new session.
+        NotificationService::sessionScheduled(
+            courseId:     $course->id,
+            courseTitle:  $course->title,
+            sessionTitle: $session->title,
+            startsAt:     $session->start_at?->toIso8601String(),
+            isUpdate:     false,
+        );
+
         return response()->json([
             'success' => true,
             'message' => 'تم الحفظ بنجاح',
@@ -164,10 +174,22 @@ class InstructorCourseContentController extends Controller
         $data = $this->validateSession($request, required: false);
         $session->update($data);
 
+        $fresh = $session->fresh();
+
+        // Notify enrolled students about the session update.
+        $courseTitle = Course::where('id', $session->course_id)->value('title') ?? 'الدورة';
+        NotificationService::sessionScheduled(
+            courseId:     $session->course_id,
+            courseTitle:  $courseTitle,
+            sessionTitle: $fresh->title,
+            startsAt:     $fresh->start_at?->toIso8601String(),
+            isUpdate:     true,
+        );
+
         return response()->json([
             'success' => true,
             'message' => 'تم الحفظ بنجاح',
-            'data'    => new CourseSessionResource($session->fresh()),
+            'data'    => new CourseSessionResource($fresh),
         ]);
     }
 
@@ -267,6 +289,15 @@ class InstructorCourseContentController extends Controller
 
         $assignment = CourseAssignment::create($data);
         app(CourseAssignmentBridgeService::class)->ensureLmsAssignment($assignment);
+
+        // Notify enrolled students about the new assignment.
+        NotificationService::assignmentCreatedForStudents(
+            courseId:          $course->id,
+            courseTitle:       $course->title,
+            assignmentTitle:   $assignment->title,
+            deadline:          isset($assignment->deadline) ? $assignment->deadline->toDateString() : null,
+            courseAssignmentId: $assignment->id,
+        );
 
         return response()->json([
             'success' => true,

@@ -10,6 +10,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 
 class AdminUserController extends Controller
@@ -160,7 +161,14 @@ class AdminUserController extends Controller
             'country'                   => 'sometimes|nullable|string|max:100',
             'how_did_you_hear_about_us' => 'sometimes|nullable|string|max:255',
             'is_active'                 => 'sometimes|boolean',
+            'remove_avatar'             => 'sometimes|boolean',
         ]);
+
+        if ($request->hasFile('avatar')) {
+            $request->validate([
+                'avatar' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:3072'],
+            ]);
+        }
 
         if (isset($data['role']) && $data['role'] === 'super_admin' && ! $request->user()->isSuperAdmin()) {
             return response()->json([
@@ -186,6 +194,20 @@ class AdminUserController extends Controller
             'phone' => $user->phone,
             'is_active' => $user->is_active,
         ];
+
+        if ($request->hasFile('avatar')) {
+            if ($user->avatar) {
+                Storage::disk('public')->delete($user->avatar);
+            }
+            $data['avatar'] = $request->file('avatar')->store('avatars', 'public');
+        } elseif ($request->boolean('remove_avatar')) {
+            if ($user->avatar) {
+                Storage::disk('public')->delete($user->avatar);
+            }
+            $data['avatar'] = null;
+        }
+
+        unset($data['remove_avatar']);
 
         $user->update($data);
 

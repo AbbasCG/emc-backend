@@ -2,9 +2,11 @@
 
 namespace App\Http\Controllers\Student;
 
+use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\LmsEvaluationResource;
 use App\Models\Evaluation;
+use App\Models\Registration;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -35,15 +37,31 @@ class StudentEvaluationController extends Controller
         $this->authorize('create', Evaluation::class);
 
         $validated = $request->validate([
-            'course_id' => ['nullable', 'exists:courses,id'],
-            'workshop_id' => ['nullable', 'exists:workshops,id'],
-            'instructor_id' => ['nullable', 'exists:instructors,id'],
-            'rating' => ['nullable', 'integer', 'min:1', 'max:5'],
-            'content_quality' => ['nullable', 'integer', 'min:1', 'max:5'],
-            'instructor_quality' => ['nullable', 'integer', 'min:1', 'max:5'],
-            'organization_quality' => ['nullable', 'integer', 'min:1', 'max:5'],
-            'comment' => ['nullable', 'string', 'max:5000'],
+            'course_id'           => ['nullable', 'exists:courses,id'],
+            'workshop_id'         => ['nullable', 'exists:workshops,id'],
+            'instructor_id'       => ['nullable', 'exists:instructors,id'],
+            'rating'              => ['nullable', 'integer', 'min:1', 'max:5'],
+            'content_quality'     => ['nullable', 'integer', 'min:1', 'max:5'],
+            'instructor_quality'  => ['nullable', 'integer', 'min:1', 'max:5'],
+            'organization_quality'=> ['nullable', 'integer', 'min:1', 'max:5'],
+            'comment'             => ['nullable', 'string', 'max:5000'],
         ]);
+
+        // Guard: student must be enrolled in the course they are reviewing.
+        $courseId = $validated['course_id'] ?? null;
+        if ($courseId && ! $request->user()->isAdmin() && ! $request->user()->isSuperAdmin()) {
+            $enrolled = Registration::where('user_id', $request->user()->id)
+                ->where('course_id', $courseId)
+                ->whereIn('status', RegistrationStatus::activeEnrollment())
+                ->exists();
+
+            if (! $enrolled) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'You must be enrolled in this course to submit a review.',
+                ], 403);
+            }
+        }
 
         $evaluation = Evaluation::query()->create(array_merge(
             $validated,

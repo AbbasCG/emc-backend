@@ -11,6 +11,15 @@ use Illuminate\Support\Carbon;
 
 class NotificationService
 {
+    /**
+     * Deduplication window in seconds.
+     *
+     * If a notification with the same (type, entity_id, user_id) was created
+     * within this many seconds, the new one is silently skipped.
+     * Prevents double-sends caused by mis-configured double event registration.
+     */
+    private const DEDUP_WINDOW_SECONDS = 10;
+
     // ── Core send ────────────────────────────────────────────────────────────
 
     public static function send(
@@ -20,8 +29,30 @@ class NotificationService
         string $message,
         array $extra = []
     ): void {
-        $ids  = is_array($userIds) ? $userIds : [$userIds];
-        $ids  = array_values(array_unique(array_filter($ids)));
+        $ids = is_array($userIds) ? $userIds : [$userIds];
+        $ids = array_values(array_unique(array_filter($ids)));
+
+        if (empty($ids)) {
+            return;
+        }
+
+        $entityId  = $extra['entity_id'] ?? null;
+        $windowStart = now()->subSeconds(self::DEDUP_WINDOW_SECONDS);
+
+        // Remove user IDs that already received an identical notification in the
+        // deduplication window. This is a safety net against double-dispatch bugs.
+        if ($entityId !== null) {
+            $alreadyNotified = PlatformNotification::whereIn('user_id', $ids)
+                ->where('type', $type)
+                ->where('entity_id', $entityId)
+                ->where('created_at', '>=', $windowStart)
+                ->pluck('user_id')
+                ->all();
+
+            if (! empty($alreadyNotified)) {
+                $ids = array_values(array_diff($ids, $alreadyNotified));
+            }
+        }
 
         if (empty($ids)) {
             return;
@@ -33,7 +64,7 @@ class NotificationService
             'title'       => $title,
             'message'     => $message,
             'entity_type' => $extra['entity_type'] ?? null,
-            'entity_id'   => $extra['entity_id']   ?? null,
+            'entity_id'   => $entityId,
             'action_url'  => $extra['action_url']  ?? null,
             'icon'        => $extra['icon']         ?? 'bell',
             'color'       => $extra['color']        ?? 'blue',
@@ -520,6 +551,200 @@ class NotificationService
                 'action_url'  => '/dashboard/student/courses',
                 'icon'        => 'users',
                 'color'       => 'green',
+            ]
+        );
+    }
+
+    // ── LMS learning notifications ────────────────────────────────────────────
+
+    /**
+     * Notify a student that their assignment submission has been graded.
+     * Triggered by: PUT /api/instructor/submissions/{submission}/review
+     */
+    public static function assignmentGraded(
+        int $studentUserId,
+        int $courseId,
+        string $courseTitle,
+        string $assignmentTitle,
+        ?float $score,
+        ?float $maxScore,
+        ?string $feedback,
+        int $submissionId
+    ): void {
+        $scoreLabel = ($score !== null)
+            ? ($maxScore !== null ? "{$score}/{$maxScore}" : (string) $score)
+            : null;
+
+        $message = "تم تقييم واجبك \"{$assignmentTitle}\" في الدورة: {$courseTitle}";
+        if ($scoreLabel) {
+            $message .= " — الدرجة: {$scoreLabel}";
+        }
+
+        self::send($studentUserId, 'assignment_graded',
+            'تم تقييم واجبك',
+            $message,
+            [
+                'entity_type' => 'assignment_submission',
+                'entity_id'   => $submissionId,
+                'action_url'  => "/dashboard/student/assignments/{$submissionId}",
+                'icon'        => 'academic-cap',
+                'color'       => 'green',
+            ]
+        );
+    }
+
+    /**
+     * Notify a student that their certificate has been issued.
+     * Triggered by: CertificateService::issue()
+     */
+    public static function certificateIssued(
+        int $studentUserId,
+        int $certificateId,
+        string $courseTitle,
+        string $verificationCode
+    ): void {
+        self::send($studentUserId, 'certificate_issued',
+            'تم إصدار شهادتك',
+            "تهانينا! تم إصدار شهادة إتمام الدورة: {$courseTitle}. رمز التحقق: {$verificationCode}",
+            [
+                'entity_type' => 'certificate',
+                'entity_id'   => $certificateId,
+                'action_url'  => "/dashboard/student/certificates",
+                'icon'        => 'badge-check',
+                'color'       => 'yellow',
+            ]
+        );
+    }
+
+    /**
+     * Notify all enrolled students in a course that a new assignment was created.
+     * Triggered by: POST /api/instructor/courses/{course}/assignments
+     */
+    public static function assignmentCreatedForStudents(
+        int $courseId,
+        string $courseTitle,
+        string $assignmentTitle,
+        ?string $deadline,
+        int $courseAssignmentId
+    ): void {
+        $recipients = self::enrolledStudentUserIds($courseId);
+        if (empty($recipients)) {
+            return;
+        }
+
+        $message = "تم إضافة واجب جديد \"{$assignmentTitle}\" في الدورة: {$courseTitle}";
+        if ($deadline) {
+            $message .= " — الموعد النهائي: {$deadline}";
+        }
+
+        self::send($recipients, 'assignment_created',
+            'واجب جديد في دورتك',
+            $message,
+            [
+                'entity_type' => 'course_assignment',
+                'entity_id'   => $courseAssignmentId,
+                'action_url'  => "/dashboard/student/assignments",
+                'icon'        => 'clipboard-list',
+                'color'       => 'orange',
+            ]
+        );
+    }
+
+    /**
+     * Notify the instructor that a student has submitted an assignment.
+     * Triggered by: POST /api/student/assignments/{assignment}/submit
+     */
+    public static function studentSubmittedAssignment(
+        int $instructorUserId,
+        string $studentName,
+        string $courseTitle,
+        string $assignmentTitle,
+        int $submissionId
+    ): void {
+        self::send($instructorUserId, 'assignment_submitted',
+            'تسليم واجب جديد',
+            "قدّم الطالب {$studentName} واجب \"{$assignmentTitle}\" في الدورة: {$courseTitle}",
+            [
+                'entity_type' => 'assignment_submission',
+                'entity_id'   => $submissionId,
+                'action_url'  => "/dashboard/instructor/submissions/{$submissionId}",
+                'icon'        => 'document-check',
+                'color'       => 'blue',
+            ]
+        );
+    }
+
+    /**
+     * Notify all enrolled students that a session was created or updated.
+     * Triggered by: POST|PUT /api/instructor/courses/{course}/sessions
+     */
+    public static function sessionScheduled(
+        int $courseId,
+        string $courseTitle,
+        string $sessionTitle,
+        ?string $startsAt,
+        bool $isUpdate = false
+    ): void {
+        $recipients = self::enrolledStudentUserIds($courseId);
+        if (empty($recipients)) {
+            return;
+        }
+
+        $verb    = $isUpdate ? 'تم تحديث' : 'تمت إضافة';
+        $message = "{$verb} جلسة \"{$sessionTitle}\" في الدورة: {$courseTitle}";
+        if ($startsAt) {
+            $message .= " — الموعد: {$startsAt}";
+        }
+
+        self::send($recipients, 'session_scheduled',
+            $isUpdate ? 'تحديث موعد جلسة' : 'جلسة جديدة في دورتك',
+            $message,
+            [
+                'entity_type' => 'course',
+                'entity_id'   => $courseId,
+                'action_url'  => "/dashboard/student/sessions",
+                'icon'        => 'video-camera',
+                'color'       => 'indigo',
+            ]
+        );
+    }
+
+    /**
+     * Notify a student of their recorded attendance status for a session.
+     * Triggered by: PUT /api/instructor/attendance/{session}
+     */
+    public static function attendanceMarked(
+        int $studentUserId,
+        string $courseTitle,
+        string $sessionTitle,
+        string $status,
+        int $courseId
+    ): void {
+        $statusLabel = match ($status) {
+            'present' => 'حاضر ✓',
+            'absent'  => 'غائب',
+            'late'    => 'متأخر',
+            'excused' => 'غياب بعذر',
+            default   => $status,
+        };
+
+        $color = match ($status) {
+            'present' => 'green',
+            'absent'  => 'red',
+            'late'    => 'yellow',
+            'excused' => 'blue',
+            default   => 'gray',
+        };
+
+        self::send($studentUserId, 'attendance_marked',
+            'تم تسجيل حضورك',
+            "تم تسجيل حضورك لجلسة \"{$sessionTitle}\" في الدورة: {$courseTitle} — الحالة: {$statusLabel}",
+            [
+                'entity_type' => 'course',
+                'entity_id'   => $courseId,
+                'action_url'  => "/dashboard/student/attendance",
+                'icon'        => 'clipboard-check',
+                'color'       => $color,
             ]
         );
     }

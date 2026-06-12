@@ -8,6 +8,7 @@ use App\Models\Assignment;
 use App\Models\AssignmentSubmission;
 use App\Models\Course;
 use App\Models\Registration;
+use App\Services\NotificationService;
 use App\Services\StudentProgressService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -164,7 +165,26 @@ class InstructorSubmissionController extends Controller
 
         $progress->syncForUser($submission->user);
 
-        return (new AssignmentSubmissionResource($submission->fresh()->load(['assignment.course', 'user'])))
+        // Notify the student that their submission was graded.
+        $fresh      = $submission->fresh()->load(['assignment.course', 'user']);
+        $student    = $fresh->user;
+        $assignment = $fresh->assignment;
+        $course     = $assignment?->course;
+
+        if ($student) {
+            NotificationService::assignmentGraded(
+                studentUserId:   $student->id,
+                courseId:        $course?->id      ?? 0,
+                courseTitle:     $course?->title   ?? 'الدورة',
+                assignmentTitle: $assignment?->title ?? 'الواجب',
+                score:           $fresh->score,
+                maxScore:        $assignment?->max_score ?? null,
+                feedback:        $fresh->feedback,
+                submissionId:    $fresh->id,
+            );
+        }
+
+        return (new AssignmentSubmissionResource($fresh))
             ->additional(['success' => true, 'message' => 'Submission reviewed successfully.'])
             ->response();
     }

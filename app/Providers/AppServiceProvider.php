@@ -27,16 +27,9 @@ use App\Models\Department;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\User;
-use App\Events\CourseCreatedEvent;
-use App\Events\CourseUpdatedEvent;
-use App\Events\InstructorAssignedEvent;
-use App\Events\StudentRegisteredEvent;
-use App\Events\WorkshopRequestSubmittedEvent;
-use App\Listeners\CourseCreatedListener;
-use App\Listeners\CourseUpdatedListener;
-use App\Listeners\InstructorAssignedListener;
-use App\Listeners\StudentRegisteredListener;
-use App\Listeners\WorkshopRequestListener;
+// Event/Listener imports removed — Laravel 13 auto-discovers all classes in
+// app/Listeners via the Dispatchable / ShouldQueue convention.
+// Manually calling Event::listen() here would double-register every listener.
 use App\Policies\AssignmentPolicy;
 use App\Policies\AssignmentSubmissionPolicy;
 use App\Policies\CertificatePolicy;
@@ -60,7 +53,6 @@ use App\Policies\WorkshopPolicy;
 use App\Support\Permissions;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
@@ -109,16 +101,10 @@ class AppServiceProvider extends ServiceProvider
         $this->configureLmsRouteModelBinding();
         $this->configurePolicies();
         $this->configurePermissionGates();
-        $this->configureEventListeners();
-    }
-
-    private function configureEventListeners(): void
-    {
-        Event::listen(CourseCreatedEvent::class, CourseCreatedListener::class);
-        Event::listen(InstructorAssignedEvent::class, InstructorAssignedListener::class);
-        Event::listen(CourseUpdatedEvent::class, CourseUpdatedListener::class);
-        Event::listen(StudentRegisteredEvent::class, StudentRegisteredListener::class);
-        Event::listen(WorkshopRequestSubmittedEvent::class, WorkshopRequestListener::class);
+        // configureEventListeners() intentionally removed.
+        // Laravel 13 auto-discovers every handle(SomeEvent) listener in app/Listeners.
+        // Adding Event::listen() calls here on top of auto-discovery registers each
+        // listener TWICE — one notification fires → user receives two duplicates.
     }
 
     private function configureLmsRouteModelBinding(): void

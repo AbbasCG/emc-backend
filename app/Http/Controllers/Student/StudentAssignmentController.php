@@ -9,6 +9,7 @@ use App\Models\Assignment;
 use App\Models\AssignmentSubmission;
 use App\Services\CourseAssignmentBridgeService;
 use App\Services\LmsEnrollmentService;
+use App\Services\NotificationService;
 use App\Services\StudentProgressService;
 use App\Support\AssignmentSubmissionStatus;
 use Illuminate\Http\JsonResponse;
@@ -145,6 +146,19 @@ class StudentAssignmentController extends Controller
         });
 
         $progress->syncForUser($request->user());
+
+        // Notify the instructor that a submission was received.
+        $assignment->loadMissing('course.instructor');
+        $instructorUserId = $assignment->course?->instructor?->user_id;
+        if ($instructorUserId) {
+            NotificationService::studentSubmittedAssignment(
+                instructorUserId: $instructorUserId,
+                studentName:      $request->user()->name,
+                courseTitle:      $assignment->course?->title ?? 'الدورة',
+                assignmentTitle:  $assignment->title,
+                submissionId:     $submission->id,
+            );
+        }
 
         return (new AssignmentSubmissionResource($submission->load('assignment')))
             ->additional(['success' => true, 'message' => 'Assignment submitted successfully.'])

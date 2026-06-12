@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Certificate;
 use App\Models\User;
+use App\Services\NotificationService;
 use Illuminate\Support\Str;
 
 class CertificateService
@@ -17,6 +18,18 @@ class CertificateService
         ]);
 
         ActivityLogger::log('certificate.issued', $certificate, [], request());
+
+        // Notify the student.
+        $certificate->loadMissing('user', 'course');
+        $student = $certificate->user;
+        if ($student) {
+            NotificationService::certificateIssued(
+                studentUserId:    $student->id,
+                certificateId:    $certificate->id,
+                courseTitle:      $certificate->course?->title ?? $certificate->title ?? 'الدورة',
+                verificationCode: $certificate->verification_code ?? '',
+            );
+        }
 
         return $certificate->fresh();
     }

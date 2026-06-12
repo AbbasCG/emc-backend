@@ -9,6 +9,7 @@ use App\Models\Course;
 use App\Models\CourseSession;
 use App\Models\LmsSession;
 use App\Models\Registration;
+use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -205,6 +206,21 @@ class SessionAttendanceController extends Controller
                 );
             }
         });
+
+        // Notify each student of their recorded attendance status.
+        [$courseId] = $this->sessionMeta($session);
+        $courseTitle  = $session->course?->title ?? 'الدورة';
+        $sessionTitle = $session->title ?? 'الجلسة';
+
+        foreach ($validated['rows'] as $row) {
+            NotificationService::attendanceMarked(
+                studentUserId: $row['user_id'],
+                courseTitle:   $courseTitle,
+                sessionTitle:  $sessionTitle,
+                status:        $row['status'],
+                courseId:      $courseId ?? 0,
+            );
+        }
 
         $attendances = Attendance::with('user:id,name,email,avatar')
             ->where(function ($q) use ($sessionId, $courseSessionId) {

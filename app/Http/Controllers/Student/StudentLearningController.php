@@ -80,6 +80,17 @@ class StudentLearningController extends Controller
 
     public function submitQuiz(Request $request, Quiz $quiz, QuizScoringService $scorer): \Illuminate\Http\JsonResponse
     {
+        // Guard: quiz must belong to a course the student is enrolled in.
+        $courseId = $quiz->course_id ?? $quiz->lesson?->module?->course_id;
+        if ($courseId) {
+            $enrolled = Registration::where('user_id', $request->user()->id)
+                ->where('course_id', $courseId)
+                ->whereIn('status', RegistrationStatus::activeEnrollment())
+                ->exists();
+
+            abort_unless($enrolled, 403, 'You are not enrolled in the course this quiz belongs to.');
+        }
+
         $data = $request->validate([
             'answers' => 'required|array',
         ]);
