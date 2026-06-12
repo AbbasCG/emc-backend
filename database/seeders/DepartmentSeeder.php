@@ -112,6 +112,16 @@ class DepartmentSeeder extends Seeder
             'sort_order'  => 10,
             'is_active'   => true,
         ],
+        [
+            'slug'        => 'ai-digital-transformation',
+            'name'        => 'إدارة الذكاء الاصطناعي والتحول الرقمي',
+            'name_ar'     => 'إدارة الذكاء الاصطناعي والتحول الرقمي',
+            'name_en'     => 'AI & Digital Transformation Department',
+            'description_ar' => 'قيادة مشاريع الذكاء الاصطناعي والتحول الرقمي ودمج التقنيات الحديثة في منظومة العمل.',
+            'icon'        => 'cpu-chip',
+            'sort_order'  => 11,
+            'is_active'   => true,
+        ],
     ];
 
     public function run(): void

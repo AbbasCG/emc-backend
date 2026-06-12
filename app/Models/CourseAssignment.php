@@ -22,6 +22,7 @@ class CourseAssignment extends Model
         'max_points',
         'submission_type',
         'is_required',
+        'resubmission_allowed',
         'is_visible',
         'status',
         'sort_order',
@@ -31,6 +32,7 @@ class CourseAssignment extends Model
         'deadline'    => 'datetime',
         'is_required' => 'boolean',
         'is_visible'  => 'boolean',
+        'resubmission_allowed' => 'boolean',
     ];
 
     public function course(): BelongsTo

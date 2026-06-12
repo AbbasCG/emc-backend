@@ -243,6 +243,13 @@ class NotificationService
             ->all();
 
         if (empty($recipients)) {
+            $roles = self::rolesForWorkflowDepartment($departmentKey);
+            if (!empty($roles)) {
+                $recipients = User::whereIn('role', $roles)->pluck('id')->all();
+            }
+        }
+
+        if (empty($recipients)) {
             return;
         }
 
@@ -477,6 +484,46 @@ class NotificationService
         );
     }
 
+    /** Notify a student that they have been assigned to a class group. */
+    public static function classGroupAssigned(
+        int $studentUserId,
+        string $classGroupName,
+        string $courseTitle,
+        ?string $instructorName,
+        ?string $scheduleDay,
+        ?string $scheduleTime,
+        ?string $locationType
+    ): void {
+        $locationLabel = match ($locationType) {
+            'in_person' => 'حضوري',
+            'hybrid'    => 'هجين',
+            default     => 'أونلاين',
+        };
+
+        $details = array_filter([$scheduleDay, $scheduleTime ? substr($scheduleTime, 0, 5) : null]);
+        $scheduleStr = ! empty($details) ? implode(' - ', $details) : null;
+
+        $message = "تم إلحاقك بالفصل: {$classGroupName}";
+        if ($instructorName) {
+            $message .= " | المدرب: {$instructorName}";
+        }
+        if ($scheduleStr) {
+            $message .= " | الموعد: {$scheduleStr}";
+        }
+        $message .= " | {$locationLabel}";
+
+        self::send($studentUserId, 'class_group_assigned',
+            'تم تعيينك في فصل دراسي',
+            $message,
+            [
+                'entity_type' => 'class_group',
+                'action_url'  => '/dashboard/student/courses',
+                'icon'        => 'users',
+                'color'       => 'green',
+            ]
+        );
+    }
+
     /** Notify the instructor that a student has booked an oral assessment slot. */
     public static function oralAssessmentBookedInstructor(
         int $instructorUserId,
@@ -494,6 +541,20 @@ class NotificationService
                 'color'       => 'blue',
             ]
         );
+    }
+
+    // Maps a workflow department key to platform roles for notification fallback.
+    private static function rolesForWorkflowDepartment(string $departmentKey): array
+    {
+        return match ($departmentKey) {
+            'quality_governance' => ['quality_manager'],
+            'programs_tracks'    => ['department_manager', 'programs_manager'],
+            'operations'         => ['operations_manager'],
+            'finance'            => ['finance_manager'],
+            'media_marketing'    => ['marketing_manager'],
+            'executive_admin'    => ['executive_admin'],
+            default              => [],
+        };
     }
 
     // Maps a free-text desired_department string to platform roles that should be notified.

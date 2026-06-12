@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Student;
 
 use App\Http\Controllers\Controller;
 use App\Models\Certificate;
+use App\Models\ClassGroupStudent;
 use App\Models\LmsSession;
 use App\Models\OralAssessmentBooking;
 use App\Models\PlacementTestAttempt;
@@ -124,16 +125,27 @@ class StudentRegistrationsController extends Controller
         // Bulk-load placement data for this student across all enrolled courses
         $attemptMap = PlacementTestAttempt::where('user_id', $user->id)
             ->whereIn('course_id', $courseIds->all())
+            ->orderBy('id')
             ->get()
             ->keyBy('course_id');
 
-        $bookingMap = OralAssessmentBooking::where('user_id', $user->id)
+        $bookingMap = OralAssessmentBooking::with(['slot', 'instructor.user'])
+            ->where('user_id', $user->id)
             ->whereIn('course_id', $courseIds->all())
+            ->orderBy('id')
             ->get()
             ->keyBy('course_id');
+
+        // Class group assignments for this student
+        $classAssignmentMap = ClassGroupStudent::with(['classGroup.instructor.user'])
+            ->where('user_id', $user->id)
+            ->whereIn('status', ['assigned', 'completed'])
+            ->get()
+            ->filter(fn ($cgs) => $cgs->classGroup !== null)
+            ->keyBy(fn ($cgs) => $cgs->classGroup->course_id);
 
         $data = $registrations->map(function ($reg) use (
-            $progressMap, $certificateMap, $nextSessionsMap, $attemptMap, $bookingMap
+            $progressMap, $certificateMap, $nextSessionsMap, $attemptMap, $bookingMap, $classAssignmentMap
         ) {
             $course  = $reg->course;
             $attempt = $attemptMap->get($reg->course_id);
@@ -142,6 +154,9 @@ class StudentRegistrationsController extends Controller
             $requiresPlacement = (bool) ($course?->requires_placement_test ?? false);
             $placementProgress = $this->placement->progress($attempt, $booking, $requiresPlacement);
             $canStartLearning  = ! $requiresPlacement || ($placementProgress['can_access_course'] ?? false);
+
+            $cgs = $classAssignmentMap->get($reg->course_id);
+            $cg  = $cgs?->classGroup;
 
             return [
                 'course_id'                => $reg->course_id,
@@ -181,6 +196,19 @@ class StudentRegistrationsController extends Controller
                 'requires_placement_test' => $requiresPlacement,
                 'placement_progress'      => $placementProgress,
                 'can_start_learning'      => $canStartLearning,
+                // Class group assignment (null until instructor assigns)
+                'class_assignment'        => $cg ? [
+                    'class_group_id'  => $cg->id,
+                    'name'            => $cg->name,
+                    'level_code'      => $cg->level_code,
+                    'schedule_day'    => $cg->schedule_day,
+                    'schedule_time'   => $cg->schedule_time ? substr($cg->schedule_time, 0, 5) : null,
+                    'location_type'   => $cg->location_type,
+                    'meeting_link'    => $cg->meeting_link,
+                    'start_date'      => $cg->start_date?->format('Y-m-d'),
+                    'instructor_name' => $cg->instructor?->user?->name ?? $cg->instructor?->name,
+                    'assigned_at'     => $cgs->assigned_at?->toIso8601String(),
+                ] : null,
             ];
         })->values()->all();
 

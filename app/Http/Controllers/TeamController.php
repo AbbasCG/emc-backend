@@ -27,7 +27,7 @@ class TeamController extends Controller
             ->where('is_active', true)
             ->whereNotNull('name_ar')
             ->whereNotNull('name_en')   // EMC V3 team depts always have a name_en
-            ->with(['activeTeamProfiles'])
+            ->with(['activeTeamProfiles' => fn ($q) => $q->with('user:id,avatar,name,email,role,is_active')])
             ->orderBy('sort_order')
             ->get();
 

@@ -42,6 +42,17 @@ class Role extends Model
         $this->permissions()->sync($ids);
     }
 
+    /**
+     * Route-model binding: support both numeric ID and role name.
+     * e.g. /admin/roles/1/permissions  OR  /admin/roles/super_admin/permissions
+     */
+    public function resolveRouteBinding($value, $field = null): ?self
+    {
+        // Try by name first (most common from frontend), then fall back to id
+        return $this->where('name', $value)->first()
+            ?? (is_numeric($value) ? $this->find((int) $value) : null);
+    }
+
     /** Convenience: find role by slug name or fail. */
     public static function findByName(string $name): self
     {

@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Instructor;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\LmsSessionResource;
 use App\Http\Resources\UserResource;
+use App\Models\ClassGroup;
 use App\Models\Course;
+use App\Models\CourseSession;
 use App\Models\LmsSession;
 use App\Models\PlatformNotification;
 use App\Models\Registration;
@@ -40,6 +42,28 @@ class InstructorDashboardController extends Controller
         $courseIds = Course::where('instructor_id', $profile->id)->pluck('id');
 
         $workshopsCount = Workshop::where('instructor_id', $profile->id)->count();
+
+        // Class groups assigned to this instructor
+        $classesCount = ClassGroup::where('instructor_id', $profile->id)->count();
+
+        // Total LMS sessions for instructor's courses or directly assigned
+        $lmsSessionQuery = fn ($q) => $q->where(function ($inner) use ($courseIds, $profile) {
+            $inner->whereIn('course_id', $courseIds)
+                  ->orWhere('instructor_id', $profile->id);
+        });
+
+        $sessionsCount = LmsSession::where(function ($q) use ($courseIds, $profile) {
+            $q->whereIn('course_id', $courseIds)
+              ->orWhere('instructor_id', $profile->id);
+        })->count();
+
+        // Sessions that are past/completed but have no attendance records saved yet
+        $pendingAttendanceCount = LmsSession::where(function ($q) use ($courseIds, $profile) {
+            $q->whereIn('course_id', $courseIds)
+              ->orWhere('instructor_id', $profile->id);
+        })->whereIn('status', ['completed', 'live', 'scheduled'])
+          ->whereDoesntHave('attendances')
+          ->count();
 
         $studentsCount = Registration::whereIn('course_id', $courseIds)
             ->where('status', 'Registered')
@@ -85,14 +109,17 @@ class InstructorDashboardController extends Controller
             'success' => true,
             'message' => 'Instructor dashboard data retrieved successfully.',
             'data'    => [
-                'user'                 => UserResource::make($user),
-                'courses_count'        => $courseIds->count(),
-                'workshops_count'      => $workshopsCount,
-                'students_count'       => $studentsCount,
-                'pending_reviews'      => $pendingReviews,
-                'unread_notifications' => PlatformNotification::where('user_id', $user->id)->where('is_read', false)->count(),
-                'upcoming_sessions'    => LmsSessionResource::collection($upcomingSessions)->resolve(),
-                'recent_registrations' => $recentRegistrations->values()->all(),
+                'user'                     => UserResource::make($user),
+                'courses_count'            => $courseIds->count(),
+                'workshops_count'          => $workshopsCount,
+                'classes_count'            => $classesCount,
+                'students_count'           => $studentsCount,
+                'sessions_count'           => $sessionsCount,
+                'pending_reviews'          => $pendingReviews,
+                'pending_attendance_count' => $pendingAttendanceCount,
+                'unread_notifications'     => PlatformNotification::where('user_id', $user->id)->where('is_read', false)->count(),
+                'upcoming_sessions'        => LmsSessionResource::collection($upcomingSessions)->resolve(),
+                'recent_registrations'     => $recentRegistrations->values()->all(),
             ],
         ]);
     }

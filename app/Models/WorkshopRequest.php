@@ -37,17 +37,19 @@ class WorkshopRequest extends Model
         'current_step',
         'current_department',
         'workflow_status',
+        'selected_date_option',
     ];
 
     protected $casts = [
-        'categories'      => 'array',
-        'location_types'  => 'array',
-        'proposed_date'   => 'date',
-        'proposed_date_1' => 'date',
-        'proposed_date_2' => 'date',
-        'proposed_date_3' => 'date',
-        'price_amount'    => 'decimal:2',
-        'current_step'    => 'integer',
+        'categories'           => 'array',
+        'location_types'       => 'array',
+        'proposed_date'        => 'date',
+        'proposed_date_1'      => 'date',
+        'proposed_date_2'      => 'date',
+        'proposed_date_3'      => 'date',
+        'price_amount'         => 'decimal:2',
+        'current_step'         => 'integer',
+        'selected_date_option' => 'integer',
     ];
 
     public function workflowSteps(): HasMany

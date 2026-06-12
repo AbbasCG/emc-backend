@@ -36,6 +36,14 @@ class InstructorPlacementController extends Controller
             abort(403, 'ليس لديك صلاحية الوصول إلى هذه الدورة.');
         }
 
+        if (! $course->requires_placement_test) {
+            return response()->json([
+                'success' => false,
+                'message' => 'هذه الدورة لا تتطلب اختبار تحديد مستوى.',
+                'data'    => [],
+            ], 422);
+        }
+
         // Load registrations (includes those without a linked user account)
         $registrations = Registration::with('user')
             ->where('course_id', $course->id)
@@ -69,6 +77,9 @@ class InstructorPlacementController extends Controller
                 'student_email'       => $reg->user?->email ?? $reg->email,
                 'enrollment_status'   => strtolower($reg->status),
                 'status_label'        => $this->placement->statusLabel($progress['status']),
+                // Flat IDs — normalizer uses these directly before falling back to nested progress
+                'attempt_id'          => $attempt?->id,
+                'booking_id'          => $booking?->id,
                 // Flat fields so frontend normalizers don't need placement_progress nesting
                 'placement_status'    => $progress['status'],
                 'written_score'       => $progress['written_test']['score'] ?? null,
@@ -76,6 +87,9 @@ class InstructorPlacementController extends Controller
                 'percentage'          => $progress['written_test']['percentage'] ?? null,
                 'written_level'       => $progress['written_test']['estimated_level'] ?? null,
                 'oral_booking_at'     => $progress['oral_assessment']['starts_at'] ?? null,
+                'oral_score'          => $progress['oral_assessment']['oral_score'] ?? null,
+                'instructor_notes'    => $progress['oral_assessment']['instructor_notes'] ?? null,
+                'notes'               => $progress['oral_assessment']['instructor_notes'] ?? null,
                 'final_level'         => $progress['oral_assessment']['final_level'] ?? null,
                 'placement_progress'  => $progress,
             ];
@@ -223,6 +237,9 @@ class InstructorPlacementController extends Controller
                     'estimated_level_ar'   => $levelDetails ? $levelDetails['ar']   : null,
                     'submitted_at'         => $a->submitted_at?->toIso8601String(),
                     'oral_booking_at'      => $booking?->slot?->starts_at?->toIso8601String(),
+                    'oral_score'           => $booking?->oral_score,
+                    'final_level'          => $booking?->final_level,
+                    'instructor_notes'     => $booking?->instructor_notes,
                 ];
             }),
             'meta' => [
@@ -230,6 +247,80 @@ class InstructorPlacementController extends Controller
                 'current_page' => $attempts->currentPage(),
                 'last_page'    => $attempts->lastPage(),
                 'per_page'     => $attempts->perPage(),
+            ],
+        ]);
+    }
+
+    // ─── GET /api/instructor/placement-tests/{attempt}/answers ──────────────
+    //
+    // Return all written test questions with student's answers and correct answers.
+
+    public function answers(Request $request, PlacementTestAttempt $attempt): JsonResponse
+    {
+        $instructor = Instructor::where('user_id', $request->user()->id)->first();
+
+        if ($instructor) {
+            $courseIds = Course::where('instructor_id', $instructor->id)->pluck('id')->all();
+            if (! in_array($attempt->course_id, $courseIds, true)) {
+                abort(403, 'ليس لديك صلاحية الوصول إلى هذا الاختبار.');
+            }
+        }
+
+        $attempt->load(['user', 'course', 'placementTest.questions']);
+
+        $test = $attempt->placementTest;
+
+        // answers stored as { "question_id": "a" } keyed map
+        $savedAnswers = is_array($attempt->answers) ? $attempt->answers : (json_decode($attempt->answers ?? '{}', true) ?? []);
+
+        $questions = $test?->questions ?? collect();
+
+        $answers = $questions->map(function ($q) use ($savedAnswers) {
+            $optsMap = [
+                'a' => (string) ($q->option_a ?? ''),
+                'b' => (string) ($q->option_b ?? ''),
+                'c' => (string) ($q->option_c ?? ''),
+                'd' => (string) ($q->option_d ?? ''),
+            ];
+
+            $correctOption  = strtolower((string) ($q->correct_option ?? ''));
+            $correctAnswer  = $optsMap[$correctOption] ?? $correctOption;
+            $selectedOption = isset($savedAnswers[$q->id]) ? strtolower((string) $savedAnswers[$q->id]) : null;
+            $selectedAnswer = $selectedOption ? ($optsMap[$selectedOption] ?? $selectedOption) : null;
+            $isCorrect      = $selectedOption !== null && $selectedOption === $correctOption;
+
+            return [
+                'question_id'     => $q->id,
+                'question_text'   => $q->question_text,
+                'options'         => $optsMap,
+                'selected_option' => $selectedOption,
+                'selected_answer' => $selectedAnswer,
+                'correct_option'  => $correctOption,
+                'correct_answer'  => $correctAnswer,
+                'is_correct'      => $isCorrect,
+                'points'          => $isCorrect ? 1 : 0,
+            ];
+        });
+
+        $correctCount = $answers->where('is_correct', true)->count();
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'attempt' => [
+                    'id'              => $attempt->id,
+                    'student_id'      => $attempt->user_id,
+                    'student_name'    => $attempt->user?->name,
+                    'course_id'       => $attempt->course_id,
+                    'course_title'    => $attempt->course?->title,
+                    'score'           => $attempt->score,
+                    'total_questions' => $attempt->total_questions,
+                    'percentage'      => $attempt->percentage,
+                    'estimated_level' => $attempt->estimated_level,
+                    'submitted_at'    => $attempt->submitted_at?->toIso8601String(),
+                ],
+                'correct_count' => $correctCount,
+                'answers'       => $answers->values(),
             ],
         ]);
     }
@@ -246,27 +337,24 @@ class InstructorPlacementController extends Controller
             abort(403, 'ليس لديك صلاحية تقييم هذا الطالب.');
         }
 
-        if ($booking->isCompleted()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'تم اكتمال هذا التقييم مسبقاً.',
-            ], 422);
-        }
-
         $request->validate([
-            'oral_score'       => ['required', 'integer', 'min:0', 'max:100'],
+            'oral_score'       => ['nullable', 'integer', 'min:0', 'max:100'],
             'final_level'      => ['required', 'string', 'in:Starter,A1,A2,B1,B2,C1'],
             'instructor_notes' => ['nullable', 'string', 'max:2000'],
         ]);
 
         DB::transaction(function () use ($request, $booking) {
-            $booking->update([
-                'oral_score'       => $request->oral_score,
+            $updateData = [
                 'final_level'      => $request->final_level,
                 'instructor_notes' => $request->instructor_notes,
                 'status'           => 'completed',
-            ]);
+            ];
+            // Only overwrite oral_score when explicitly provided — preserves existing value on re-edit
+            if ($request->has('oral_score')) {
+                $updateData['oral_score'] = $request->oral_score;
+            }
 
+            $booking->update($updateData);
             $booking->slot?->update(['booking_status' => 'completed']);
         });
 

@@ -13,6 +13,7 @@ use App\Models\CourseMaterial;
 use App\Models\CourseModule;
 use App\Models\CourseSession;
 use App\Services\AuditLogService;
+use App\Services\CourseAssignmentBridgeService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -246,6 +247,7 @@ class CourseContentController extends Controller
             ?? (int) CourseAssignment::where('course_id', $course->id)->max('sort_order') + 1;
 
         $assignment = CourseAssignment::create($data);
+        app(CourseAssignmentBridgeService::class)->ensureLmsAssignment($assignment);
 
         AuditLogService::logModel('created', $assignment, null, null, ['course_id' => $course->id], $request);
 
@@ -264,6 +266,7 @@ class CourseContentController extends Controller
 
         $old = $courseAssignment->only(['title', 'description', 'deadline', 'max_points', 'status', 'is_visible']);
         $courseAssignment->update($data);
+        app(CourseAssignmentBridgeService::class)->ensureLmsAssignment($courseAssignment->fresh());
 
         AuditLogService::logModel('updated', $courseAssignment->fresh(), $old, null, null, $request);
 

@@ -12,18 +12,22 @@ use App\Http\Resources\RegistrationResource;
 use App\Http\Resources\StudentProgressResource;
 use App\Models\Assignment;
 use App\Models\Certificate;
+use App\Models\ClassGroupStudent;
 use App\Models\LmsSession;
+use App\Models\OralAssessmentBooking;
+use App\Models\PlacementTestAttempt;
 use App\Models\PlatformNotification;
 use App\Models\Registration;
 use App\Models\StudentProgress;
 use App\Services\LmsEnrollmentService;
+use App\Services\PlacementProgressService;
 use App\Services\StudentProgressService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class StudentDashboardController extends Controller
 {
-    public function __invoke(Request $request, LmsEnrollmentService $enrollment, StudentProgressService $progress): JsonResponse
+    public function __invoke(Request $request, LmsEnrollmentService $enrollment, StudentProgressService $progress, PlacementProgressService $placement): JsonResponse
     {
         $user = $request->user();
         $courseIds = $enrollment->enrolledCourseIds($user);
@@ -40,27 +44,70 @@ class StudentDashboardController extends Controller
             ->take(20)
             ->get();
 
+        $regCourseIds = $registrations->pluck('course_id')->filter()->all();
+
         $progressKeyed = StudentProgress::query()
             ->where('user_id', $user->id)
-            ->whereIn('course_id', $registrations->pluck('course_id')->filter()->all())
+            ->whereIn('course_id', $regCourseIds)
             ->get()
             ->keyBy('course_id');
 
-        $currentCourses = $registrations->map(function (Registration $reg) use ($progressKeyed) {
-            $c = $reg->course;
-            $p = $progressKeyed->get($reg->course_id);
+        $attemptMap = PlacementTestAttempt::where('user_id', $user->id)
+            ->whereIn('course_id', $regCourseIds)
+            ->orderBy('id')
+            ->get()
+            ->keyBy('course_id');
+
+        $bookingMap = OralAssessmentBooking::with(['slot', 'instructor.user'])
+            ->where('user_id', $user->id)
+            ->whereIn('course_id', $regCourseIds)
+            ->orderBy('id')
+            ->get()
+            ->keyBy('course_id');
+
+        $classAssignmentMap = ClassGroupStudent::with(['classGroup.instructor.user'])
+            ->where('user_id', $user->id)
+            ->whereIn('status', ['assigned', 'completed'])
+            ->get()
+            ->filter(fn ($cgs) => $cgs->classGroup !== null)
+            ->keyBy(fn ($cgs) => $cgs->classGroup->course_id);
+
+        $currentCourses = $registrations->map(function (Registration $reg) use ($progressKeyed, $attemptMap, $bookingMap, $classAssignmentMap, $placement) {
+            $c   = $reg->course;
+            $p   = $progressKeyed->get($reg->course_id);
+            $cgs = $classAssignmentMap->get($reg->course_id);
+            $cg  = $cgs?->classGroup;
+
+            $requiresPlacement = (bool) ($c?->requires_placement_test ?? false);
+            $attempt           = $attemptMap->get($reg->course_id);
+            $booking           = $bookingMap->get($reg->course_id);
+            $placementProgress = $placement->progress($attempt, $booking, $requiresPlacement);
 
             return [
-                'id'                 => $c?->id ?? $reg->course_id,
-                'title'              => $c?->title ?? '',
-                'slug'               => $c?->slug,
-                'instructor_name'    => $c?->instructor?->user?->name ?? $c?->instructor?->name,
-                'progress_percent'   => $p ? (float) $p->progress_percentage : 0.0,
-                'status'             => $reg->status,
-                'start_date'         => $c?->start_date?->format('Y-m-d'),
-                'start_time'         => $c?->start_time,
-                'meeting_link'       => $c?->meeting_link,
-                'course_image'       => $c?->course_image,
+                'id'                      => $c?->id ?? $reg->course_id,
+                'title'                   => $c?->title ?? '',
+                'slug'                    => $c?->slug,
+                'instructor_name'         => $c?->instructor?->user?->name ?? $c?->instructor?->name,
+                'progress_percent'        => $p ? (float) $p->progress_percentage : 0.0,
+                'status'                  => $reg->status,
+                'start_date'              => $c?->start_date?->format('Y-m-d'),
+                'start_time'              => $c?->start_time,
+                'meeting_link'            => $c?->meeting_link,
+                'course_image'            => $c?->course_image,
+                'requires_placement_test' => $requiresPlacement,
+                'placement_progress'      => $placementProgress,
+                'class_assignment'        => $cg ? [
+                    'class_group_id'  => $cg->id,
+                    'name'            => $cg->name,
+                    'level_code'      => $cg->level_code,
+                    'schedule_day'    => $cg->schedule_day,
+                    'schedule_time'   => $cg->schedule_time ? substr($cg->schedule_time, 0, 5) : null,
+                    'location_type'   => $cg->location_type,
+                    'meeting_link'    => $cg->meeting_link,
+                    'start_date'      => $cg->start_date?->format('Y-m-d'),
+                    'instructor_name' => $cg->instructor?->user?->name ?? $cg->instructor?->name,
+                    'assigned_at'     => $cgs->assigned_at?->toIso8601String(),
+                ] : null,
             ];
         })->values()->all();
 

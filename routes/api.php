@@ -69,6 +69,7 @@ use App\Http\Controllers\Public\PublicFormController;
 use App\Http\Controllers\Public\SupportTicketController as PublicSupportTicketController;
 use App\Http\Controllers\RegistrationController;
 use App\Http\Controllers\Student\StudentAssignmentController;
+use App\Http\Controllers\Student\StudentLessonController;
 use App\Http\Controllers\Student\StudentDashboardController;
 use App\Http\Controllers\Student\StudentEvaluationController;
 use App\Http\Controllers\Student\StudentMaterialController;
@@ -150,8 +151,10 @@ Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(fu
     Route::get('/dashboard',     StudentDashboardController::class);
     Route::get('/sessions',      [StudentSessionController::class, 'index']);
     Route::get('/materials',     [StudentMaterialController::class, 'index']);
-    Route::get('/assignments',   [StudentAssignmentController::class, 'index']);
+    Route::get('/assignments',              [StudentAssignmentController::class, 'index']);
+    Route::get('/assignments/{assignment}', [StudentAssignmentController::class, 'show']);
     Route::post('/assignments/{assignment}/submit', [StudentAssignmentController::class, 'submit']);
+    Route::post('/lessons/{lesson}/complete', [StudentLessonController::class, 'complete']);
     Route::get('/progress',      [StudentProgressController::class, 'index']);
     Route::post('/evaluations',  [StudentEvaluationController::class, 'store']);
     Route::get('/reviews',       [StudentEvaluationController::class, 'index']);
@@ -254,16 +257,31 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:teacher,admin'])-
     Route::get('/workshops',   [InstructorWorkshopController::class, 'index']);
     Route::get('/students',    [InstructorStudentController::class, 'index']);
     Route::get('/attendance/{session}',            [SessionAttendanceController::class,    'show']);
-    Route::put('/attendance/{session}',            [SessionAttendanceController::class,    'update']);
-    Route::get('/assignments',                     [InstructorAssignmentController::class, 'index']);
-    Route::get('/submissions/{submission}',        [InstructorSubmissionController::class, 'show']);
-    Route::put('/submissions/{submission}/review', [InstructorSubmissionController::class, 'review']);
+    Route::get('/attendance',                                           [SessionAttendanceController::class,    'index']);
+    Route::put('/attendance/{session}',                                 [SessionAttendanceController::class,    'update']);
+    Route::get('/assignments',                                          [InstructorAssignmentController::class, 'index']);
+    Route::get('/submissions',                                          [InstructorSubmissionController::class, 'index']);
+    Route::get('/submissions/{submission}',                             [InstructorSubmissionController::class, 'show']);
+    Route::put('/submissions/{submission}/review',                      [InstructorSubmissionController::class, 'review']);
+    Route::get('/assignments/{assignment}/submissions',                  [InstructorSubmissionController::class, 'forAssignment']);
     Route::get('/notifications', [NotificationController::class, 'index']);
 
     // ── Placement: per-course student list + oral assessment management ───────
     Route::get( '/courses/{course}/placement-students',       [InstructorPlacementController::class, 'students']);
     Route::get( '/courses/{course}/students',                 [InstructorPlacementController::class, 'students']);
-    Route::get( '/placement-tests',                           [InstructorPlacementController::class, 'placementTests']);
+    Route::get( '/placement-tests',                                     [InstructorPlacementController::class, 'placementTests']);
+    Route::get( '/placement-tests/{attempt}/answers',                  [InstructorPlacementController::class, 'answers']);
+
+    // ── Class / group management ──────────────────────────────────────────────
+    Route::get(   '/classes',                                           [\App\Http\Controllers\Instructor\InstructorClassController::class, 'index']);
+    Route::post(  '/classes',                                           [\App\Http\Controllers\Instructor\InstructorClassController::class, 'store']);
+    Route::patch( '/classes/{group}',                                   [\App\Http\Controllers\Instructor\InstructorClassController::class, 'update']);
+    Route::delete('/classes/{group}',                                   [\App\Http\Controllers\Instructor\InstructorClassController::class, 'destroy']);
+    Route::get(   '/classes/{group}/students',                          [\App\Http\Controllers\Instructor\InstructorClassController::class, 'groupStudents']);
+    Route::post(  '/classes/{group}/students',                          [\App\Http\Controllers\Instructor\InstructorClassController::class, 'addStudent']);
+    Route::delete('/classes/{group}/students/{userId}',                 [\App\Http\Controllers\Instructor\InstructorClassController::class, 'removeStudent']);
+    Route::get(   '/courses/{course}/classes',                          [\App\Http\Controllers\Instructor\InstructorClassController::class, 'courseGroups']);
+    Route::get(   '/courses/{course}/class-assignment/students',        [\App\Http\Controllers\Instructor\InstructorClassController::class, 'assignmentStudents']);
     Route::get( '/oral-assessments',                          [InstructorPlacementController::class, 'assessments']);
     Route::patch('/oral-assessments/{booking}/complete',      [InstructorPlacementController::class, 'complete']);
 
@@ -340,6 +358,12 @@ Route::post('/payments/paypal/webhook', [PaymentController::class, 'paypalWebhoo
 // Fake payment endpoints — FakePaymentEnvironment enforced in controller
 Route::post('/payments/fake/confirm/{payment}', [PaymentController::class, 'confirmFakePayment'])->name('payments.fake.confirm');
 Route::post('/payments/fake/fail/{payment}',    [PaymentController::class, 'failFakePayment'])->name('payments.fake.fail');
+
+// ─── Members: GET — all authenticated users can view the team directory ──────
+Route::middleware(['auth:sanctum'])->prefix('admin')->group(function () {
+    Route::get('members',          [AdminMemberController::class, 'index']);
+    Route::get('members/{member}', [AdminMemberController::class, 'show']);
+});
 
 // ─── Admin: auth:sanctum + role:admin ────────────────────────────────────────
 Route::middleware(['auth:sanctum', 'role:admin'])->group(function () {
@@ -467,10 +491,21 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
     Route::patch('volunteer-requests/{volunteerRequest}/status',               [AdminVolunteerRequestController::class, 'updateStatus']);
     Route::post('volunteer-requests/{volunteerRequest}/convert-to-member',     [AdminVolunteerRequestController::class, 'convertToMember']);
 
-    // Internal members / team-profiles (الأعضاء page reads from team_profiles)
-    Route::get('members',                                          [AdminMemberController::class,      'index']);
-    Route::get('members/{member}',                                 [AdminMemberController::class,      'show']);
-    Route::post('team-profiles/{teamProfile}/create-user-account', [AdminTeamProfileController::class, 'createUserAccount']);
+    // NOTE: GET /admin/members (index + show) are registered OUTSIDE this admin group
+    // (auth:sanctum only) so that department_manager and other non-admin roles can access
+    // the member directory. Do not re-register them here with role:admin.
+
+    // Public team profiles CRUD (team_profiles table — what appears on /ar/team)
+    Route::get('team',                                                         [AdminTeamProfileController::class, 'adminTeam']);
+    Route::get('team-profiles',                                                [AdminTeamProfileController::class, 'index']);
+    Route::post('team-profiles',                                               [AdminTeamProfileController::class, 'store']);
+    Route::get('team-profiles/{teamProfile}',                                  [AdminTeamProfileController::class, 'show']);
+    Route::put('team-profiles/{teamProfile}',                                  [AdminTeamProfileController::class, 'update']);
+    Route::patch('team-profiles/{teamProfile}',                                [AdminTeamProfileController::class, 'update']);
+    Route::delete('team-profiles/{teamProfile}',                               [AdminTeamProfileController::class, 'destroy']);
+    Route::post('team-profiles/{teamProfile}/photo',                           [AdminTeamProfileController::class, 'uploadPhoto']);
+    Route::post('team-profiles/{teamProfile}/create-user-account',             [AdminTeamProfileController::class, 'createUserAccount']);
+    Route::post('team-profiles/{teamProfile}/unlink-user',                   [AdminTeamProfileController::class, 'unlinkUser']);
 
     // Marketing planner
     Route::apiResource('marketing-items', MarketingItemController::class);
@@ -607,6 +642,8 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
     Route::post('roles',                             [RoleController::class, 'store']);
     Route::put('roles/{role}',                       [RoleController::class, 'update']);
     Route::delete('roles/{role}',                    [RoleController::class, 'destroy']);
+    Route::get('roles/{role}/permissions',           [RoleController::class, 'permissions']);
+    Route::put('roles/{role}/permissions',           [RoleController::class, 'setPermissions']);
     Route::post('roles/{role}/grant-permission',     [RoleController::class, 'grantPermission']);
     Route::post('roles/{role}/revoke-permission',    [RoleController::class, 'revokePermission']);
 
@@ -705,11 +742,18 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin/lms')->group(fu
     Route::get('quizzes', [QuizController::class,         'index']);
 });
 
+// ─── Operations: department routes — accessible by admin AND department_manager ─
+// (department_manager sees only their own department; DepartmentController scopes automatically)
+Route::middleware(['auth:sanctum', 'role:admin,department_manager'])->prefix('operations')->group(function () {
+    Route::get('departments',              [DepartmentController::class, 'index']);
+    Route::get('departments/{department}', [DepartmentController::class, 'show']);
+});
+
 // ─── Operations aliases (frontend uses /operations/*, backend uses /admin/*) ─
 Route::middleware(['auth:sanctum', 'role:admin'])->prefix('operations')->group(function () {
     Route::get('dashboard',                                            [AdminController::class,                   'dashboard']);
-    Route::get('departments',                                          [DepartmentController::class,              'index']);
-    Route::get('departments/{department}',                             [DepartmentController::class,              'show']);
+    // NOTE: GET departments + departments/{id} are registered ABOVE this group with role:admin,department_manager
+    // so that Dept. Managers can access their own department data.
     Route::get('tasks',                                                [TaskController::class,                    'index']);
     Route::get('tasks/{task}',                                         [TaskController::class,                    'show']);
     Route::patch('tasks/{task}',                                       [TaskController::class,                    'update']);
@@ -970,9 +1014,13 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->
     Route::delete('team-members/{teamMember}',  [AdminTeamMemberController::class, 'destroy']);
 });
 
-// ─── Workshop Requests: bulk operations (admin + super_admin only) ────────────
+// ─── Workshop Requests: list — any authenticated user (controller filters by role/dept) ──────
+Route::middleware(['auth:sanctum'])->prefix('admin')->group(function () {
+    Route::get('workshop-requests', [WorkshopRequestController::class, 'index']);
+});
+
+// ─── Workshop Requests: mutations (admin + super_admin only) ─────────────────────────────────
 Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->group(function () {
-    Route::get('workshop-requests',                        [WorkshopRequestController::class, 'index']);
     Route::put('workshop-requests/{workshopRequest}',      [WorkshopRequestController::class, 'update']);
     Route::patch('workshop-requests/{workshopRequest}',    [WorkshopRequestController::class, 'update']);
     Route::delete('workshop-requests/{workshopRequest}',   [WorkshopRequestController::class, 'destroy']);

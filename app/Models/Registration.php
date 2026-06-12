@@ -19,10 +19,12 @@ class Registration extends Model
         'phone',
         'email',
         'city',
+        'country',
+        'country_code',
+        'phone_country_code',
         'gender',
         'notes',
         'status',
-
     ];
 
     public function course()

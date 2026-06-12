@@ -9,6 +9,7 @@ class Attendance extends Model
 {
     protected $fillable = [
         'session_id',
+        'course_session_id',
         'user_id',
         'status',
         'checked_in_at',
@@ -19,9 +20,16 @@ class Attendance extends Model
         'checked_in_at' => 'datetime',
     ];
 
+    /** LMS session (live class) — may be null when course_session_id is set */
     public function session(): BelongsTo
     {
         return $this->belongsTo(LmsSession::class, 'session_id');
+    }
+
+    /** Course content session — may be null when session_id (LmsSession) is set */
+    public function courseSession(): BelongsTo
+    {
+        return $this->belongsTo(CourseSession::class, 'course_session_id');
     }
 
     public function user(): BelongsTo

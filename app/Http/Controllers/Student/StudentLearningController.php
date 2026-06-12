@@ -51,7 +51,9 @@ class StudentLearningController extends Controller
 
         $modules = CourseModule::with(['courseSessions.materials', 'courseSessions.assignments'])
             ->where('course_id', $courseId)
-            ->where('status', 'active')
+            // Show modules that are not explicitly deactivated (null means not yet set)
+            ->where(fn ($q) => $q->where('is_active', true)->orWhereNull('is_active'))
+            ->whereNotIn('status', ['inactive', 'draft'])
             ->orderBy('sort_order')
             ->get();
 

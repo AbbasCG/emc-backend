@@ -12,7 +12,10 @@ class CourseResource extends JsonResource
         return [
             'id'                    => $this->id,
             'track_id'              => $this->track_id,
+            // Bilingual title aliases — DB stores a single Arabic title; en is null until extended
             'title'                 => $this->title,
+            'title_ar'              => $this->title,
+            'title_en'              => null,
             'slug'                  => $this->slug,
             'description'           => $this->description,
             'short_description'     => $this->short_description,
@@ -22,6 +25,8 @@ class CourseResource extends JsonResource
             'status'                => $this->status,
             'program_type'          => $this->program_type,
             'content_type'          => $this->program_type,
+            // Explicit boolean flag — frontend can use this instead of comparing program_type string
+            'is_workshop'           => $this->program_type === 'workshop',
             'session_format'        => $this->session_format,
             'requires_placement_test' => (bool) $this->requires_placement_test,
 
@@ -30,6 +35,8 @@ class CourseResource extends JsonResource
             'end_date'              => $this->end_date?->format('Y-m-d'),
             'start_time'            => $this->start_time,
             'end_time'              => $this->end_time,
+            // Derived schedule string — study_time if set, else start_time–end_time, else null
+            'schedule_time'         => $this->resolveScheduleTime(),
             'next_cohort_pending'   => ! $this->start_date,
 
             // Location / delivery
@@ -43,6 +50,8 @@ class CourseResource extends JsonResource
             'capacity'              => $this->capacity,
             'seats_count'           => $this->capacity,
             'registrations_count'   => $this->registrations_count ?? 0,
+            // true when capacity is set and all seats are taken
+            'is_full'               => $this->capacity !== null && ($this->registrations_count ?? 0) >= $this->capacity,
             'registration_open'     => (bool) ($this->registration_open ?? true),
             'registration_status'   => $this->registration_status ?? 'open',
 
@@ -66,6 +75,8 @@ class CourseResource extends JsonResource
 
             // Meta
             'duration'              => $this->duration,
+            // No duration_unit column yet — null keeps the key present for frontend safety
+            'duration_unit'         => null,
             'training_hours'        => $this->training_hours,
             'target_audience'       => $this->target_audience,
             'language'              => $this->language,
@@ -135,6 +146,24 @@ class CourseResource extends JsonResource
             return $path;
         }
         return asset('storage/' . ltrim($path, '/'));
+    }
+
+    /**
+     * Derive a human-readable schedule time string.
+     * Priority: study_time → "start_time – end_time" → null.
+     */
+    private function resolveScheduleTime(): ?string
+    {
+        if (! empty($this->study_time)) {
+            return $this->study_time;
+        }
+        if (! empty($this->start_time) && ! empty($this->end_time)) {
+            return $this->start_time . ' – ' . $this->end_time;
+        }
+        if (! empty($this->start_time)) {
+            return $this->start_time;
+        }
+        return null;
     }
 
     /** Guarantees the value is a PHP array regardless of whether it is already

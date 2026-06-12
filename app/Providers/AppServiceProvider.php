@@ -123,10 +123,22 @@ class AppServiceProvider extends ServiceProvider
 
     private function configureLmsRouteModelBinding(): void
     {
-        Route::bind('session', fn ($value) => LmsSession::query()->whereKey($value)->firstOrFail());
+        // {session} resolves to an LmsSession first; if not found, falls back to
+        // CourseSession (instructors use both types and attendance supports both).
+        Route::bind('session', function ($value) {
+            return \App\Models\LmsSession::query()->whereKey($value)->first()
+                ?? \App\Models\CourseSession::query()->whereKey($value)->firstOrFail();
+        });
+
         Route::bind('form', fn ($value) => DynamicForm::query()->whereKey($value)->firstOrFail());
         Route::bind('volunteer', fn ($value) => VolunteerProfile::query()->whereKey($value)->firstOrFail());
         Route::bind('actionItem', fn ($value) => MeetingActionItem::query()->whereKey($value)->firstOrFail());
+
+        Route::bind('assignment', function ($value) {
+            return app(\App\Services\CourseAssignmentBridgeService::class)
+                ->resolveAssignment((int) $value)
+                ?? abort(404, 'Assignment not found.');
+        });
     }
 
     private function configurePolicies(): void

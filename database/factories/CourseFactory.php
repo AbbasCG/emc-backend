@@ -31,7 +31,7 @@ class CourseFactory extends Factory
             'start_date' => null,
             'end_date' => null,
             'capacity' => 20,
-            'status' => 'active',
+            'status' => 'published',
             'duration' => null,
             'training_hours' => null,
             'target_audience' => null,

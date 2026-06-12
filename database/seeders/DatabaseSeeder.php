@@ -20,6 +20,7 @@ class DatabaseSeeder extends Seeder
             RoleSeeder::class,
             PermissionSeeder::class,
             RolePermissionSeeder::class,
+            GranularPermissionsSeeder::class,   // granular dotted-notation permissions
             DemoUserSeeder::class,
         ]);
 

@@ -12,6 +12,7 @@ class AssignmentSubmission extends Model
         'user_id',
         'file_path',
         'text_answer',
+        'notes',
         'score',
         'feedback',
         'submitted_at',

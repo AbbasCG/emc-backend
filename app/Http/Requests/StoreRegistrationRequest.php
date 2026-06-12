@@ -37,6 +37,7 @@ class StoreRegistrationRequest extends FormRequest
                 'email'     => $this->input('email')     ?: $user->email,
                 'phone'     => $this->input('phone')     ?: $user->phone,
                 'city'      => $this->input('city')      ?: $user->city,
+                'country'   => $this->input('country')   ?: $user->country,
             ]);
         }
 
@@ -50,6 +51,9 @@ class StoreRegistrationRequest extends FormRequest
             'phone'            => ['required', 'string', 'max:30'],
             'email'            => ['required', 'email', 'max:255'],
             'city'             => ['nullable', 'string', 'max:255'],
+            'country'          => ['nullable', 'string', 'max:100'],
+            'country_code'     => ['nullable', 'string', 'max:10'],
+            'phone_country_code' => ['nullable', 'string', 'max:10'],
             'gender'           => ['nullable', 'string', 'max:50'],
             'notes'            => ['nullable', 'string', 'max:2000'],
             'payment_provider' => ['nullable', 'in:stripe,paypal,fake'],

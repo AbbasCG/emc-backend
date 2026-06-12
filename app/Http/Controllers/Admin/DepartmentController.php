@@ -11,11 +11,11 @@ use Illuminate\Support\Str;
 
 class DepartmentController extends Controller
 {
-    public function index(): \Illuminate\Http\JsonResponse
+    public function index(Request $request): \Illuminate\Http\JsonResponse
     {
-        $departments = Department::query()
+        $user  = $request->user();
+        $query = Department::query()
             ->select('departments.*')
-            // volunteer_requests use a free-text desired_department matching name_ar
             ->addSelect(DB::raw(
                 "(SELECT COUNT(*) FROM volunteer_requests
                   WHERE volunteer_requests.desired_department = departments.name_ar
@@ -33,13 +33,41 @@ class DepartmentController extends Controller
                 'teamProfiles as members_count',
                 'teamProfiles as leaders_count' => fn ($q) => $q->where('is_leader', true),
                 'courses as courses_count',
-                // open tasks = everything except completed / cancelled
                 'tasks as open_tasks_count' => fn ($q) => $q->whereNotIn('status', ['completed', 'cancelled']),
             ])
             ->with(['leader:id,name,email,role', 'sections', 'children'])
             ->whereNull('parent_id')
-            ->orderBy('sort_order')
-            ->get();
+            ->orderBy('sort_order');
+
+        // Scope: department_manager sees only their own department(s).
+        // Resolution order: leader_id in DB → user.department string → all (for admin/super_admin).
+        if ($user && $user->role === 'department_manager' && ! $user->isAdmin() && ! $user->isSuperAdmin()) {
+            $ownDeptId = Department::where('leader_id', $user->id)->value('id');
+
+            if ($ownDeptId) {
+                $query->where('departments.id', $ownDeptId);
+            } else {
+                $deptName = trim((string) $user->department);
+                if ($deptName !== '') {
+                    $query->where(function ($q) use ($deptName) {
+                        $q->where('name_ar', $deptName)
+                          ->orWhere('name', $deptName)
+                          ->orWhere('slug', $deptName)
+                          ->orWhere('slug', str_replace(' ', '-', strtolower($deptName)));
+                    });
+                } else {
+                    // No department linked — return empty with a hint
+                    return response()->json([
+                        'success' => true,
+                        'data'    => [],
+                        'message' => 'لم يتم ربط حسابك بإدارة. تواصل مع المسؤول.',
+                        'no_department_linked' => true,
+                    ]);
+                }
+            }
+        }
+
+        $departments = $query->get();
 
         return response()->json([
             'success' => true,

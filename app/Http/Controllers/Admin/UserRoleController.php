@@ -60,10 +60,7 @@ class UserRoleController extends Controller
 
         app(ActivityLogger::class)->log(
             'user_role_changed',
-            "User [{$user->email}] role changed from [{$oldRole}] to [{$newRole}]",
-            $actor->id,
-            entityType: 'user',
-            entityId: $user->id,
+            $user,
             oldValues: ['role' => $oldRole],
             newValues: ['role' => $newRole],
         );

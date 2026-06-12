@@ -13,6 +13,7 @@ use App\Models\Course;
 use App\Models\Payment;
 use App\Models\Registration;
 use App\Services\AuditLogService;
+use App\Services\NotificationService;
 use App\Services\PaymentGatewayService;
 use App\Support\PaymentStatuses;
 use Illuminate\Http\JsonResponse;
@@ -80,15 +81,18 @@ class RegistrationController extends Controller
 
             $result = DB::transaction(function () use ($validated, $course, $paymentGatewayService, $receiptPath, $authUser) {
                 $registration = Registration::create([
-                    'course_id' => $validated['course_id'],
-                    'user_id'   => $authUser?->id,
-                    'full_name' => $authUser?->name ?? $validated['full_name'],
-                    'phone'     => $validated['phone'] ?? $authUser?->phone,
-                    'email'     => $authUser?->email ?? $validated['email'],
-                    'city'      => $validated['city'] ?? $authUser?->city,
-                    'gender'    => $validated['gender'] ?? null,
-                    'notes'     => $validated['notes'] ?? null,
-                    'status'    => $course->type === 'paid' ? RegistrationStatus::PENDING_PAYMENT->value : RegistrationStatus::REGISTERED->value,
+                    'course_id'          => $validated['course_id'],
+                    'user_id'            => $authUser?->id,
+                    'full_name'          => $authUser?->name ?? $validated['full_name'],
+                    'phone'              => $validated['phone'] ?? $authUser?->phone,
+                    'email'              => $authUser?->email ?? $validated['email'],
+                    'city'               => $validated['city'] ?? $authUser?->city,
+                    'country'            => $validated['country'] ?? $authUser?->country,
+                    'country_code'       => $validated['country_code'] ?? null,
+                    'phone_country_code' => $validated['phone_country_code'] ?? null,
+                    'gender'             => $validated['gender'] ?? null,
+                    'notes'              => $validated['notes'] ?? null,
+                    'status'             => $course->type === 'paid' ? RegistrationStatus::PENDING_PAYMENT->value : RegistrationStatus::REGISTERED->value,
                 ]);
 
                 if ($course->type !== 'paid') {
@@ -150,9 +154,17 @@ class RegistrationController extends Controller
                 );
 
                 if ($authUser) {
+                    // Authenticated: fire event — listener handles both student + admin notifications
                     try {
                         $registration->loadMissing('course');
                         event(new StudentRegisteredEvent($registration));
+                    } catch (Throwable $e) {
+                        report($e);
+                    }
+                } else {
+                    // Guest: no user_id — notify admins directly (studentUserId=0 filtered safely)
+                    try {
+                        NotificationService::studentRegistered(0, $course->id, $course->title, $registration->id);
                     } catch (Throwable $e) {
                         report($e);
                     }
@@ -179,12 +191,21 @@ class RegistrationController extends Controller
                 null, $request
             );
 
+            // Confirmation email (always — guest and authenticated)
             Mail::to($freeRegistration->email)
                 ->queue(new CourseRegistrationConfirmation($freeRegistration));
 
             if ($authUser) {
+                // Authenticated: fire event — listener handles both student + admin notifications
                 try {
                     event(new StudentRegisteredEvent($freeRegistration));
+                } catch (Throwable $e) {
+                    report($e);
+                }
+            } else {
+                // Guest: no user_id — notify admins directly (studentUserId=0 filtered safely)
+                try {
+                    NotificationService::studentRegistered(0, $course->id, $course->title, $freeRegistration->id);
                 } catch (Throwable $e) {
                     report($e);
                 }

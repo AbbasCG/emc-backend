@@ -12,6 +12,8 @@ use App\Models\CourseAssignment;
 use App\Models\CourseMaterial;
 use App\Models\CourseModule;
 use App\Models\CourseSession;
+use App\Services\CourseAssignmentBridgeService;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -62,7 +64,7 @@ class InstructorCourseContentController extends Controller
         ]);
     }
 
-    // ─── Modules — nested ────────────────────────────────────────────────────
+    // ─── Modules ─────────────────────────────────────────────────────────────
 
     public function storeModule(Request $request, Course $course): JsonResponse
     {
@@ -89,10 +91,17 @@ class InstructorCourseContentController extends Controller
         ], 201);
     }
 
-    // ─── Modules — flat (PUT /instructor/modules/{module}) ────────────────────
-
-    public function updateModule(Request $request, CourseModule $module): JsonResponse
+    /**
+     * PUT /instructor/courses/{course}/modules/{module}
+     * PUT /instructor/modules/{module}
+     *
+     * Uses $request->route() to resolve parameters so that both nested and flat
+     * routes work without positional-injection issues for primitive int params.
+     */
+    public function updateModule(Request $request): JsonResponse
     {
+        $module = CourseModule::findOrFail($this->routeId($request, 'module'));
+        $this->enforceCourseScope($request, $module->course_id);
         $this->authoriseByCourse($request, $module->course_id);
 
         $data = $request->validate([
@@ -112,15 +121,17 @@ class InstructorCourseContentController extends Controller
         ]);
     }
 
-    public function destroyModule(Request $request, CourseModule $module): JsonResponse
+    public function destroyModule(Request $request): JsonResponse
     {
-        $this->authoriseByCourse($request, $module->course_id);
-        $module->delete();
+        $mod = CourseModule::findOrFail($this->routeId($request, 'module'));
+        $this->enforceCourseScope($request, $mod->course_id);
+        $this->authoriseByCourse($request, $mod->course_id);
+        $mod->delete();
 
         return response()->json(['success' => true, 'message' => 'تم الحذف بنجاح']);
     }
 
-    // ─── Sessions — nested ───────────────────────────────────────────────────
+    // ─── Sessions ────────────────────────────────────────────────────────────
 
     public function storeCourseSession(Request $request, Course $course): JsonResponse
     {
@@ -140,31 +151,37 @@ class InstructorCourseContentController extends Controller
         ], 201);
     }
 
-    // ─── Sessions — flat ─────────────────────────────────────────────────────
-
-    public function updateCourseSession(Request $request, CourseSession $courseSession): JsonResponse
+    /**
+     * PUT /instructor/courses/{course}/sessions/{courseSession}
+     * PUT /instructor/sessions/{courseSession}
+     */
+    public function updateCourseSession(Request $request): JsonResponse
     {
-        $this->authoriseByCourse($request, $courseSession->course_id);
+        $session = CourseSession::findOrFail($this->routeId($request, 'courseSession'));
+        $this->enforceCourseScope($request, $session->course_id);
+        $this->authoriseByCourse($request, $session->course_id);
 
         $data = $this->validateSession($request, required: false);
-        $courseSession->update($data);
+        $session->update($data);
 
         return response()->json([
             'success' => true,
             'message' => 'تم الحفظ بنجاح',
-            'data'    => new CourseSessionResource($courseSession->fresh()),
+            'data'    => new CourseSessionResource($session->fresh()),
         ]);
     }
 
-    public function destroyCourseSession(Request $request, CourseSession $courseSession): JsonResponse
+    public function destroyCourseSession(Request $request): JsonResponse
     {
-        $this->authoriseByCourse($request, $courseSession->course_id);
-        $courseSession->delete();
+        $session = CourseSession::findOrFail($this->routeId($request, 'courseSession'));
+        $this->enforceCourseScope($request, $session->course_id);
+        $this->authoriseByCourse($request, $session->course_id);
+        $session->delete();
 
         return response()->json(['success' => true, 'message' => 'تم الحذف بنجاح']);
     }
 
-    // ─── Materials — nested ──────────────────────────────────────────────────
+    // ─── Materials ────────────────────────────────────────────────────────────
 
     public function storeMaterial(Request $request, Course $course): JsonResponse
     {
@@ -192,17 +209,21 @@ class InstructorCourseContentController extends Controller
         ], 201);
     }
 
-    // ─── Materials — flat ────────────────────────────────────────────────────
-
-    public function updateMaterial(Request $request, CourseMaterial $material): JsonResponse
+    /**
+     * PUT /instructor/courses/{course}/materials/{material}
+     * PUT /instructor/materials/{material}
+     */
+    public function updateMaterial(Request $request): JsonResponse
     {
-        $this->authoriseByCourse($request, $material->course_id);
+        $mat = CourseMaterial::findOrFail($this->routeId($request, 'material'));
+        $this->enforceCourseScope($request, $mat->course_id);
+        $this->authoriseByCourse($request, $mat->course_id);
 
         $data = $this->validateMaterial($request, required: false);
 
         if ($request->hasFile('file')) {
-            if ($material->file_path) {
-                $this->deleteFile($material->file_path);
+            if ($mat->file_path) {
+                $this->deleteFile($mat->file_path);
             }
             $path              = $request->file('file')->store('course-materials', 'local');
             $data['file_path'] = $path;
@@ -210,29 +231,30 @@ class InstructorCourseContentController extends Controller
         }
 
         unset($data['file']);
-        $material->update($data);
+        $mat->update($data);
 
         return response()->json([
             'success' => true,
             'message' => 'تم الحفظ بنجاح',
-            'data'    => new CourseMaterialResource($material->fresh()),
+            'data'    => new CourseMaterialResource($mat->fresh()),
         ]);
     }
 
-    public function destroyMaterial(Request $request, CourseMaterial $material): JsonResponse
+    public function destroyMaterial(Request $request): JsonResponse
     {
-        $this->authoriseByCourse($request, $material->course_id);
+        $mat = CourseMaterial::findOrFail($this->routeId($request, 'material'));
+        $this->enforceCourseScope($request, $mat->course_id);
+        $this->authoriseByCourse($request, $mat->course_id);
 
-        if ($material->file_path) {
-            $this->deleteFile($material->file_path);
+        if ($mat->file_path) {
+            $this->deleteFile($mat->file_path);
         }
-
-        $material->delete();
+        $mat->delete();
 
         return response()->json(['success' => true, 'message' => 'تم الحذف بنجاح']);
     }
 
-    // ─── Assignments — nested ────────────────────────────────────────────────
+    // ─── Assignments ──────────────────────────────────────────────────────────
 
     public function storeAssignment(Request $request, Course $course): JsonResponse
     {
@@ -244,6 +266,7 @@ class InstructorCourseContentController extends Controller
             ?? (int) CourseAssignment::where('course_id', $course->id)->max('sort_order') + 1;
 
         $assignment = CourseAssignment::create($data);
+        app(CourseAssignmentBridgeService::class)->ensureLmsAssignment($assignment);
 
         return response()->json([
             'success' => true,
@@ -252,26 +275,33 @@ class InstructorCourseContentController extends Controller
         ], 201);
     }
 
-    // ─── Assignments — flat ──────────────────────────────────────────────────
-
-    public function updateAssignment(Request $request, CourseAssignment $courseAssignment): JsonResponse
+    /**
+     * PUT /instructor/courses/{course}/assignments/{courseAssignment}
+     * PUT /instructor/assignments/{courseAssignment}
+     */
+    public function updateAssignment(Request $request): JsonResponse
     {
-        $this->authoriseByCourse($request, $courseAssignment->course_id);
+        $assignment = CourseAssignment::findOrFail($this->routeId($request, 'courseAssignment'));
+        $this->enforceCourseScope($request, $assignment->course_id);
+        $this->authoriseByCourse($request, $assignment->course_id);
 
         $data = $this->validateAssignment($request, required: false);
-        $courseAssignment->update($data);
+        $assignment->update($data);
+        app(CourseAssignmentBridgeService::class)->ensureLmsAssignment($assignment->fresh());
 
         return response()->json([
             'success' => true,
             'message' => 'تم الحفظ بنجاح',
-            'data'    => new CourseAssignmentResource($courseAssignment->fresh()),
+            'data'    => new CourseAssignmentResource($assignment->fresh()),
         ]);
     }
 
-    public function destroyAssignment(Request $request, CourseAssignment $courseAssignment): JsonResponse
+    public function destroyAssignment(Request $request): JsonResponse
     {
-        $this->authoriseByCourse($request, $courseAssignment->course_id);
-        $courseAssignment->delete();
+        $assignment = CourseAssignment::findOrFail($this->routeId($request, 'courseAssignment'));
+        $this->enforceCourseScope($request, $assignment->course_id);
+        $this->authoriseByCourse($request, $assignment->course_id);
+        $assignment->delete();
 
         return response()->json(['success' => true, 'message' => 'تم الحذف بنجاح']);
     }
@@ -299,13 +329,55 @@ class InstructorCourseContentController extends Controller
         return response()->json(['success' => true, 'message' => 'تم حفظ الترتيب']);
     }
 
+    // ─── Route parameter resolution ───────────────────────────────────────────
+
+    /**
+     * Resolve a route parameter to an integer ID.
+     *
+     * Works for:
+     *  - Flat routes (/modules/{module}) — parameter = raw string from URL
+     *  - Nested routes (/courses/{course}/modules/{module}) — parameter may be
+     *    a raw string OR an already-bound Eloquent model (from AppServiceProvider bindings).
+     *
+     * By reading via $request->route() instead of relying on method type-hints,
+     * we completely bypass Laravel's positional injection for primitive parameters.
+     */
+    private function routeId(Request $request, string $param): int
+    {
+        $raw = $request->route($param);
+
+        if ($raw instanceof Model) {
+            return (int) $raw->getKey();
+        }
+
+        return (int) $raw;
+    }
+
+    /**
+     * For nested routes, verify the resolved resource belongs to the {course}
+     * route parameter (if present).  Flat routes skip this check.
+     */
+    private function enforceCourseScope(Request $request, ?int $actualCourseId): void
+    {
+        $rawCourse = $request->route('course');
+
+        if ($rawCourse === null) {
+            return; // flat route — no course scope to enforce
+        }
+
+        $scopeCourseId = $rawCourse instanceof Course
+            ? $rawCourse->id
+            : (int) $rawCourse;
+
+        abort_if((int) $actualCourseId !== $scopeCourseId, 404, 'Resource not found in this course.');
+    }
+
     // ─── Ownership helpers ────────────────────────────────────────────────────
 
     private function authorise(Request $request, Course $course): void
     {
         $profile = $request->user()->instructorProfile;
 
-        // super_admin and admin bypass the ownership check (role middleware already validated role)
         if (in_array($request->user()->role, ['admin', 'super_admin'], true)) {
             return;
         }
@@ -334,7 +406,6 @@ class InstructorCourseContentController extends Controller
         abort_if(! $ownsCourse, 403, 'You can only manage your own courses.');
     }
 
-    // Try local disk first, fall back to public (for pre-migration files)
     private function deleteFile(string $path): void
     {
         if (Storage::disk('local')->exists($path)) {
@@ -363,7 +434,6 @@ class InstructorCourseContentController extends Controller
             'is_visible'    => 'nullable|boolean',
         ]);
 
-        // Accept meeting_url as alias for meeting_link
         if (!empty($data['meeting_url']) && empty($data['meeting_link'])) {
             $data['meeting_link'] = $data['meeting_url'];
         }
@@ -388,17 +458,14 @@ class InstructorCourseContentController extends Controller
             'file'              => [
                 'nullable', 'file', 'max:51200',
                 'mimes:pdf,doc,docx,xls,xlsx,ppt,pptx,mp4,mov,avi,mp3,wav,jpg,jpeg,png,webp,gif,zip',
-                'mimetypes:application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,video/mp4,video/quicktime,video/x-msvideo,audio/mpeg,audio/wav,image/jpeg,image/png,image/webp,image/gif,application/zip',
             ],
         ]);
 
-        // Accept kind as alias for type
         if (!empty($data['kind']) && empty($data['type'])) {
             $data['type'] = $data['kind'];
         }
         unset($data['kind']);
 
-        // Accept visibility string as alias for is_visible boolean
         if (array_key_exists('visibility', $data) && !array_key_exists('is_visible', $data)) {
             $data['is_visible'] = !in_array($data['visibility'], ['private', 'hidden', 'none'], true);
         }
