@@ -50,4 +50,26 @@ class AssignmentSubmissionStatus
 
         return 'submitted';
     }
+
+    /**
+     * Instructor review queue status: pending_review | reviewed | needs_revision | not_submitted
+     */
+    public static function forInstructor(AssignmentSubmission $submission, ?Assignment $assignment = null): string
+    {
+        if (! $submission->submitted_at) {
+            return 'not_submitted';
+        }
+
+        $raw = strtolower((string) $submission->status);
+
+        if (in_array($raw, ['graded', 'reviewed'], true)) {
+            return 'reviewed';
+        }
+
+        if ($raw === 'needs_revision') {
+            return 'needs_revision';
+        }
+
+        return 'pending_review';
+    }
 }

@@ -1,0 +1,92 @@
+<?php
+
+namespace App\Http\Resources;
+
+use App\Support\AssignmentSubmissionStatus;
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+
+/**
+ * Instructor assignment review queue — flat + nested fields for dashboard UI.
+ */
+class InstructorSubmissionResource extends JsonResource
+{
+    /** @var array<int, array{id:int,title:string,slug:string}|null>|null */
+    public static ?array $learningPathByCourseId = null;
+
+    public function toArray(Request $request): array
+    {
+        $assignment = $this->relationLoaded('assignment') ? $this->assignment : null;
+        $course     = $assignment?->relationLoaded('course') ? $assignment->course : null;
+        $user       = $this->relationLoaded('user') ? $this->user : null;
+
+        $courseId = $course?->id ?? $assignment?->course_id ?? $assignment?->workshop?->course_id;
+        $lp       = ($courseId && self::$learningPathByCourseId !== null)
+            ? (self::$learningPathByCourseId[(int) $courseId] ?? null)
+            : null;
+
+        $instructorStatus = AssignmentSubmissionStatus::forInstructor($this->resource, $assignment);
+        $textAnswer       = $this->text_answer;
+        $fileUrl          = $this->file_path
+            ? Storage::disk('public')->url($this->file_path)
+            : null;
+
+        $studentName = $user?->name ?? '';
+        $studentEmail = $user?->email ?? null;
+        $avatar = $user?->avatar_url ?? null;
+
+        return [
+            'id'            => $this->id,
+            'assignment_id' => $this->assignment_id,
+            'user_id'       => $this->user_id,
+            'student_id'    => $this->user_id,
+
+            'status'         => $instructorStatus,
+            'review_status'  => $this->status,
+            'submitted_at'   => $this->submitted_at?->toIso8601String(),
+            'score'          => $this->score,
+            'grade'          => $this->score,
+            'max_score'      => $assignment?->max_score,
+            'feedback'       => $this->feedback,
+            'body_preview'   => $textAnswer ? Str::limit($textAnswer, 160) : null,
+            'body_text'      => $textAnswer,
+            'text_answer'    => $textAnswer,
+            'notes'          => $this->notes,
+            'file_path'      => $this->file_path,
+            'file_url'       => $fileUrl,
+
+            // Flat aliases consumed by the frontend normalizer
+            'student_name'     => $studentName,
+            'assignment_title' => $assignment?->title ?? '',
+            'course_name'      => $course?->title,
+
+            'student' => [
+                'id'     => $this->user_id,
+                'name'   => $studentName,
+                'email'  => $studentEmail,
+                'avatar' => $avatar,
+            ],
+
+            'assignment' => $assignment ? [
+                'id'        => $assignment->id,
+                'title'     => $assignment->title,
+                'max_score' => $assignment->max_score,
+                'due_date'  => $assignment->due_date?->toIso8601String(),
+            ] : null,
+
+            'course' => $course ? [
+                'id'    => $course->id,
+                'title' => $course->title,
+                'slug'  => $course->slug,
+            ] : ($courseId ? ['id' => (int) $courseId, 'title' => null, 'slug' => null] : null),
+
+            'learning_path' => $lp,
+
+            // Legacy nested payloads (backward compatible)
+            'user'         => UserResource::make($this->whenLoaded('user')),
+            'course_title' => $course?->title,
+        ];
+    }
+}

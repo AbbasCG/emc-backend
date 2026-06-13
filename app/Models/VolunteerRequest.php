@@ -5,7 +5,6 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Support\Facades\Storage;
 
 class VolunteerRequest extends Model
 {
@@ -57,15 +56,32 @@ class VolunteerRequest extends Model
 
     public function getCvFileUrlAttribute(): ?string
     {
-        if (! $this->cv_file_path) {
-            return null;
-        }
+        // Direct public storage URLs are intentionally not exposed.
+        // Admin API returns signed download URLs via VolunteerRequestResource.
+        return null;
+    }
 
-        return Storage::disk('public')->url($this->cv_file_path);
+    public function cvStoragePath(): ?string
+    {
+        $path = $this->cv_file_path;
+
+        return $path && trim($path) !== '' ? $path : null;
     }
 
     public static function allowedStatuses(): array
     {
-        return ['pending', 'reviewed', 'accepted', 'rejected', 'contacted'];
+        return ['pending', 'reviewing', 'reviewed', 'accepted', 'rejected', 'contacted'];
+    }
+
+    /** Normalize legacy/alternate status values before persistence. */
+    public static function normalizeStatus(string $status): string
+    {
+        $status = strtolower(trim($status));
+
+        return match ($status) {
+            'reviewing' => 'reviewing',
+            'reviewed'  => 'reviewed',
+            default     => $status,
+        };
     }
 }

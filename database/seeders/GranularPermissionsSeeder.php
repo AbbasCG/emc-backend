@@ -437,12 +437,6 @@ class GranularPermissionsSeeder extends Seeder
                 Permissions::COURSES_VIEW,
             ],
 
-            'teacher' => [
-                Permissions::ATTENDANCE_VIEW, Permissions::ATTENDANCE_MARK, Permissions::ATTENDANCE_UPDATE,
-                Permissions::ASSIGNMENTS_VIEW, Permissions::ASSIGNMENTS_CREATE, Permissions::ASSIGNMENTS_REVIEW,
-                Permissions::COURSES_VIEW,
-            ],
-
             'student' => [
                 Permissions::WR_VIEW_OWN, Permissions::WR_CREATE,
                 Permissions::COURSES_VIEW, Permissions::ATTENDANCE_VIEW, Permissions::ASSIGNMENTS_VIEW,

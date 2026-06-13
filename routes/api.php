@@ -181,6 +181,10 @@ Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(fu
         Route::get('/learn/{courseId}',           [\App\Http\Controllers\Student\StudentLearnController::class, 'show']);
     });
 
+    // ── Course notes (private per student per course) ─────────────────────────
+    Route::get('/courses/{courseId}/notes', [\App\Http\Controllers\Student\StudentNoteController::class, 'show']);
+    Route::put('/courses/{courseId}/notes', [\App\Http\Controllers\Student\StudentNoteController::class, 'upsert']);
+
     // ── Placement test ───────────────────────────────────────────────────────
     Route::get( '/courses/{course}/placement-test/status', [StudentPlacementTestController::class, 'status']);
     Route::get( '/courses/{course}/placement-test/result', [StudentPlacementTestController::class, 'result']);
@@ -261,8 +265,8 @@ Route::prefix('partner')->middleware(['auth:sanctum', 'role:partner,admin'])->gr
     Route::post('/documents',[PartnerDocumentController::class, 'store']);
 });
 
-// ─── Instructor LMS portal (auth:sanctum + role:teacher,admin) ──────────────
-Route::prefix('instructor')->middleware(['auth:sanctum', 'role:teacher,admin'])->group(function () {
+// ─── Instructor LMS portal (auth:sanctum + role:instructor,admin) ───────────
+Route::prefix('instructor')->middleware(['auth:sanctum', 'role:instructor,admin'])->group(function () {
     Route::get('/dashboard',   InstructorDashboardController::class);
     Route::get('/sessions',    [InstructorSessionController::class, 'index']);
     Route::get('/courses',     [InstructorCourseController::class, 'index']);
@@ -330,6 +334,7 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:teacher,admin'])-
     Route::post(  '/learning-paths/{id}/items',                         [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'addItem']);
     Route::delete('/learning-paths/{id}/items/{item}',                  [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'removeItem']);
     Route::get(   '/learning-paths/{id}/students',                      [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'students']);
+    Route::get(   '/learning-paths/{id}/sessions',                      [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'sessions']);
 
     // ── Course content: flat routes (PUT /instructor/modules|sessions|…/{id}) ──
     Route::put('/modules/{module}',                                      [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateModule']);
@@ -357,13 +362,20 @@ Route::middleware('optional.sanctum')->group(function () {
     Route::get('/workshops/{slug}', [\App\Http\Controllers\Public\WorkshopController::class, 'show']);
 });
 
+// ─── Public: Programs aggregation (courses + workshops + learning paths) ────────
+Route::middleware('optional.sanctum')->group(function () {
+    Route::get('/programs', [\App\Http\Controllers\Public\PublicProgramsController::class, 'index']);
+});
+
 // ─── Public: Courses ─────────────────────────────────────────────────────────
 Route::get('/courses',        [CourseController::class, 'index']);
 Route::get('/courses/{slug}', [CourseController::class, 'show']);
 
 // ─── Public: Instructors ─────────────────────────────────────────────────────
-Route::get('/instructors',       [InstructorController::class, 'index']);
-Route::get('/instructors/{id}',  [InstructorController::class, 'show']);
+Route::get('/instructors',              [InstructorController::class, 'index']);
+Route::get('/instructors/slug/{slug}', [InstructorController::class, 'showBySlug']);
+Route::get('/instructors/{identifier}', [InstructorController::class, 'show'])
+    ->where('identifier', '[^/]+');
 
 // ─── Course Registration (throttle:registration — 5 req/min per IP) ──────────
 // optional.sanctum: Bearer token links registration to user_id when logged in
@@ -460,6 +472,16 @@ Route::post('/partnership-requests', [PublicPartnershipRequestController::class,
 // ─── Public: Volunteer requests (throttle:workshop — 5 req/min per IP) ────────
 Route::post('/volunteer-requests', [PublicVolunteerRequestController::class, 'store'])
     ->middleware('throttle:workshop');
+
+// Signed CV download — URL issued only via authenticated admin volunteer-request APIs
+Route::get('admin/volunteer-requests/{volunteerRequest}/cv', [AdminVolunteerRequestController::class, 'downloadCv'])
+    ->middleware('signed')
+    ->name('admin.volunteer-requests.cv');
+
+// Signed CV inline view
+Route::get('admin/volunteer-requests/{volunteerRequest}/cv/view', [AdminVolunteerRequestController::class, 'viewCv'])
+    ->middleware('signed')
+    ->name('admin.volunteer-requests.cv.view');
 
 // ─── Public: Support tickets ─────────────────────────────────────────────────
 Route::post('/support-tickets', [PublicSupportTicketController::class, 'store'])

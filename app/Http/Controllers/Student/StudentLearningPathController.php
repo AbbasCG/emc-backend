@@ -63,14 +63,15 @@ class StudentLearningPathController extends Controller
 
                 if (! $alreadyRegistered) {
                     Registration::create([
-                        'course_id' => $course->id,
-                        'user_id'   => $userId,
-                        'full_name' => $user->name,
-                        'email'     => $user->email,
-                        'phone'     => $user->phone ?? null,
-                        'city'      => $user->city ?? null,
-                        'country'   => $user->country ?? null,
-                        'status'    => RegistrationStatus::REGISTERED->value,
+                        'course_id'        => $course->id,
+                        'user_id'          => $userId,
+                        'learning_path_id' => $path->id,
+                        'full_name'        => $user->name,
+                        'email'            => $user->email,
+                        'phone'            => $user->phone ?? null,
+                        'city'             => $user->city ?? null,
+                        'country'          => $user->country ?? null,
+                        'status'           => RegistrationStatus::REGISTERED->value,
                     ]);
                 }
             } catch (\Throwable) {

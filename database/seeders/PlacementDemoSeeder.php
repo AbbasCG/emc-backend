@@ -39,7 +39,7 @@ class PlacementDemoSeeder extends Seeder
             [
                 'name'     => 'English Instructor',
                 'password' => Hash::make('password'),
-                'role'     => 'teacher',
+                'role'     => 'instructor',
                 'is_active'=> true,
             ]
         );

@@ -10,6 +10,8 @@ use App\Models\VolunteerRequest;
 use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AdminVolunteerRequestController extends Controller
 {
@@ -58,12 +60,17 @@ class AdminVolunteerRequestController extends Controller
             'admin_notes' => 'nullable|string',
         ]);
 
-        $volunteerRequest->update([
-            'status'      => $data['status'],
-            'admin_notes' => $data['admin_notes'] ?? $volunteerRequest->admin_notes,
+        $updates = [
+            'status'      => VolunteerRequest::normalizeStatus($data['status']),
             'reviewed_by' => $request->user()->id,
             'reviewed_at' => now(),
-        ]);
+        ];
+
+        if (array_key_exists('admin_notes', $data)) {
+            $updates['admin_notes'] = $data['admin_notes'];
+        }
+
+        $volunteerRequest->update($updates);
 
         $fresh = $volunteerRequest->fresh()->load('reviewer');
 
@@ -74,6 +81,41 @@ class AdminVolunteerRequestController extends Controller
             // Tells the frontend it can offer the "Convert to member" action
             'can_convert_to_member' => $fresh->status === 'accepted' && $fresh->converted_to_member_at === null,
         ]);
+    }
+
+    // GET /api/admin/volunteer-requests/{id}/cv  (signed URL — forces download)
+    public function downloadCv(Request $request, VolunteerRequest $volunteerRequest): StreamedResponse|JsonResponse
+    {
+        $path = $volunteerRequest->cvStoragePath();
+
+        if (! $path || ! Storage::disk('public')->exists($path)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'CV file not found.',
+            ], 404);
+        }
+
+        $filename = basename($path);
+        if (! str_contains($filename, '.')) {
+            $filename .= '.pdf';
+        }
+
+        return Storage::disk('public')->download($path, $filename);
+    }
+
+    // GET /api/admin/volunteer-requests/{id}/cv/view  (signed URL — inline view)
+    public function viewCv(Request $request, VolunteerRequest $volunteerRequest): StreamedResponse|JsonResponse
+    {
+        $path = $volunteerRequest->cvStoragePath();
+
+        if (! $path || ! Storage::disk('public')->exists($path)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'CV file not found.',
+            ], 404);
+        }
+
+        return Storage::disk('public')->response($path);
     }
 
     // POST /api/admin/volunteer-requests/{id}/convert-to-member

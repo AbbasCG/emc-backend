@@ -4,12 +4,17 @@ namespace App\Policies;
 
 use App\Models\AssignmentSubmission;
 use App\Models\User;
+use App\Services\InstructorSubmissionScopeService;
 
 class AssignmentSubmissionPolicy
 {
+    public function __construct(
+        private readonly InstructorSubmissionScopeService $scope,
+    ) {}
+
     public function review(User $user, AssignmentSubmission $submission): bool
     {
-        if ($user->isAdmin()) {
+        if ($user->isAdmin() || $user->isSuperAdmin()) {
             return true;
         }
 
@@ -17,16 +22,11 @@ class AssignmentSubmissionPolicy
             return false;
         }
 
-        $assignment = $submission->assignment;
-        $courseId = $assignment->course_id ?? $assignment->workshop?->course_id;
         $profile = $user->instructorProfile;
-
-        if (! $courseId || ! $profile) {
-            return true;
+        if (! $profile) {
+            return false;
         }
 
-        $course = \App\Models\Course::query()->find($courseId);
-
-        return $course && (int) $course->instructor_id === (int) $profile->id;
+        return $this->scope->instructorOwnsSubmission($profile, $submission);
     }
 }

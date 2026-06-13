@@ -10,6 +10,7 @@ use App\Models\VolunteerRequest;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
 use Tests\TestCase;
 
 class VolunteerRequestTest extends TestCase
@@ -273,6 +274,84 @@ class VolunteerRequestTest extends TestCase
         $this->assertSame('accepted', $row->status);
         $this->assertSame($admin->id, $row->reviewed_by);
         $this->assertNotNull($row->reviewed_at);
+    }
+
+    public function test_admin_can_set_reviewing_status(): void
+    {
+        $admin = $this->makeAdmin();
+        $vr    = VolunteerRequest::create(array_merge($this->validPayload(['agree_terms' => null]), ['status' => 'pending']));
+
+        $this->actingAs($admin, 'sanctum')
+            ->patchJson("/api/admin/volunteer-requests/{$vr->id}/status", ['status' => 'reviewing'])
+            ->assertOk()
+            ->assertJsonPath('data.status', 'reviewing');
+    }
+
+    public function test_admin_list_includes_cv_url_and_required_fields(): void
+    {
+        Storage::fake('public');
+
+        $admin = $this->makeAdmin();
+        $path  = 'volunteer-cvs/cv_test.pdf';
+        Storage::disk('public')->put($path, 'dummy pdf');
+
+        VolunteerRequest::create(array_merge($this->validPayload(['agree_terms' => null]), [
+            'status'       => 'pending',
+            'cv_file_path' => $path,
+            'admin_notes'  => 'Needs follow-up',
+        ]));
+
+        $response = $this->actingAs($admin, 'sanctum')
+            ->getJson('/api/admin/volunteer-requests')
+            ->assertOk();
+
+        $row = collect($response->json('data.data'))->first();
+        $this->assertNotNull($row);
+        $this->assertArrayHasKey('cv_url', $row);
+        $this->assertArrayHasKey('cv_file_url', $row);
+        $this->assertNotNull($row['cv_url']);
+        $this->assertSame($row['cv_url'], $row['cv_file_url']);
+        $this->assertSame('Needs follow-up', $row['admin_notes']);
+    }
+
+    public function test_signed_cv_download_works_for_admin_issued_url(): void
+    {
+        Storage::fake('public');
+
+        $admin = $this->makeAdmin();
+        $path  = 'volunteer-cvs/cv_signed.pdf';
+        Storage::disk('public')->put($path, 'signed pdf content');
+
+        $vr = VolunteerRequest::create(array_merge($this->validPayload(['agree_terms' => null]), [
+            'status'       => 'pending',
+            'cv_file_path' => $path,
+        ]));
+
+        $url = URL::temporarySignedRoute(
+            'admin.volunteer-requests.cv',
+            now()->addHour(),
+            ['volunteerRequest' => $vr->id],
+        );
+
+        $this->get($url)
+            ->assertOk()
+            ->assertHeader('content-disposition');
+    }
+
+    public function test_unsigned_cv_download_is_rejected(): void
+    {
+        Storage::fake('public');
+
+        $path = 'volunteer-cvs/cv_unsigned.pdf';
+        Storage::disk('public')->put($path, 'content');
+
+        $vr = VolunteerRequest::create(array_merge($this->validPayload(['agree_terms' => null]), [
+            'status'       => 'pending',
+            'cv_file_path' => $path,
+        ]));
+
+        $this->get("/api/admin/volunteer-requests/{$vr->id}/cv")
+            ->assertForbidden();
     }
 
     public function test_invalid_status_value_is_rejected(): void

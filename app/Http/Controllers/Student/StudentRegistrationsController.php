@@ -99,7 +99,7 @@ class StudentRegistrationsController extends Controller
         $user = $request->user();
 
         $registrations = Registration::query()
-            ->with(['course.track', 'course.instructor.user', 'payments'])
+            ->with(['course.track', 'course.instructor.user', 'payments', 'learningPath:id,title'])
             ->where(function ($q) use ($user) {
                 $q->where('user_id', $user->id)
                   ->orWhere('email', $user->email);
@@ -192,6 +192,10 @@ class StudentRegistrationsController extends Controller
                     'status'                          => $p->status,
                 ] : null,
                 'certificate_status'       => $certificateMap->get($reg->course_id)?->status ?? null,
+                // Access source — 'learning_path' when enrolled via a path, 'direct' otherwise
+                'access_source'            => $reg->learning_path_id ? 'learning_path' : 'direct',
+                'learning_path_id'         => $reg->learning_path_id,
+                'learning_path_title'      => $reg->learningPath?->title,
                 // Placement fields
                 'requires_placement_test' => $requiresPlacement,
                 'placement_progress'      => $placementProgress,

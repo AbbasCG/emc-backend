@@ -4,11 +4,15 @@ namespace App\Http\Resources;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Facades\URL;
 
 class VolunteerRequestResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
+        $cvDownloadUrl = $this->signedCvUrl('admin.volunteer-requests.cv');
+        $cvViewUrl     = $this->signedCvUrl('admin.volunteer-requests.cv.view');
+
         return [
             'id'                  => $this->id,
             'full_name'           => $this->full_name,
@@ -23,7 +27,10 @@ class VolunteerRequestResource extends JsonResource
             'availability'        => $this->availability,
             'motivation'          => $this->motivation,
             'previous_experience' => $this->previous_experience,
-            'cv_file_url'         => $this->cv_file_url,
+            'cv_url'              => $cvDownloadUrl,
+            'cv_file_url'         => $cvDownloadUrl,
+            'cv_download_url'     => $cvDownloadUrl,
+            'cv_view_url'         => $cvViewUrl,
             'notes'               => $this->notes,
             'status'              => $this->status,
             'admin_notes'         => $this->admin_notes,
@@ -38,5 +45,18 @@ class VolunteerRequestResource extends JsonResource
             'created_at'              => $this->created_at,
             'updated_at'              => $this->updated_at,
         ];
+    }
+
+    private function signedCvUrl(string $routeName): ?string
+    {
+        if (! $this->cvStoragePath()) {
+            return null;
+        }
+
+        return URL::temporarySignedRoute(
+            $routeName,
+            now()->addHours(2),
+            ['volunteerRequest' => $this->id],
+        );
     }
 }

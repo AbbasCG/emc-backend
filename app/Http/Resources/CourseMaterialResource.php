@@ -9,6 +9,8 @@ class CourseMaterialResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
+        $downloadUrl = $this->file_path ? url('/api/materials/' . $this->id . '/download') : null;
+
         return [
             'id'                => $this->id,
             'course_id'         => $this->course_id,
@@ -16,13 +18,15 @@ class CourseMaterialResource extends JsonResource
             'course_session_id' => $this->course_session_id,
             'title'             => $this->title,
             'description'       => $this->description,
+            'kind'              => $this->type,
             'type'              => $this->type,
-            'download_url'      => $this->file_path ? url('/api/materials/' . $this->id . '/download') : null,
+            'file_url'          => $downloadUrl,
+            'download_url'      => $downloadUrl,
             'external_url'      => $this->external_url,
             'sort_order'        => $this->sort_order,
             'is_visible'        => $this->is_visible,
-            'created_at'        => $this->created_at,
-            'updated_at'        => $this->updated_at,
+            'created_at'        => $this->created_at?->toIso8601String(),
+            'updated_at'        => $this->updated_at?->toIso8601String(),
         ];
     }
 }

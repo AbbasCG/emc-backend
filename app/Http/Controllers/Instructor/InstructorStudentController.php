@@ -87,23 +87,30 @@ class InstructorStudentController extends Controller
 
             $progress = $this->placement->progress($attempt, $booking, $requiresPlacement);
 
-            return [
-                'student_id'         => $reg->user_id,
-                'student_name'       => $reg->user?->name ?? $reg->full_name,
-                'student_email'      => $reg->user?->email ?? $reg->email,
-                'student_phone'      => $reg->user?->phone ?? $reg->phone,
-                'course_id'          => $reg->course_id,
-                'course_title'       => $course?->title,
-                'enrollment_status'  => strtolower($reg->status),
-                // Flat fields so frontend normalizers work without placement_progress nesting
-                'placement_status'   => $progress ? $progress['status'] : null,
-                'written_score'      => $progress ? ($progress['written_test']['score'] ?? null) : null,
-                'total_questions'    => $progress ? ($progress['written_test']['total_questions'] ?? null) : null,
-                'written_level'      => $progress ? ($progress['written_test']['estimated_level'] ?? null) : null,
-                'oral_booking_at'    => $progress ? ($progress['oral_assessment']['starts_at'] ?? null) : null,
-                'final_level'        => $progress ? ($progress['oral_assessment']['final_level'] ?? null) : null,
-                'placement_progress' => $progress,
+            $base = [
+                'student_id'              => $reg->user_id,
+                'student_name'            => $reg->user?->name ?? $reg->full_name,
+                'student_email'           => $reg->user?->email ?? $reg->email,
+                'student_phone'           => $reg->user?->phone ?? $reg->phone,
+                'course_id'               => $reg->course_id,
+                'course_title'            => $course?->title,
+                'requires_placement_test' => $requiresPlacement,
+                'enrollment_status'       => strtolower($reg->status),
             ];
+
+            // Placement keys are only included when the course actually requires the test.
+            // Omitting them entirely prevents the frontend panel from appearing on normal courses.
+            if ($requiresPlacement) {
+                $base['placement_status']   = $progress ? $progress['status'] : null;
+                $base['written_score']      = $progress ? ($progress['written_test']['score'] ?? null) : null;
+                $base['total_questions']    = $progress ? ($progress['written_test']['total_questions'] ?? null) : null;
+                $base['written_level']      = $progress ? ($progress['written_test']['estimated_level'] ?? null) : null;
+                $base['oral_booking_at']    = $progress ? ($progress['oral_assessment']['starts_at'] ?? null) : null;
+                $base['final_level']        = $progress ? ($progress['oral_assessment']['final_level'] ?? null) : null;
+                $base['placement_progress'] = $progress;
+            }
+
+            return $base;
         })->values();
 
         $statusCounts = array_fill_keys([
@@ -115,6 +122,8 @@ class InstructorStudentController extends Controller
             PlacementProgressService::STATUS_COMPLETED,
         ], 0);
         foreach ($data as $row) {
+            // Only tally placement status for courses that require the placement test.
+            if (! ($row['requires_placement_test'] ?? false)) continue;
             $key = $row['placement_progress']['status'] ?? null;
             if ($key && isset($statusCounts[$key])) {
                 $statusCounts[$key]++;

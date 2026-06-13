@@ -15,6 +15,7 @@ class Registration extends Model
         'user_id',
         'track_id',
         'workshop_id',
+        'learning_path_id',
         'full_name',
         'phone',
         'email',
@@ -45,6 +46,11 @@ class Registration extends Model
     public function workshop()
     {
         return $this->belongsTo(Workshop::class);
+    }
+
+    public function learningPath()
+    {
+        return $this->belongsTo(LearningPath::class);
     }
 
     public function payments()

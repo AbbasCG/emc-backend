@@ -36,7 +36,15 @@ class AdminUserController extends Controller
         };
 
         $query
-            ->when($request->role, fn ($q) => $q->where('role', $request->role))
+            ->when($request->role, function ($q) use ($request) {
+                $role = $request->role;
+                // 'instructor' and 'teacher' are the same canonical role — match both.
+                if ($role === 'instructor') {
+                    $q->whereIn('role', ['instructor', 'teacher']);
+                } else {
+                    $q->where('role', $role);
+                }
+            })
             ->when($request->search, function ($q) use ($request) {
                 $q->where(function ($sub) use ($request) {
                     $sub->where('name', 'like', "%{$request->search}%")
