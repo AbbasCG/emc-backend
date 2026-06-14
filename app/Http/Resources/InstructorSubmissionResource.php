@@ -20,6 +20,7 @@ class InstructorSubmissionResource extends JsonResource
     {
         $assignment = $this->relationLoaded('assignment') ? $this->assignment : null;
         $course     = $assignment?->relationLoaded('course') ? $assignment->course : null;
+        $workshop   = $assignment?->relationLoaded('workshop') ? $assignment->workshop : null;
         $user       = $this->relationLoaded('user') ? $this->user : null;
 
         $courseId = $course?->id ?? $assignment?->course_id ?? $assignment?->workshop?->course_id;
@@ -60,7 +61,7 @@ class InstructorSubmissionResource extends JsonResource
             // Flat aliases consumed by the frontend normalizer
             'student_name'     => $studentName,
             'assignment_title' => $assignment?->title ?? '',
-            'course_name'      => $course?->title,
+            'course_name'      => $course?->title ?? $workshop?->title,
 
             'student' => [
                 'id'     => $this->user_id,
@@ -82,7 +83,15 @@ class InstructorSubmissionResource extends JsonResource
                 'slug'  => $course->slug,
             ] : ($courseId ? ['id' => (int) $courseId, 'title' => null, 'slug' => null] : null),
 
+            'workshop' => $workshop ? [
+                'id'    => $workshop->id,
+                'title' => $workshop->title ?? null,
+                'slug'  => $workshop->slug  ?? null,
+            ] : ($assignment?->workshop_id ? ['id' => $assignment->workshop_id, 'title' => null, 'slug' => null] : null),
+
             'learning_path' => $lp,
+            'reviewed_at'   => null,
+            'reviewed_by'   => null,
 
             // Legacy nested payloads (backward compatible)
             'user'         => UserResource::make($this->whenLoaded('user')),

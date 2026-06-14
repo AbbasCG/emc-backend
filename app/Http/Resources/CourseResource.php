@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Support\CourseDisplay;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -74,9 +75,18 @@ class CourseResource extends JsonResource
             ),
 
             // Meta
-            'duration'              => $this->duration,
-            // No duration_unit column yet — null keeps the key present for frontend safety
-            'duration_unit'         => null,
+            'duration'              => CourseDisplay::resolvedDuration(
+                $this->program_type,
+                $this->session_format,
+                $this->duration
+            ),
+            'duration_value'        => CourseDisplay::isOneSession($this->program_type, $this->session_format) ? 1 : null,
+            'duration_unit'         => CourseDisplay::isOneSession($this->program_type, $this->session_format) ? 'day' : null,
+            'computed_duration_label' => CourseDisplay::resolvedDuration(
+                $this->program_type,
+                $this->session_format,
+                $this->duration
+            ),
             'training_hours'        => $this->training_hours,
             'target_audience'       => $this->target_audience,
             'language'              => $this->language,

@@ -17,6 +17,8 @@ use App\Support\PaymentStatuses;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use Throwable;
 
 class AdminController extends Controller
@@ -92,6 +94,16 @@ class AdminController extends Controller
             $query->whereDate('created_at', '<=', $request->query('date_to'));
         }
 
+        // has_account filter: 1 = linked account (user_id IS NOT NULL), 0 = guest (user_id IS NULL)
+        if ($request->filled('has_account')) {
+            $val = (string) $request->query('has_account');
+            if ($val === '1' || $val === 'true' || $val === 'linked') {
+                $query->whereNotNull('user_id');
+            } elseif ($val === '0' || $val === 'false' || $val === 'guest') {
+                $query->whereNull('user_id');
+            }
+        }
+
         $registrations = $query->latest()->paginate($perPage);
 
         return RegistrationResource::collection($registrations)
@@ -161,5 +173,85 @@ class AdminController extends Controller
                 'message' => 'Registration status updated successfully',
             ])
             ->response();
+    }
+
+    /**
+     * POST /api/admin/registrations/{registration}/create-account
+     *
+     * Creates a user account from a guest registration (user_id = null).
+     * If a user with the same email already exists, links them without creating a duplicate.
+     */
+    public function createAccountForRegistration(Request $request, Registration $registration): JsonResponse
+    {
+        if ($registration->user_id) {
+            $registration->load('user');
+            return response()->json([
+                'success' => false,
+                'message' => 'هذا التسجيل مرتبط بحساب مستخدم بالفعل.',
+                'data'    => ['user_id' => $registration->user_id],
+            ], 409);
+        }
+
+        if (! $registration->email) {
+            return response()->json([
+                'success' => false,
+                'message' => 'لا يوجد بريد إلكتروني في التسجيل — لا يمكن إنشاء حساب.',
+            ], 422);
+        }
+
+        // Reuse an existing user with the same email instead of creating a duplicate.
+        $existing = User::where('email', $registration->email)->first();
+        if ($existing) {
+            $registration->update(['user_id' => $existing->id]);
+            $registration->load(['course.track', 'course.instructor', 'user', 'payments']);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'تم ربط الحساب الموجود بهذا التسجيل.',
+                'data'    => [
+                    'user_id'  => $existing->id,
+                    'created'  => false,
+                    'linked'   => true,
+                    'registration' => new RegistrationResource($registration),
+                ],
+            ]);
+        }
+
+        // Create a new student account.
+        $tempPassword = Str::random(12);
+        $user = User::create([
+            'name'                 => $registration->full_name ?? 'مستخدم جديد',
+            'email'                => $registration->email,
+            'password'             => Hash::make($tempPassword),
+            'role'                 => 'student',
+            'phone'                => $registration->phone,
+            'is_active'            => true,
+            'must_change_password' => true,
+        ]);
+
+        $registration->update(['user_id' => $user->id]);
+        $registration->load(['course.track', 'course.instructor', 'user', 'payments']);
+
+        AuditLogService::log(
+            'account_created_from_registration',
+            'Registration',
+            $registration->id,
+            $registration->full_name,
+            [],
+            ['user_id' => $user->id, 'email' => $user->email],
+            null,
+            $request
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم إنشاء الحساب وربطه بالتسجيل.',
+            'data'    => [
+                'user_id'      => $user->id,
+                'created'      => true,
+                'linked'       => false,
+                'registration' => new RegistrationResource($registration),
+            ],
+        ], 201);
     }
 }

@@ -7,11 +7,13 @@ use App\Http\Resources\CourseAssignmentResource;
 use App\Http\Resources\CourseMaterialResource;
 use App\Http\Resources\CourseModuleResource;
 use App\Http\Resources\CourseSessionResource;
+use App\Http\Resources\LessonResource;
 use App\Models\Course;
 use App\Models\CourseAssignment;
 use App\Models\CourseMaterial;
 use App\Models\CourseModule;
 use App\Models\CourseSession;
+use App\Models\Lesson;
 use App\Services\CourseAssignmentBridgeService;
 use App\Services\NotificationService;
 use Illuminate\Database\Eloquent\Model;
@@ -21,6 +23,75 @@ use Illuminate\Support\Facades\Storage;
 
 class InstructorCourseContentController extends Controller
 {
+    // ─── Individual content-type GET indexes ─────────────────────────────────
+
+    /**
+     * GET /api/instructor/courses/{course}/modules
+     */
+    public function indexModules(Request $request, Course $course): JsonResponse
+    {
+        $this->authorise($request, $course);
+
+        $course->load([
+            'modules' => fn ($q) => $q->orderBy('sort_order')->with([
+                'sessions'          => fn ($s) => $s->orderBy('sort_order'),
+                'materials'         => fn ($m) => $m->orderBy('sort_order'),
+                'courseAssignments' => fn ($a) => $a->orderBy('sort_order'),
+                'lessons',
+            ]),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'data'    => CourseModuleResource::collection($course->modules),
+        ]);
+    }
+
+    /**
+     * GET /api/instructor/courses/{course}/sessions
+     */
+    public function indexSessions(Request $request, Course $course): JsonResponse
+    {
+        $this->authorise($request, $course);
+
+        return response()->json([
+            'success' => true,
+            'data'    => CourseSessionResource::collection(
+                $course->courseSessions()->orderBy('sort_order')->get()
+            ),
+        ]);
+    }
+
+    /**
+     * GET /api/instructor/courses/{course}/materials
+     */
+    public function indexMaterials(Request $request, Course $course): JsonResponse
+    {
+        $this->authorise($request, $course);
+
+        return response()->json([
+            'success' => true,
+            'data'    => CourseMaterialResource::collection(
+                $course->materials()->orderBy('sort_order')->get()
+            ),
+        ]);
+    }
+
+    /**
+     * GET /api/instructor/courses/{course}/assignments
+     */
+    public function indexAssignments(Request $request, Course $course): JsonResponse
+    {
+        $this->authorise($request, $course);
+
+        return response()->json([
+            'success' => true,
+            'data'    => CourseAssignmentResource::collection(
+                $course->courseAssignments()->orderBy('sort_order')->get()
+            ),
+        ]);
+    }
+
     // ─── Full content tree ────────────────────────────────────────────────────
 
     public function content(Request $request, Course $course): JsonResponse
@@ -30,7 +101,8 @@ class InstructorCourseContentController extends Controller
         $course->load([
             'instructor.user',
             'modules' => fn ($q) => $q->orderBy('sort_order')->with([
-                'sessions'          => fn ($s) => $s->orderBy('sort_order')->with('materials', 'assignments'),
+                'lessons'           => fn ($l) => $l->orderBy('sort_order'),
+                'sessions'          => fn ($s) => $s->orderBy('sort_order'),
                 'materials'         => fn ($m) => $m->orderBy('sort_order'),
                 'courseAssignments' => fn ($a) => $a->orderBy('sort_order'),
             ]),
@@ -53,13 +125,13 @@ class InstructorCourseContentController extends Controller
                 ],
                 'modules'     => CourseModuleResource::collection($course->modules),
                 'sessions'    => CourseSessionResource::collection(
-                    $course->courseSessions()->orderBy('sort_order')->get()
+                    $course->courseSessions()->whereNull('module_id')->orderBy('sort_order')->get()
                 ),
                 'materials'   => CourseMaterialResource::collection(
-                    $course->materials()->orderBy('sort_order')->get()
+                    $course->materials()->whereNull('module_id')->orderBy('sort_order')->get()
                 ),
                 'assignments' => CourseAssignmentResource::collection(
-                    $course->courseAssignments()->orderBy('sort_order')->get()
+                    $course->courseAssignments()->whereNull('module_id')->orderBy('sort_order')->get()
                 ),
             ],
         ]);
@@ -286,6 +358,9 @@ class InstructorCourseContentController extends Controller
         $data['course_id']  = $course->id;
         $data['sort_order'] = $data['sort_order']
             ?? (int) CourseAssignment::where('course_id', $course->id)->max('sort_order') + 1;
+        // Default to published so enrolled students can see newly created assignments immediately.
+        $data['status']     = $data['status'] ?? 'published';
+        $data['is_visible'] = $data['is_visible'] ?? true;
 
         $assignment = CourseAssignment::create($data);
         app(CourseAssignmentBridgeService::class)->ensureLmsAssignment($assignment);
@@ -333,6 +408,61 @@ class InstructorCourseContentController extends Controller
         $this->enforceCourseScope($request, $assignment->course_id);
         $this->authoriseByCourse($request, $assignment->course_id);
         $assignment->delete();
+
+        return response()->json(['success' => true, 'message' => 'تم الحذف بنجاح']);
+    }
+
+    // ─── Lessons ─────────────────────────────────────────────────────────────
+
+    public function storeLesson(Request $request, Course $course): JsonResponse
+    {
+        $this->authorise($request, $course);
+
+        $data = $this->validateLesson($request);
+
+        $moduleId = (int) ($data['module_id'] ?? 0);
+        abort_if(
+            ! CourseModule::where('id', $moduleId)->where('course_id', $course->id)->exists(),
+            422,
+            'الوحدة المحددة لا تنتمي إلى هذه الدورة.'
+        );
+
+        $data['sort_order'] = $data['sort_order']
+            ?? (int) Lesson::where('module_id', $moduleId)->max('sort_order') + 1;
+        $data['status'] = $data['status'] ?? 'active';
+
+        $lesson = Lesson::create($data);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم الحفظ بنجاح',
+            'data'    => new LessonResource($lesson),
+        ], 201);
+    }
+
+    public function updateLesson(Request $request): JsonResponse
+    {
+        $lesson = Lesson::with('module')->findOrFail($this->routeId($request, 'lesson'));
+        $this->enforceCourseScope($request, $lesson->module?->course_id);
+        $this->authoriseByCourse($request, $lesson->module?->course_id);
+
+        $data = $this->validateLesson($request, required: false);
+        unset($data['module_id']); // module cannot be changed
+        $lesson->update($data);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم الحفظ بنجاح',
+            'data'    => new LessonResource($lesson->fresh()),
+        ]);
+    }
+
+    public function destroyLesson(Request $request): JsonResponse
+    {
+        $lesson = Lesson::with('module')->findOrFail($this->routeId($request, 'lesson'));
+        $this->enforceCourseScope($request, $lesson->module?->course_id);
+        $this->authoriseByCourse($request, $lesson->module?->course_id);
+        $lesson->delete();
 
         return response()->json(['success' => true, 'message' => 'تم الحذف بنجاح']);
     }
@@ -505,9 +635,23 @@ class InstructorCourseContentController extends Controller
         return $data;
     }
 
-    private function validateAssignment(Request $request, bool $required = true): array
+    private function validateLesson(Request $request, bool $required = true): array
     {
         return $request->validate([
+            'module_id'        => ($required ? 'required' : 'sometimes') . '|exists:course_modules,id',
+            'title'            => ($required ? 'required' : 'sometimes') . '|string|max:255',
+            'description'      => 'nullable|string',
+            'content'          => 'nullable|string',
+            'video_url'        => 'nullable|url|max:500',
+            'duration_minutes' => 'nullable|integer|min:1',
+            'sort_order'       => 'nullable|integer|min:0',
+            'status'           => 'nullable|in:active,inactive,draft',
+        ]);
+    }
+
+    private function validateAssignment(Request $request, bool $required = true): array
+    {
+        $data = $request->validate([
             'module_id'         => 'nullable|exists:course_modules,id',
             'course_session_id' => 'nullable|exists:course_sessions,id',
             'title'             => ($required ? 'required' : 'sometimes') . '|string|max:255',
@@ -518,8 +662,22 @@ class InstructorCourseContentController extends Controller
             'submission_type'   => 'nullable|in:file,text,url,any,both',
             'is_required'       => 'nullable|boolean',
             'is_visible'        => 'nullable|boolean',
+            // Legacy aliases sent by older frontend clients
+            'visible'           => 'nullable|boolean',
+            'required'          => 'nullable|boolean',
             'status'            => 'nullable|in:draft,published',
             'sort_order'        => 'nullable|integer|min:0',
         ]);
+
+        // Map legacy keys to canonical column names
+        if (!array_key_exists('is_visible', $data) && array_key_exists('visible', $data)) {
+            $data['is_visible'] = $data['visible'];
+        }
+        if (!array_key_exists('is_required', $data) && array_key_exists('required', $data)) {
+            $data['is_required'] = $data['required'];
+        }
+        unset($data['visible'], $data['required']);
+
+        return $data;
     }
 }

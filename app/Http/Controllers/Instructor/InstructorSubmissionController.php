@@ -62,10 +62,10 @@ class InstructorSubmissionController extends Controller
         $perPage = min((int) $request->query('per_page', 25), 100);
 
         $submissions = AssignmentSubmission::with([
-            'user:id,name,email,avatar',
+            'user'              => fn ($q) => $q->withTrashed()->select(['id', 'name', 'email', 'avatar']),
             'assignment:id,title,max_score,due_date,course_id,workshop_id',
-            'assignment.course:id,title,slug,instructor_id',
-            'assignment.workshop:id,course_id',
+            'assignment.course' => fn ($q) => $q->withTrashed()->select(['id', 'title', 'slug', 'instructor_id']),
+            'assignment.workshop' => fn ($q) => $q->withTrashed()->select(['id', 'title', 'slug', 'course_id']),
         ])
             ->whereIn('assignment_id', $assignmentIds)
             ->whereNotNull('submitted_at')
@@ -121,10 +121,10 @@ class InstructorSubmissionController extends Controller
         $assignment->loadMissing(['course:id,title,slug', 'workshop:id,course_id']);
 
         $submissions = AssignmentSubmission::with([
-            'user:id,name,email,avatar',
+            'user'              => fn ($q) => $q->withTrashed()->select(['id', 'name', 'email', 'avatar']),
             'assignment:id,title,max_score,due_date,course_id,workshop_id',
-            'assignment.course:id,title,slug,instructor_id',
-            'assignment.workshop:id,course_id',
+            'assignment.course' => fn ($q) => $q->withTrashed()->select(['id', 'title', 'slug', 'instructor_id']),
+            'assignment.workshop' => fn ($q) => $q->withTrashed()->select(['id', 'title', 'slug', 'course_id']),
         ])
             ->where('assignment_id', $assignment->id)
             ->whereNotNull('submitted_at')
@@ -181,10 +181,10 @@ class InstructorSubmissionController extends Controller
         $this->authorize('review', $submission);
 
         $submission->load([
-            'user:id,name,email,avatar',
+            'user'              => fn ($q) => $q->withTrashed()->select(['id', 'name', 'email', 'avatar']),
             'assignment:id,title,max_score,due_date,course_id,workshop_id',
-            'assignment.course:id,title,slug,instructor_id',
-            'assignment.workshop:id,course_id',
+            'assignment.course' => fn ($q) => $q->withTrashed()->select(['id', 'title', 'slug', 'instructor_id']),
+            'assignment.workshop' => fn ($q) => $q->withTrashed()->select(['id', 'title', 'slug', 'course_id']),
         ]);
 
         $profile  = $request->user()->instructorProfile;
@@ -236,10 +236,10 @@ class InstructorSubmissionController extends Controller
         $progress->syncForUser($submission->user);
 
         $fresh = $submission->fresh()->load([
-            'user:id,name,email,avatar',
+            'user'              => fn ($q) => $q->withTrashed()->select(['id', 'name', 'email', 'avatar']),
             'assignment:id,title,max_score,due_date,course_id,workshop_id',
-            'assignment.course:id,title,slug,instructor_id',
-            'assignment.workshop:id,course_id',
+            'assignment.course' => fn ($q) => $q->withTrashed()->select(['id', 'title', 'slug', 'instructor_id']),
+            'assignment.workshop' => fn ($q) => $q->withTrashed()->select(['id', 'title', 'slug', 'course_id']),
         ]);
 
         $student    = $fresh->user;

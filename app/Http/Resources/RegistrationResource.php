@@ -12,6 +12,8 @@ class RegistrationResource extends JsonResource
         return [
             'id'            => $this->id,
             'user_id'       => $this->user_id,
+            // Explicit boolean — never send "NULL" as a string to the frontend.
+            'has_account'   => $this->user_id !== null,
             'course_id'     => $this->course_id,
             'course_title'  => $this->whenLoaded('course', fn () => $this->course?->title),
             'course_slug'   => $this->whenLoaded('course', fn () => $this->course?->slug),

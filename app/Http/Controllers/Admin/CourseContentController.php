@@ -7,11 +7,13 @@ use App\Http\Resources\CourseAssignmentResource;
 use App\Http\Resources\CourseMaterialResource;
 use App\Http\Resources\CourseModuleResource;
 use App\Http\Resources\CourseSessionResource;
+use App\Http\Resources\LessonResource;
 use App\Models\Course;
 use App\Models\CourseAssignment;
 use App\Models\CourseMaterial;
 use App\Models\CourseModule;
 use App\Models\CourseSession;
+use App\Models\Lesson;
 use App\Services\AuditLogService;
 use App\Services\CourseAssignmentBridgeService;
 use Illuminate\Http\JsonResponse;
@@ -27,7 +29,8 @@ class CourseContentController extends Controller
         $course->load([
             'instructor.user',
             'modules' => fn ($q) => $q->orderBy('sort_order')->with([
-                'sessions'          => fn ($s) => $s->orderBy('sort_order')->with('materials', 'assignments'),
+                'lessons'           => fn ($l) => $l->orderBy('sort_order'),
+                'sessions'          => fn ($s) => $s->orderBy('sort_order'),
                 'materials'         => fn ($m) => $m->orderBy('sort_order'),
                 'courseAssignments' => fn ($a) => $a->orderBy('sort_order'),
             ]),
@@ -50,13 +53,13 @@ class CourseContentController extends Controller
                 ],
                 'modules'     => CourseModuleResource::collection($course->modules),
                 'sessions'    => CourseSessionResource::collection(
-                    $course->courseSessions()->orderBy('sort_order')->get()
+                    $course->courseSessions()->whereNull('module_id')->orderBy('sort_order')->get()
                 ),
                 'materials'   => CourseMaterialResource::collection(
-                    $course->materials()->orderBy('sort_order')->get()
+                    $course->materials()->whereNull('module_id')->orderBy('sort_order')->get()
                 ),
                 'assignments' => CourseAssignmentResource::collection(
-                    $course->courseAssignments()->orderBy('sort_order')->get()
+                    $course->courseAssignments()->whereNull('module_id')->orderBy('sort_order')->get()
                 ),
             ],
         ]);
@@ -285,6 +288,57 @@ class CourseContentController extends Controller
         return response()->json(['success' => true, 'message' => 'تم الحذف بنجاح']);
     }
 
+    // ─── Lessons — nested (POST /admin/courses/{course}/lessons) ─────────────
+
+    public function storeLesson(Request $request, Course $course): JsonResponse
+    {
+        $data = $this->validateLesson($request);
+
+        $moduleId = (int) ($data['module_id'] ?? 0);
+        abort_if(
+            ! CourseModule::where('id', $moduleId)->where('course_id', $course->id)->exists(),
+            422,
+            'الوحدة المحددة لا تنتمي إلى هذه الدورة.'
+        );
+
+        $data['sort_order'] = $data['sort_order']
+            ?? (int) Lesson::where('module_id', $moduleId)->max('sort_order') + 1;
+        $data['status'] = $data['status'] ?? 'active';
+
+        $lesson = Lesson::create($data);
+        AuditLogService::logModel('created', $lesson, null, null, ['course_id' => $course->id], $request);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم الحفظ بنجاح',
+            'data'    => new LessonResource($lesson),
+        ], 201);
+    }
+
+    public function updateLesson(Request $request, Lesson $lesson): JsonResponse
+    {
+        $data = $this->validateLesson($request, required: false);
+        unset($data['module_id']);
+
+        $old = $lesson->only(['title', 'description', 'video_url', 'duration_minutes', 'sort_order', 'status']);
+        $lesson->update($data);
+        AuditLogService::logModel('updated', $lesson->fresh(), $old, null, null, $request);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم الحفظ بنجاح',
+            'data'    => new LessonResource($lesson->fresh()),
+        ]);
+    }
+
+    public function destroyLesson(Request $request, Lesson $lesson): JsonResponse
+    {
+        AuditLogService::logModel('deleted', $lesson, null, null, ['module_id' => $lesson->module_id], $request);
+        $lesson->delete();
+
+        return response()->json(['success' => true, 'message' => 'تم الحذف بنجاح']);
+    }
+
     // ─── Module reorder ───────────────────────────────────────────────────────
 
     public function reorderModules(Request $request, Course $course): JsonResponse
@@ -364,6 +418,20 @@ class CourseContentController extends Controller
         unset($data['visibility']);
 
         return $data;
+    }
+
+    private function validateLesson(Request $request, bool $required = true): array
+    {
+        return $request->validate([
+            'module_id'        => ($required ? 'required' : 'sometimes') . '|exists:course_modules,id',
+            'title'            => ($required ? 'required' : 'sometimes') . '|string|max:255',
+            'description'      => 'nullable|string',
+            'content'          => 'nullable|string',
+            'video_url'        => 'nullable|url|max:500',
+            'duration_minutes' => 'nullable|integer|min:1',
+            'sort_order'       => 'nullable|integer|min:0',
+            'status'           => 'nullable|in:active,inactive,draft',
+        ]);
     }
 
     private function validateAssignment(Request $request, bool $required = true): array

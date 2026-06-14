@@ -85,27 +85,46 @@ class StudentAssignmentController extends Controller
      * POST /api/student/assignments/{assignment}/submit
      *
      * Submit (or resubmit) an assignment.
-     * Payload: file (optional), text_answer (optional), notes (optional).
+     * Payload: file (optional), text_answer / answer_text (optional), notes (optional).
      */
     public function submit(
         Request $request,
         Assignment $assignment,
+        LmsEnrollmentService $enrollment,
         StudentProgressService $progress,
     ): JsonResponse {
-        $this->authorize('submit', $assignment);
+        $user      = $request->user();
+        $courseIds = $enrollment->enrolledCourseIds($user);
+
+        // Resolve the course this assignment belongs to.
+        $assignment->loadMissing('workshop');
+        $courseId = $assignment->course_id
+            ?? $assignment->workshop?->course_id;
+
+        $accessible = $courseId && $courseIds->contains($courseId);
+
+        if (! $accessible && ! $user->isAdmin() && ! $user->isSuperAdmin()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'غير مصرح لك بالوصول إلى هذا المسار.',
+            ], 403);
+        }
 
         $validated = $request->validate([
             'text_answer' => ['nullable', 'string', 'max:20000'],
             'answer_text' => ['nullable', 'string', 'max:20000'],
             'notes'       => ['nullable', 'string', 'max:5000'],
-            'file'        => ['nullable', 'file', 'max:12288'],
+            'file'        => [
+                'nullable', 'file', 'max:10240',
+                'mimes:pdf,doc,docx,png,jpg,jpeg,webp,zip',
+            ],
         ]);
 
         $textAnswer = $validated['text_answer'] ?? $validated['answer_text'] ?? null;
 
         $existing = AssignmentSubmission::query()
             ->where('assignment_id', $assignment->id)
-            ->where('user_id', $request->user()->id)
+            ->where('user_id', $user->id)
             ->first();
 
         if ($existing?->submitted_at && ! $assignment->resubmission_allowed) {
@@ -127,11 +146,11 @@ class StudentAssignmentController extends Controller
 
         $submissionStatus = AssignmentSubmissionStatus::onSubmit($assignment);
 
-        $submission = DB::transaction(function () use ($request, $assignment, $textAnswer, $validated, $filePath, $existing, $submissionStatus) {
+        $submission = DB::transaction(function () use ($user, $assignment, $textAnswer, $validated, $filePath, $existing, $submissionStatus) {
             return AssignmentSubmission::query()->updateOrCreate(
                 [
                     'assignment_id' => $assignment->id,
-                    'user_id'       => $request->user()->id,
+                    'user_id'       => $user->id,
                 ],
                 [
                     'text_answer'  => $textAnswer ?? $existing?->text_answer,
@@ -145,7 +164,7 @@ class StudentAssignmentController extends Controller
             );
         });
 
-        $progress->syncForUser($request->user());
+        $progress->syncForUser($user);
 
         // Notify the instructor that a submission was received.
         $assignment->loadMissing('course.instructor');
@@ -153,7 +172,7 @@ class StudentAssignmentController extends Controller
         if ($instructorUserId) {
             NotificationService::studentSubmittedAssignment(
                 instructorUserId: $instructorUserId,
-                studentName:      $request->user()->name,
+                studentName:      $user->name,
                 courseTitle:      $assignment->course?->title ?? 'الدورة',
                 assignmentTitle:  $assignment->title,
                 submissionId:     $submission->id,

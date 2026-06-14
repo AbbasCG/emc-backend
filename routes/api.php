@@ -307,8 +307,14 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:instructor,admin'
     Route::post(  '/availability',             [InstructorAvailabilityController::class, 'store']);
     Route::delete('/availability/{slot}',      [InstructorAvailabilityController::class, 'destroy']);
 
-    // ── Course content: nested CRUD (POST /instructor/courses/{course}/…) ────────
+    // ── Course content: individual GET indexes ───────────────────────────────
     Route::get('/courses/{course}/content',                              [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'content']);
+    Route::get('/courses/{course}/modules',                              [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'indexModules']);
+    Route::get('/courses/{course}/sessions',                             [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'indexSessions']);
+    Route::get('/courses/{course}/materials',                            [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'indexMaterials']);
+    Route::get('/courses/{course}/assignments',                          [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'indexAssignments']);
+
+    // ── Course content: nested CRUD (POST /instructor/courses/{course}/…) ────────
     Route::post('/courses/{course}/modules',                             [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'storeModule']);
     Route::post('/courses/{course}/modules/reorder',                     [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'reorderModules']);
     Route::put('/courses/{course}/modules/{module}',                     [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateModule']);
@@ -326,15 +332,18 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:instructor,admin'
     Route::put('/courses/{course}/assignments/{courseAssignment}',       [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateAssignment']);
     Route::patch('/courses/{course}/assignments/{courseAssignment}',     [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateAssignment']);
     Route::delete('/courses/{course}/assignments/{courseAssignment}',    [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'destroyAssignment']);
+    Route::post('/courses/{course}/lessons',                             [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'storeLesson']);
+    Route::put('/courses/{course}/lessons/{lesson}',                     [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateLesson']);
+    Route::patch('/courses/{course}/lessons/{lesson}',                   [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateLesson']);
+    Route::delete('/courses/{course}/lessons/{lesson}',                  [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'destroyLesson']);
 
-    // ── Learning Paths (instructor) ───────────────────────────────────────────
-    Route::get(   '/learning-paths',                                    [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'index']);
-    Route::get(   '/learning-paths/{id}',                               [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'show']);
-    Route::put(   '/learning-paths/{id}/curriculum',                    [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'updateCurriculum']);
-    Route::post(  '/learning-paths/{id}/items',                         [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'addItem']);
-    Route::delete('/learning-paths/{id}/items/{item}',                  [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'removeItem']);
-    Route::get(   '/learning-paths/{id}/students',                      [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'students']);
-    Route::get(   '/learning-paths/{id}/sessions',                      [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'sessions']);
+    // ── Learning Paths (instructor — read-only; course structure is admin-only) ─
+    Route::get('/learning-paths',                          [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'index']);
+    Route::get('/learning-paths/{id}',                     [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'show']);
+    Route::get('/learning-paths/{id}/students',            [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'students']);
+    Route::get('/learning-paths/{id}/sessions',            [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'sessions']);
+    Route::get('/learning-paths/{id}/assignments',         [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'assignments']);
+    Route::get('/learning-paths/{id}/materials',           [\App\Http\Controllers\Instructor\InstructorLearningPathController::class, 'materials']);
 
     // ── Course content: flat routes (PUT /instructor/modules|sessions|…/{id}) ──
     Route::put('/modules/{module}',                                      [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateModule']);
@@ -349,6 +358,9 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:instructor,admin'
     Route::put('/assignments/{courseAssignment}',                        [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateAssignment']);
     Route::patch('/assignments/{courseAssignment}',                      [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateAssignment']);
     Route::delete('/assignments/{courseAssignment}',                     [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'destroyAssignment']);
+    Route::put('/lessons/{lesson}',                                      [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateLesson']);
+    Route::patch('/lessons/{lesson}',                                    [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateLesson']);
+    Route::delete('/lessons/{lesson}',                                   [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'destroyLesson']);
 });
 
 // ─── Public: Tracks (LMS) ────────────────────────────────────────────────────
@@ -416,6 +428,7 @@ Route::middleware(['auth:sanctum', 'role:admin'])->group(function () {
         Route::get('/registrations/{registration}', [AdminController::class, 'showRegistration']);
         Route::put('/registrations/{registration}/status', [AdminController::class, 'updateRegistrationStatus']);
         Route::patch('/registrations/{registration}/status', [AdminController::class, 'updateRegistrationStatus']);
+        Route::post('/registrations/{registration}/create-account', [AdminController::class, 'createAccountForRegistration']);
 
         Route::get('/payments',    [AdminPaymentController::class, 'index']);
         Route::get('/payments/{payment}', [AdminPaymentController::class, 'show']);
@@ -1030,6 +1043,10 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,department_manager'])
     Route::put('admin/courses/{course}/assignments/{courseAssignment}',      [\App\Http\Controllers\Admin\CourseContentController::class, 'updateAssignment']);
     Route::patch('admin/courses/{course}/assignments/{courseAssignment}',    [\App\Http\Controllers\Admin\CourseContentController::class, 'updateAssignment']);
     Route::delete('admin/courses/{course}/assignments/{courseAssignment}',   [\App\Http\Controllers\Admin\CourseContentController::class, 'destroyAssignment']);
+    Route::post('admin/courses/{course}/lessons',                            [\App\Http\Controllers\Admin\CourseContentController::class, 'storeLesson']);
+    Route::put('admin/courses/{course}/lessons/{lesson}',                    [\App\Http\Controllers\Admin\CourseContentController::class, 'updateLesson']);
+    Route::patch('admin/courses/{course}/lessons/{lesson}',                  [\App\Http\Controllers\Admin\CourseContentController::class, 'updateLesson']);
+    Route::delete('admin/courses/{course}/lessons/{lesson}',                 [\App\Http\Controllers\Admin\CourseContentController::class, 'destroyLesson']);
 
     // Instructor management
     Route::get('admin/instructors',        [AdminInstructorController::class, 'index']);

@@ -9,12 +9,14 @@ use App\Http\Controllers\Controller;
 use App\Models\Course;
 use App\Models\Instructor;
 use App\Services\AuditLogService;
+use App\Support\CourseDisplay;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class AdminCourseController extends Controller
 {
@@ -296,6 +298,11 @@ class AdminCourseController extends Controller
     {
         $isUpdate = $course !== null;
 
+        if ($request->has('session_format')) {
+            $normalized = CourseDisplay::normalizeSessionFormatInput($request->input('session_format'));
+            $request->merge(['session_format' => $normalized]);
+        }
+
         if ($request->filled('slug')) {
             $slug = Str::slug((string) $request->input('slug')) ?: (string) $request->input('slug');
             $request->merge(['slug' => $slug]);
@@ -310,10 +317,19 @@ class AdminCourseController extends Controller
             'required'               => 'الحقل مطلوب.',
             'title.required'         => 'الحقل مطلوب.',
             'status.in'              => 'حالة النشر غير صحيحة.',
-            'learning_outcomes.array'   => 'نوع البيانات غير صحيح.',
-            'learning_outcomes.*.string' => 'نوع البيانات غير صحيح.',
-            'features.array'            => 'نوع البيانات غير صحيح.',
-            'features.*.string'         => 'نوع البيانات غير صحيح.',
+            'learning_outcomes.array'        => 'نوع البيانات غير صحيح.',
+            'learning_outcomes.*.string'     => 'نوع البيانات غير صحيح.',
+            'learning_outcomes.*.max'          => 'كل مخرج تعليمي يجب ألا يتجاوز 500 حرف.',
+            'requirements.array'               => 'نوع البيانات غير صحيح.',
+            'requirements.*.string'            => 'نوع البيانات غير صحيح.',
+            'requirements.*.max'               => 'كل متطلب يجب ألا يتجاوز 500 حرف.',
+            'curriculum_topics.array'        => 'نوع البيانات غير صحيح.',
+            'curriculum_topics.*.string'     => 'نوع البيانات غير صحيح.',
+            'curriculum_topics.*.max'        => 'كل محور يجب ألا يتجاوز 500 حرف.',
+            'features.array'                 => 'نوع البيانات غير صحيح.',
+            'features.*.string'              => 'نوع البيانات غير صحيح.',
+            'features.*.max'                 => 'كل نقطة يجب ألا تتجاوز 255 حرفاً.',
+            'keywords.*.max'                 => 'كل كلمة مفتاحية يجب ألا تتجاوز 100 حرف.',
         ];
 
         $attributes = [
@@ -346,7 +362,7 @@ class AdminCourseController extends Controller
             'is_free'               => 'nullable|boolean',
             'program_type'          => 'nullable|in:course,workshop,one_session,full_program',
             'content_type'          => 'nullable|in:course,workshop,one_session,full_program',
-            'session_format'        => 'nullable|in:online,offline,hybrid,workshop_single_session',
+            'session_format'        => 'nullable|in:online,offline,hybrid,workshop_single_session,workshop_one_session',
             'location'              => 'nullable|string|max:255',
             // Accept both delivery_type (frontend alias) and location_type (DB column name)
             'delivery_type'         => 'nullable|in:online,offline,hybrid,unknown',
@@ -399,7 +415,15 @@ class AdminCourseController extends Controller
             $rules['image']        = 'nullable';
         }
 
-        $data = $request->validate($rules, $messages, $attributes);
+        try {
+            $data = $request->validate($rules, $messages, $attributes);
+        } catch (ValidationException $e) {
+            Log::warning('admin.course.validation_failed', [
+                'course_id' => $course?->id,
+                'errors'    => $e->errors(),
+            ]);
+            throw $e;
+        }
 
         // Remove file objects from the validated data array — handleImageUpload handles them
         unset($data['course_image'], $data['image']);
@@ -428,7 +452,11 @@ class AdminCourseController extends Controller
         }
         unset($data['content_type']);
 
-        return $data;
+        if (isset($data['training_hours'])) {
+            $data['training_hours'] = (int) round((float) $data['training_hours']);
+        }
+
+        return CourseDisplay::applyOneSessionDefaults($data);
     }
 
     // ─── Image upload helper ──────────────────────────────────────────────────
@@ -494,7 +522,18 @@ class AdminCourseController extends Controller
             'next_cohort_pending'   => $course->start_date === null,
             'status'                => $course->status,
             'notes'                 => $course->notes,
-            'duration'              => $course->duration,
+            'duration'              => CourseDisplay::resolvedDuration(
+                $course->program_type,
+                $course->session_format,
+                $course->duration
+            ),
+            'duration_value'        => CourseDisplay::isOneSession($course->program_type, $course->session_format) ? 1 : null,
+            'duration_unit'         => CourseDisplay::isOneSession($course->program_type, $course->session_format) ? 'day' : null,
+            'computed_duration_label' => CourseDisplay::resolvedDuration(
+                $course->program_type,
+                $course->session_format,
+                $course->duration
+            ),
             'training_hours'        => $course->training_hours,
             'hours_count'           => $course->training_hours,
             'target_audience'       => $course->target_audience,

@@ -181,10 +181,25 @@ class StudentLearnController extends Controller
             ]);
         });
 
-        // Top-level arrays: ALL visible items across all modules (used by dedicated tabs)
-        $visibleAssignments = $course->courseAssignments()
+        // Top-level arrays: course-level items only (module_id IS NULL).
+        // Module-level content is already embedded inside $modulesData above.
+        // This prevents duplication across modules tab and dedicated content tabs.
+        $courseLevelAssignments = $course->courseAssignments()
+            ->whereNull('module_id')
             ->where(fn ($v) => $v->where('is_visible', true)->orWhereNull('is_visible'))
             ->whereIn('status', ['published', 'active'])
+            ->orderBy('sort_order')
+            ->get();
+
+        $courseLevelSessions = $course->courseSessions()
+            ->whereNull('module_id')
+            ->where(fn ($v) => $v->where('is_visible', true)->orWhereNull('is_visible'))
+            ->orderBy('sort_order')
+            ->get();
+
+        $courseLevelMaterials = $course->materials()
+            ->whereNull('module_id')
+            ->where(fn ($v) => $v->where('is_visible', true)->orWhereNull('is_visible'))
             ->orderBy('sort_order')
             ->get();
 
@@ -206,19 +221,9 @@ class StudentLearnController extends Controller
                 ],
                 'class_group' => $classGroup,
                 'modules'     => $modulesData,
-                'sessions'    => CourseSessionResource::collection(
-                    $course->courseSessions()
-                        ->where(fn ($v) => $v->where('is_visible', true)->orWhereNull('is_visible'))
-                        ->orderBy('sort_order')
-                        ->get()
-                ),
-                'materials'   => CourseMaterialResource::collection(
-                    $course->materials()
-                        ->where(fn ($v) => $v->where('is_visible', true)->orWhereNull('is_visible'))
-                        ->orderBy('sort_order')
-                        ->get()
-                ),
-                'assignments' => StudentCourseAssignmentResource::collection($visibleAssignments),
+                'sessions'    => CourseSessionResource::collection($courseLevelSessions),
+                'materials'   => CourseMaterialResource::collection($courseLevelMaterials),
+                'assignments' => StudentCourseAssignmentResource::collection($courseLevelAssignments),
             ],
         ]);
     }
