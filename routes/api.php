@@ -999,11 +999,16 @@ Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin'])->prefix
 
 // ─── User management (admin + super_admin can read/create/update) ─────────────
 Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->group(function () {
+    Route::get('users/search',    [AdminUserController::class, 'search']);
     Route::get('users',           [AdminUserController::class, 'index']);
     Route::post('users',          [AdminUserController::class, 'store']);
     Route::get('users/{user}',    [AdminUserController::class, 'show']);
     Route::put('users/{user}',    [AdminUserController::class, 'update']);
     Route::patch('users/{user}',  [AdminUserController::class, 'update']);
+
+    // ── Student courses + bulk repair ─────────────────────────────────────
+    Route::get('students/{user}/courses',      [\App\Http\Controllers\AdminController::class, 'studentCourses']);
+    Route::post('registrations/repair-links',  [\App\Http\Controllers\AdminController::class, 'repairRegistrationLinks']);
 });
 
 // ─── Delete / restore user — super_admin only ────────────────────────────────
@@ -1023,6 +1028,11 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,department_manager'])
     Route::post('admin/courses/{course}/assign-instructor',     [AdminCourseController::class, 'assignInstructor']);
     Route::patch('admin/courses/{course}/assign-instructor',    [AdminCourseController::class, 'assignInstructor']);
     Route::put('admin/courses/{course}/assign-instructor',      [AdminCourseController::class, 'assignInstructor']);
+
+    // ── Course students (manual enrollment + participant list) ────────────────
+    Route::get('admin/courses/{course}/students',              [\App\Http\Controllers\Admin\AdminCourseStudentsController::class, 'index']);
+    Route::post('admin/courses/{course}/students',             [\App\Http\Controllers\Admin\AdminCourseStudentsController::class, 'store']);
+    Route::delete('admin/courses/{course}/students/{user}',    [\App\Http\Controllers\Admin\AdminCourseStudentsController::class, 'destroy']);
 
     // ── Course content: nested CRUD (all under /admin/courses/{course}/…) ───────
     Route::get('admin/courses/{course}/content',                             [\App\Http\Controllers\Admin\CourseContentController::class, 'content']);
@@ -1095,6 +1105,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->
     Route::patch('learning-paths/{learningPath}',              [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'update']);
     Route::delete('learning-paths/{learningPath}',             [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'destroy']);
     Route::post('learning-paths/{learningPath}/courses',       [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'attachCourses']);
+    Route::get('learning-paths/{learningPath}/students',       [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'students']);
 });
 
 // ─── Team members CRUD (admin + super_admin) ─────────────────────────────────

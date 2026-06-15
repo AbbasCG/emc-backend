@@ -8,10 +8,12 @@ use App\Events\InstructorAssignedEvent;
 use App\Http\Controllers\Controller;
 use App\Models\Course;
 use App\Models\Instructor;
+use App\Models\LearningPathItem;
 use App\Services\AuditLogService;
 use App\Support\CourseDisplay;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -63,9 +65,16 @@ class AdminCourseController extends Controller
         $perPage  = min((int) $request->query('per_page', 20), 100);
         $courses  = $query->latest()->paginate($perPage);
 
+        // Batch-load learning path membership for all courses in this page
+        $courseIds = $courses->pluck('id')->all();
+        $lpItemMap = LearningPathItem::with('learningPath')
+            ->whereIn('course_id', $courseIds)
+            ->get()
+            ->keyBy('course_id');
+
         return response()->json([
             'success' => true,
-            'data'    => $courses->map(fn ($c) => $this->format($c)),
+            'data'    => $courses->map(fn ($c) => $this->format($c, $lpItemMap->get($c->id))),
             'meta'    => [
                 'total'        => $courses->total(),
                 'current_page' => $courses->currentPage(),
@@ -102,13 +111,19 @@ class AdminCourseController extends Controller
         // Path string in DB (e.g. courses/abc.jpg) — never the uploaded object
         $data['course_image'] = $this->handleImageUpload($request, null);
 
-        $features = $data['features'] ?? [];
-        unset($data['features']);
+        $features       = $data['features'] ?? [];
+        $learningPathId = $data['learning_path_id'] ?? null;
+        unset($data['features'], $data['learning_path_id']);
 
         $course = Course::create($data);
 
         foreach ($features as $i => $feat) {
             $course->features()->create(['title' => $feat, 'sort_order' => $i + 1]);
+        }
+
+        // Assign to learning path if provided
+        if ($learningPathId) {
+            $this->assignCourseToPath((int) $learningPathId, $course->id);
         }
 
         event(new CourseCreatedEvent($course, $request->user()->id));
@@ -125,10 +140,12 @@ class AdminCourseController extends Controller
 
         $course->load(['instructor.user', 'track', 'features', 'department']);
 
+        $lpItem = LearningPathItem::with('learningPath')->where('course_id', $course->id)->first();
+
         return response()->json([
             'success' => true,
             'message' => 'تم إنشاء الدورة بنجاح.',
-            'data'    => $this->format($course),
+            'data'    => $this->format($course, $lpItem),
         ], 201);
     }
 
@@ -138,9 +155,11 @@ class AdminCourseController extends Controller
         $course->load(['instructor.user', 'track', 'features', 'department', 'createdBy', 'assignedBy'])
             ->loadCount('registrations');
 
+        $lpItem = LearningPathItem::with('learningPath')->where('course_id', $course->id)->first();
+
         return response()->json([
             'success' => true,
-            'data'    => $this->format($course),
+            'data'    => $this->format($course, $lpItem),
         ]);
     }
 
@@ -186,8 +205,32 @@ class AdminCourseController extends Controller
             $data['course_image'] = $newImage;
         }
 
-        $features = $data['features'] ?? null;
-        unset($data['features']);
+        $features         = $data['features'] ?? null;
+        $hasLpKey         = array_key_exists('learning_path_id', $data);
+        $learningPathId   = $data['learning_path_id'] ?? null;
+        unset($data['features'], $data['learning_path_id']);
+
+        // Block archiving/deactivating if linked to an active/published learning path
+        $newStatus = $data['status'] ?? null;
+        if ($newStatus !== null && $newStatus !== $course->status && in_array($newStatus, ['archived', 'draft'])) {
+            $activeLpItem = LearningPathItem::with('learningPath')
+                ->where('course_id', $course->id)
+                ->whereHas('learningPath', fn ($q) => $q->whereIn('status', ['published', 'active']))
+                ->first();
+            if ($activeLpItem) {
+                $lp = $activeLpItem->learningPath;
+                return response()->json([
+                    'message'       => 'Cannot archive/deactivate course because it belongs to an active learning path.',
+                    'message_ar'    => 'لا يمكن أرشفة أو تعطيل هذه الدورة لأنها مرتبطة بمسار تعليمي نشط. أزل الدورة من المسار أولاً.',
+                    'learning_path' => [
+                        'id'     => $lp->id,
+                        'title'  => $lp->title,
+                        'slug'   => $lp->slug,
+                        'status' => $lp->status,
+                    ],
+                ], 422);
+            }
+        }
 
         $course->update($data);
         $fresh = $course->fresh(['instructor.user', 'track', 'features', 'department']);
@@ -196,6 +239,15 @@ class AdminCourseController extends Controller
             $course->features()->delete();
             foreach ($features as $i => $feat) {
                 $course->features()->create(['title' => $feat, 'sort_order' => $i + 1]);
+            }
+        }
+
+        // Handle learning path assignment: key present + null = remove; key present + int = assign
+        if ($hasLpKey) {
+            if ($learningPathId) {
+                $this->assignCourseToPath((int) $learningPathId, $course->id);
+            } else {
+                LearningPathItem::where('course_id', $course->id)->delete();
             }
         }
 
@@ -227,16 +279,38 @@ class AdminCourseController extends Controller
             'start_date' => $fresh->start_date,
         ], null, $request);
 
+        $lpItemFresh = LearningPathItem::with('learningPath')->where('course_id', $fresh->id)->first();
+
         return response()->json([
             'success' => true,
             'message' => 'تم تحديث الدورة بنجاح.',
-            'data'    => $this->format($fresh),
+            'data'    => $this->format($fresh, $lpItemFresh),
         ]);
     }
 
     // ─── DELETE /api/admin/courses/{course} ───────────────────────────────────
     public function destroy(Request $request, Course $course): JsonResponse
     {
+        // Block deletion if course belongs to an active/published learning path
+        $activeLpItem = LearningPathItem::with('learningPath')
+            ->where('course_id', $course->id)
+            ->whereHas('learningPath', fn ($q) => $q->whereIn('status', ['published', 'active']))
+            ->first();
+
+        if ($activeLpItem) {
+            $lp = $activeLpItem->learningPath;
+            return response()->json([
+                'message'       => 'Cannot delete course because it belongs to an active learning path.',
+                'message_ar'    => 'لا يمكن حذف هذه الدورة لأنها مرتبطة بمسار تعليمي نشط. أزل الدورة من المسار أولاً أو أرشف المسار.',
+                'learning_path' => [
+                    'id'     => $lp->id,
+                    'title'  => $lp->title,
+                    'slug'   => $lp->slug,
+                    'status' => $lp->status,
+                ],
+            ], 422);
+        }
+
         $snap  = ['title' => $course->title, 'status' => $course->status];
         $id    = $course->id;
         $label = $course->title;
@@ -402,6 +476,7 @@ class AdminCourseController extends Controller
             'features.*'            => 'string|max:255',
             'requires_placement_test' => 'nullable|boolean',
             'course_thumbnail'        => 'nullable|string',
+            'learning_path_id'        => 'nullable|integer|exists:learning_paths,id',
         ];
 
         if ($request->hasFile('course_image')) {
@@ -489,9 +564,16 @@ class AdminCourseController extends Controller
 
     // ─── Response formatter ───────────────────────────────────────────────────
 
-    private function format(Course $course): array
+    private function format(Course $course, ?LearningPathItem $lpItem = null): array
     {
         $imageUrl = $this->storageUrl($course->course_image);
+
+        // Learning path membership metadata
+        $lp                    = $lpItem?->learningPath;
+        $isActiveLp            = $lp && in_array($lp->status, ['published', 'active']);
+        $lockReason            = $isActiveLp
+            ? 'هذه الدورة مرتبطة بمسار تعليمي نشط ولا يمكن حذفها أو أرشفتها أو تعطيلها قبل إزالتها من المسار أو أرشفة المسار.'
+            : null;
 
         return [
             'id'                    => $course->id,
@@ -579,7 +661,38 @@ class AdminCourseController extends Controller
             'features'            => $course->features?->pluck('title')->all() ?? [],
             'created_at'          => $course->created_at,
             'updated_at'          => $course->updated_at,
+            // Learning path membership
+            'learning_path'             => $lp ? [
+                'id'     => $lp->id,
+                'title'  => $lp->title,
+                'slug'   => $lp->slug,
+                'status' => $lp->status,
+            ] : null,
+            'is_part_of_learning_path'  => $lp !== null,
+            'learning_path_status'      => $lp?->status,
+            'can_delete'                => ! $isActiveLp,
+            'can_archive'               => ! $isActiveLp,
+            'can_deactivate'            => ! $isActiveLp,
+            'lock_reason'               => $lockReason,
         ];
+    }
+
+    /** Assigns course to a learning path, removing it from any previous path first. */
+    private function assignCourseToPath(int $learningPathId, int $courseId): void
+    {
+        DB::transaction(function () use ($learningPathId, $courseId) {
+            // Remove existing membership (a course belongs to one path at a time)
+            LearningPathItem::where('course_id', $courseId)
+                ->where('learning_path_id', '!=', $learningPathId)
+                ->delete();
+
+            $maxOrder = LearningPathItem::where('learning_path_id', $learningPathId)->max('sort_order') ?? -1;
+
+            LearningPathItem::updateOrCreate(
+                ['learning_path_id' => $learningPathId, 'course_id' => $courseId],
+                ['sort_order'       => $maxOrder + 1],
+            );
+        });
     }
 
     /** Safely formats any date value (Carbon, string, or null) to Y-m-d. */

@@ -8,6 +8,7 @@ use App\Http\Resources\LearningPathResource;
 use App\Models\LearningPath;
 use App\Models\LearningPathEnrollment;
 use App\Models\LearningPathItem;
+use App\Models\StudentProgress;
 use App\Services\AuditLogService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -104,12 +105,114 @@ class AdminLearningPathController extends Controller
     // ─── GET /api/admin/learning-paths/{learningPath} ─────────────────────────
     public function show(LearningPath $learningPath): JsonResponse
     {
-        $learningPath->load(['instructor.user', 'courses'])
-            ->loadCount('courses');
+        $learningPath->load(['instructor.user', 'courses', 'enrollments.user'])
+            ->loadCount(['courses', 'enrollments']);
+
+        $courseIds    = $learningPath->courses->pluck('id')->all();
+        $totalCourses = count($courseIds);
+
+        // Per-student progress across all path courses
+        $progressMap = [];
+        if ($courseIds) {
+            $progressRows = StudentProgress::whereIn('course_id', $courseIds)
+                ->whereIn('user_id', $learningPath->enrollments->pluck('user_id'))
+                ->get()
+                ->groupBy('user_id');
+
+            foreach ($progressRows as $userId => $rows) {
+                $progressMap[(int) $userId] = [
+                    'avg_pct'   => round($rows->avg('progress_percentage') ?? 0, 1),
+                    'completed' => $rows->where('status', 'completed')->count(),
+                ];
+            }
+        }
+
+        $students = $learningPath->enrollments->map(function (LearningPathEnrollment $e) use ($progressMap, $totalCourses) {
+            $u     = $e->user;
+            $prog  = $progressMap[$u->id] ?? ['avg_pct' => 0, 'completed' => 0];
+            return [
+                'user_id'           => $u->id,
+                'name'              => $u->name,
+                'email'             => $u->email,
+                'phone'             => $u->phone ?? null,
+                'avatar_url'        => $u->avatar_url ?? null,
+                'enrollment_status' => $e->status,
+                'enrolled_at'       => $e->enrolled_at?->toIso8601String(),
+                'completed_at'      => $e->completed_at?->toIso8601String(),
+                'progress_percentage' => $prog['avg_pct'],
+                'courses_completed'   => $prog['completed'],
+                'total_courses'       => $totalCourses,
+            ];
+        })->values()->all();
+
+        $activeStudents    = collect($students)->where('enrollment_status', 'active')->count();
+        $completedStudents = collect($students)->where('enrollment_status', 'completed')->count();
 
         return response()->json([
             'success' => true,
-            'data'    => new LearningPathResource($learningPath),
+            'data'    => (new LearningPathResource($learningPath))->toArray(request()),
+            'students' => $students,
+            'counts' => [
+                'courses'           => $totalCourses,
+                'students'          => count($students),
+                'active_students'   => $activeStudents,
+                'completed_students' => $completedStudents,
+            ],
+        ]);
+    }
+
+    // ─── GET /api/admin/learning-paths/{learningPath}/students ────────────────
+    public function students(Request $request, LearningPath $learningPath): JsonResponse
+    {
+        $enrollments = $learningPath->enrollments()
+            ->with('user')
+            ->get();
+
+        $courseIds    = $learningPath->items()->pluck('course_id')->all();
+        $totalCourses = count($courseIds);
+
+        $progressMap = [];
+        if ($courseIds && $enrollments->isNotEmpty()) {
+            $userIds      = $enrollments->pluck('user_id')->all();
+            $progressRows = StudentProgress::whereIn('course_id', $courseIds)
+                ->whereIn('user_id', $userIds)
+                ->get()
+                ->groupBy('user_id');
+
+            foreach ($progressRows as $userId => $rows) {
+                $progressMap[(int) $userId] = [
+                    'avg_pct'   => round($rows->avg('progress_percentage') ?? 0, 1),
+                    'completed' => $rows->where('status', 'completed')->count(),
+                ];
+            }
+        }
+
+        $students = $enrollments->map(function (LearningPathEnrollment $e) use ($progressMap, $totalCourses) {
+            $u    = $e->user;
+            $prog = $progressMap[$u->id] ?? ['avg_pct' => 0, 'completed' => 0];
+            return [
+                'user_id'             => $u->id,
+                'name'                => $u->name,
+                'email'               => $u->email,
+                'phone'               => $u->phone ?? null,
+                'avatar_url'          => $u->avatar_url ?? null,
+                'enrollment_status'   => $e->status,
+                'enrolled_at'         => $e->enrolled_at?->toIso8601String(),
+                'completed_at'        => $e->completed_at?->toIso8601String(),
+                'progress_percentage' => $prog['avg_pct'],
+                'courses_completed'   => $prog['completed'],
+                'total_courses'       => $totalCourses,
+            ];
+        })->values()->all();
+
+        return response()->json([
+            'success' => true,
+            'data'    => $students,
+            'meta'    => [
+                'total'             => count($students),
+                'active_students'   => collect($students)->where('enrollment_status', 'active')->count(),
+                'completed_students' => collect($students)->where('enrollment_status', 'completed')->count(),
+            ],
         ]);
     }
 

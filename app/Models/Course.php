@@ -4,7 +4,9 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Models\Department;
 use App\Models\Instructor;
@@ -165,6 +167,26 @@ class Course extends Model
     public function oralAssessmentBookings(): HasMany
     {
         return $this->hasMany(OralAssessmentBooking::class);
+    }
+
+    public function learningPaths(): BelongsToMany
+    {
+        return $this->belongsToMany(LearningPath::class, 'learning_path_items')
+            ->withPivot('sort_order')
+            ->orderBy('learning_path_items.sort_order');
+    }
+
+    public function learningPathItems(): HasMany
+    {
+        return $this->hasMany(LearningPathItem::class);
+    }
+
+    /** Returns the first active/published learning path this course belongs to, or null. */
+    public function activeLearningPath(): ?LearningPath
+    {
+        return $this->learningPaths()
+            ->whereIn('learning_paths.status', ['published', 'active'])
+            ->first();
     }
 
     public function requiresPlacement(): bool

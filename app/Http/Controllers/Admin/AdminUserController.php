@@ -22,6 +22,37 @@ class AdminUserController extends Controller
         'student', 'volunteer', 'partner',
     ];
 
+    // GET /api/admin/users/search?q=
+    public function search(Request $request): JsonResponse
+    {
+        $q = trim((string) $request->query('q', ''));
+
+        $query = User::withTrashed()
+            ->where('is_active', true)
+            ->whereNull('deleted_at');
+
+        if ($q !== '') {
+            $query->where(function ($sub) use ($q) {
+                $sub->where('name',  'like', "%{$q}%")
+                    ->orWhere('email', 'like', "%{$q}%")
+                    ->orWhere('phone', 'like', "%{$q}%");
+            });
+        }
+
+        $users = $query->orderBy('name')->limit(20)->get();
+
+        return response()->json([
+            'success' => true,
+            'data'    => $users->map(fn (User $u) => [
+                'id'     => $u->id,
+                'name'   => $u->name,
+                'email'  => $u->email,
+                'phone'  => $u->phone,
+                'avatar' => $u->avatar_url ?? null,
+            ]),
+        ]);
+    }
+
     // GET /api/admin/users
     // ?status=active (default) | inactive | deleted | all
     public function index(Request $request): JsonResponse

@@ -35,9 +35,12 @@ class StudentLearnController extends Controller
     ): JsonResponse {
         $user = $request->user();
 
-        // Direct enrollment
-        $enrolled = Registration::where('user_id', $user->id)
-            ->where('course_id', $courseId)
+        // Direct enrollment — match by user_id OR email (mirrors StudentRegistrationsController::index)
+        $enrolled = Registration::where('course_id', $courseId)
+            ->where(function ($q) use ($user) {
+                $q->where('user_id', $user->id)
+                  ->orWhere('email', $user->email);
+            })
             ->whereIn('status', RegistrationStatus::activeEnrollment())
             ->exists();
 

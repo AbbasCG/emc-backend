@@ -23,6 +23,11 @@ class CourseController extends Controller
                 $q->whereNull('registration_open')
                   ->orWhere('registration_open', true);
             })
+            // Exclude courses that belong to an active/published learning path —
+            // those are only accessible via the learning path page, not as standalone courses.
+            ->whereDoesntHave('learningPaths', function ($q) {
+                $q->whereIn('learning_paths.status', ['published', 'active']);
+            })
             ->latest();
 
         if ($request->filled('track_id')) {

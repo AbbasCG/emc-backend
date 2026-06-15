@@ -9,6 +9,7 @@ use App\Models\Course;
 use App\Models\Instructor;
 use App\Models\Payment;
 use App\Models\Registration;
+use App\Models\StudentProgress;
 use App\Models\Track;
 use App\Models\User;
 use App\Services\AuditLogService;
@@ -150,6 +151,27 @@ class AdminController extends Controller
             null, $request
         );
 
+        // Ensure student_progress exists when enrollment is confirmed
+        if (in_array($validated['status'], [RegistrationStatus::REGISTERED->value, RegistrationStatus::PAYMENT_CONFIRMED->value], true)
+            && $registration->user_id
+            && $registration->course_id
+        ) {
+            $totalSessions = $registration->course_id
+                ? \App\Models\Course::find($registration->course_id)?->sessions()->count() ?? 0
+                : 0;
+            StudentProgress::updateOrCreate(
+                ['user_id' => $registration->user_id, 'course_id' => $registration->course_id],
+                [
+                    'progress_percentage'              => 0,
+                    'status'                           => 'in_progress',
+                    'total_sessions'                   => $totalSessions,
+                    'completed_sessions'               => 0,
+                    'attendance_percentage'            => 0,
+                    'assignment_completion_percentage' => 0,
+                ]
+            );
+        }
+
         if (in_array($validated['status'], [RegistrationStatus::REGISTERED->value, RegistrationStatus::PAYMENT_CONFIRMED->value], true)
             && $registration->user_id
         ) {
@@ -203,6 +225,8 @@ class AdminController extends Controller
         $existing = User::where('email', $registration->email)->first();
         if ($existing) {
             $registration->update(['user_id' => $existing->id]);
+            // Sync progress for ALL active registrations of this user
+            $this->syncProgressForUser($existing->id);
             $registration->load(['course.track', 'course.instructor', 'user', 'payments']);
 
             return response()->json([
@@ -230,6 +254,8 @@ class AdminController extends Controller
         ]);
 
         $registration->update(['user_id' => $user->id]);
+        // Create student_progress for all active registrations of this new user
+        $this->syncProgressForUser($user->id);
         $registration->load(['course.track', 'course.instructor', 'user', 'payments']);
 
         AuditLogService::log(
@@ -253,5 +279,143 @@ class AdminController extends Controller
                 'registration' => new RegistrationResource($registration),
             ],
         ], 201);
+    }
+
+    /**
+     * GET /api/admin/students/{user}/courses
+     *
+     * Returns the user's active course registrations with their StudentProgress records.
+     */
+    public function studentCourses(User $user): JsonResponse
+    {
+        $registrations = Registration::with(['course'])
+            ->where('user_id', $user->id)
+            ->whereNotNull('course_id')
+            ->whereNotIn('status', [RegistrationStatus::CANCELLED->value])
+            ->latest()
+            ->get();
+
+        $progressRows = \DB::table('student_progress')
+            ->where('user_id', $user->id)
+            ->get()
+            ->keyBy('course_id');
+
+        $data = $registrations->map(function (Registration $reg) use ($progressRows) {
+            $prog = $progressRows->get($reg->course_id);
+            return [
+                'course_id'       => $reg->course_id,
+                'course_title'    => $reg->course?->title ?? "دورة #{$reg->course_id}",
+                'status'          => $reg->status,
+                'registered_at'   => $reg->created_at?->toDateTimeString(),
+                'progress_status' => $prog?->status,
+                'progress_pct'    => (int) ($prog?->progress_percentage ?? 0),
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'data'    => $data,
+            'total'   => $data->count(),
+        ]);
+    }
+
+    /**
+     * POST /api/admin/registrations/repair-links
+     *
+     * Links guest registrations to existing user accounts by matching email,
+     * then backfills missing student_progress records for active registrations.
+     * Returns counts of what was fixed.
+     */
+    public function repairRegistrationLinks(Request $request): JsonResponse
+    {
+        $linked          = 0;
+        $progressCreated = 0;
+        $skipped         = 0;
+
+        // ── Step 1: Link guest registrations that share an email with a known user ──
+        Registration::whereNull('user_id')
+            ->whereNotNull('email')
+            ->whereNotIn('status', [RegistrationStatus::CANCELLED->value])
+            ->chunk(200, function ($registrations) use (&$linked) {
+                foreach ($registrations as $reg) {
+                    $user = User::where('email', mb_strtolower(trim((string) $reg->email)))->first();
+                    if (! $user) {
+                        continue;
+                    }
+                    $reg->update(['user_id' => $user->id]);
+                    $linked++;
+                }
+            });
+
+        // ── Step 2: Create missing student_progress for active registrations ─────
+        $activeStatuses = [
+            RegistrationStatus::REGISTERED->value,
+            RegistrationStatus::PAYMENT_CONFIRMED->value,
+            RegistrationStatus::ATTENDED->value,
+        ];
+
+        Registration::whereNotNull('user_id')
+            ->whereNotNull('course_id')
+            ->whereIn('status', $activeStatuses)
+            ->chunk(200, function ($registrations) use (&$progressCreated, &$skipped) {
+                foreach ($registrations as $reg) {
+                    $exists = StudentProgress::where('user_id',   $reg->user_id)
+                                             ->where('course_id', $reg->course_id)
+                                             ->exists();
+                    if ($exists) {
+                        $skipped++;
+                        continue;
+                    }
+                    StudentProgress::create([
+                        'user_id'                          => $reg->user_id,
+                        'course_id'                        => $reg->course_id,
+                        'progress_percentage'              => 0,
+                        'status'                           => 'in_progress',
+                        'total_sessions'                   => 0,
+                        'completed_sessions'               => 0,
+                        'attendance_percentage'            => 0,
+                        'assignment_completion_percentage' => 0,
+                    ]);
+                    $progressCreated++;
+                }
+            });
+
+        return response()->json([
+            'success'                   => true,
+            'message'                   => "تم ربط {$linked} تسجيل وإنشاء {$progressCreated} سجل تقدم.",
+            'linked_registrations'      => $linked,
+            'created_progress_records'  => $progressCreated,
+            'skipped_duplicates'        => $skipped,
+        ]);
+    }
+
+    /**
+     * Create or update student_progress for all active registrations belonging to a user.
+     * Called whenever a user account is linked to one or more registrations.
+     */
+    private function syncProgressForUser(int $userId): void
+    {
+        $activeStatuses = [
+            RegistrationStatus::REGISTERED->value,
+            RegistrationStatus::PAYMENT_CONFIRMED->value,
+            RegistrationStatus::ATTENDED->value,
+        ];
+
+        Registration::where('user_id', $userId)
+            ->whereNotNull('course_id')
+            ->whereIn('status', $activeStatuses)
+            ->each(function (Registration $reg) use ($userId) {
+                StudentProgress::updateOrCreate(
+                    ['user_id' => $userId, 'course_id' => $reg->course_id],
+                    [
+                        'progress_percentage'              => 0,
+                        'status'                           => 'in_progress',
+                        'total_sessions'                   => 0,
+                        'completed_sessions'               => 0,
+                        'attendance_percentage'            => 0,
+                        'assignment_completion_percentage' => 0,
+                    ]
+                );
+            });
     }
 }

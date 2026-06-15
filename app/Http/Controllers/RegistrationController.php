@@ -12,6 +12,7 @@ use App\Mail\CourseRegistrationConfirmation;
 use App\Models\Course;
 use App\Models\Payment;
 use App\Models\Registration;
+use App\Models\StudentProgress;
 use App\Services\AuditLogService;
 use App\Services\NotificationService;
 use App\Services\PaymentGatewayService;
@@ -96,6 +97,20 @@ class RegistrationController extends Controller
                 ]);
 
                 if ($course->type !== 'paid') {
+                    // Ensure student_progress exists for authenticated users
+                    if ($authUser) {
+                        StudentProgress::updateOrCreate(
+                            ['user_id' => $authUser->id, 'course_id' => $course->id],
+                            [
+                                'progress_percentage'              => 0,
+                                'status'                           => 'in_progress',
+                                'total_sessions'                   => $course->sessions()->count(),
+                                'completed_sessions'               => 0,
+                                'attendance_percentage'            => 0,
+                                'assignment_completion_percentage' => 0,
+                            ]
+                        );
+                    }
                     return ['registration' => $registration, 'payment' => null];
                 }
 
