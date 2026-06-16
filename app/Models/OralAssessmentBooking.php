@@ -17,12 +17,24 @@ class OralAssessmentBooking extends Model
         'oral_score',
         'final_level',
         'instructor_notes',
+        'pronunciation_score',
+        'grammar_score',
+        'vocabulary_score',
+        'fluency_score',
+        'comprehension_score',
+        'confidence_score',
     ];
 
     protected function casts(): array
     {
         return [
-            'oral_score' => 'integer',
+            'oral_score'          => 'integer',
+            'pronunciation_score' => 'integer',
+            'grammar_score'       => 'integer',
+            'vocabulary_score'    => 'integer',
+            'fluency_score'       => 'integer',
+            'comprehension_score' => 'integer',
+            'confidence_score'    => 'integer',
         ];
     }
 

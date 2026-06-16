@@ -26,9 +26,7 @@ class InstructorClassController extends Controller
     {
         $instructor = Instructor::where('user_id', $request->user()->id)->first();
         $courseIds  = $instructor
-            ? Course::where('instructor_id', $instructor->id)
-                ->where('requires_placement_test', true)
-                ->pluck('id')->all()
+            ? Course::where('instructor_id', $instructor->id)->pluck('id')->all()
             : [];
 
         $groups = ClassGroup::with(['course', 'activeStudents'])
@@ -140,6 +138,61 @@ class InstructorClassController extends Controller
         $group->delete();
 
         return response()->json(['success' => true, 'message' => 'تم حذف المجموعة.']);
+    }
+
+    // ─── GET /api/instructor/courses/{course}/students ───────────────────────
+    // All enrolled students for a course (registrations, no placement filter).
+
+    public function courseStudents(Request $request, Course $course): JsonResponse
+    {
+        $user       = $request->user();
+        $instructor = Instructor::where('user_id', $user->id)->first();
+
+        if ($instructor && (int) $course->instructor_id !== $instructor->id) {
+            abort(403, 'ليس لديك صلاحية الوصول إلى هذه الدورة.');
+        }
+
+        $registrations = Registration::with('user:id,name,email,avatar')
+            ->where('course_id', $course->id)
+            ->whereNotIn('status', ['Rejected', 'Cancelled', 'rejected', 'cancelled'])
+            ->whereNotNull('user_id')
+            ->get();
+
+        $userIds = $registrations->pluck('user_id')->filter()->all();
+
+        // Which users are already assigned to a class group for this course
+        $assignedUserIds = ClassGroupStudent::whereHas('classGroup', fn ($q) => $q->where('course_id', $course->id))
+            ->whereIn('status', ['assigned', 'completed'])
+            ->whereIn('user_id', $userIds)
+            ->pluck('user_id')
+            ->flip();
+
+        $data = $registrations->map(fn ($reg) => [
+            'student_id'          => $reg->user_id,
+            'student_name'        => $reg->user?->name ?? $reg->full_name,
+            'student_email'       => $reg->user?->email ?? $reg->email,
+            'student_phone'       => $reg->user?->phone ?? $reg->phone ?? null,
+            'registration_status' => strtolower($reg->status),
+            'avatar_url'          => $reg->user?->avatar_url ?? null,
+            'is_assigned'         => isset($assignedUserIds[$reg->user_id]),
+            // Null placement fields so frontend ClassAssignmentStudent type is satisfied
+            'written_score'       => null,
+            'total_questions'     => null,
+            'percentage'          => null,
+            'written_level'       => null,
+            'oral_score'          => null,
+            'final_level'         => null,
+            'instructor_notes'    => null,
+            'placement_status'    => 'not_started',
+            'attempt_id'          => null,
+            'booking_id'          => null,
+        ])->values();
+
+        return response()->json([
+            'success' => true,
+            'data'    => $data,
+            'meta'    => ['total' => $data->count()],
+        ]);
     }
 
     // ─── GET /api/instructor/courses/{course}/classes ────────────────────────

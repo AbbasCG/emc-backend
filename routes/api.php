@@ -309,6 +309,7 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:instructor,admin'
     Route::post(  '/classes/{group}/students',                          [\App\Http\Controllers\Instructor\InstructorClassController::class, 'addStudent']);
     Route::delete('/classes/{group}/students/{userId}',                 [\App\Http\Controllers\Instructor\InstructorClassController::class, 'removeStudent']);
     Route::get(   '/courses/{course}/classes',                          [\App\Http\Controllers\Instructor\InstructorClassController::class, 'courseGroups']);
+    Route::get(   '/courses/{course}/students',                         [\App\Http\Controllers\Instructor\InstructorClassController::class, 'courseStudents']);
     Route::get(   '/courses/{course}/class-assignment/students',        [\App\Http\Controllers\Instructor\InstructorClassController::class, 'assignmentStudents']);
     Route::get( '/oral-assessments',                          [InstructorPlacementController::class, 'assessments']);
     Route::patch('/oral-assessments/{booking}/complete',      [InstructorPlacementController::class, 'complete']);

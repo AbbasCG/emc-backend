@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Lms;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\AttendanceResource;
 use App\Models\Attendance;
+use App\Models\AttendanceLock;
 use App\Models\Course;
 use App\Models\CourseSession;
 use App\Models\LmsSession;
@@ -127,6 +128,8 @@ class SessionAttendanceController extends Controller
             ];
         })->values();
 
+        $lock = $this->findLock($sessionId, $courseSessionId);
+
         return response()->json([
             'success' => true,
             'data'    => [
@@ -138,6 +141,9 @@ class SessionAttendanceController extends Controller
                 'course_id'     => $courseId,
                 'course_title'  => $session->course?->title,
                 'students'      => $students,
+                'is_locked'     => $lock !== null,
+                'locked_at'     => $lock?->locked_at?->toIso8601String(),
+                'locked_by'     => $lock?->lockedBy?->name,
             ],
         ]);
     }
@@ -160,6 +166,23 @@ class SessionAttendanceController extends Controller
     {
         $this->authorizeSession($request, $session);
 
+        [, $sessionId, $courseSessionId] = $this->sessionMeta($session);
+
+        // Instructors cannot re-edit once locked; admins bypass.
+        $user = $request->user();
+        if (! $user->isSuperAdmin() && ! $user->isAdmin()) {
+            $existingLock = $this->findLock($sessionId, $courseSessionId);
+            if ($existingLock) {
+                return response()->json([
+                    'success'    => false,
+                    'message'    => 'تم حفظ الحضور مسبقاً ولا يمكن تعديله.',
+                    'is_locked'  => true,
+                    'locked_at'  => $existingLock->locked_at?->toIso8601String(),
+                    'locked_by'  => $existingLock->lockedBy?->name,
+                ], 423);
+            }
+        }
+
         // Accept both `rows` (legacy) and `attendances` as payload key.
         // Accept `student_id` as alias for `user_id`.
         $rawRows = $request->input('attendances') ?? $request->input('rows') ?? [];
@@ -179,8 +202,6 @@ class SessionAttendanceController extends Controller
             'rows.*.status'   => ['required', 'in:present,absent,late,excused'],
             'rows.*.notes'    => ['nullable', 'string', 'max:2000'],
         ]);
-
-        [, $sessionId, $courseSessionId] = $this->sessionMeta($session);
 
         DB::transaction(function () use ($session, $validated, $sessionId, $courseSessionId) {
             foreach ($validated['rows'] as $row) {
@@ -206,6 +227,18 @@ class SessionAttendanceController extends Controller
                 );
             }
         });
+
+        // Create lock on first save (instructors cannot re-edit; admins skip lock creation too).
+        $lock = $this->findLock($sessionId, $courseSessionId);
+        if (! $lock) {
+            $lock = AttendanceLock::create([
+                'session_id'        => $sessionId,
+                'course_session_id' => $courseSessionId,
+                'locked_by'         => $request->user()->id,
+                'locked_at'         => now(),
+            ]);
+            $lock->load('lockedBy:id,name');
+        }
 
         // Notify each student of their recorded attendance status.
         [$courseId] = $this->sessionMeta($session);
@@ -239,6 +272,9 @@ class SessionAttendanceController extends Controller
             'data'       => [
                 'session_id'  => $session->id,
                 'attendances' => AttendanceResource::collection($attendances),
+                'is_locked'   => true,
+                'locked_at'   => $lock->locked_at?->toIso8601String(),
+                'locked_by'   => $lock->lockedBy?->name,
             ],
         ]);
     }
@@ -305,6 +341,14 @@ class SessionAttendanceController extends Controller
             $session->start_at?->toDateString(),
             $startsAt,
         ];
+    }
+
+    private function findLock(?int $sessionId, ?int $courseSessionId): ?AttendanceLock
+    {
+        return AttendanceLock::with('lockedBy:id,name')
+            ->when($sessionId, fn ($q) => $q->where('session_id', $sessionId))
+            ->when($courseSessionId && ! $sessionId, fn ($q) => $q->where('course_session_id', $courseSessionId))
+            ->first();
     }
 
     private function formatLmsSessionSummary(LmsSession $session): array

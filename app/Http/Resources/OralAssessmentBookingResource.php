@@ -10,11 +10,17 @@ class OralAssessmentBookingResource extends JsonResource
     public function toArray(Request $request): array
     {
         return [
-            'id'              => $this->id,
-            'status'          => $this->status,
-            'oral_score'      => $this->oral_score,
-            'final_level'     => $this->final_level,
-            'instructor_notes'=> $this->instructor_notes,
+            'id'                  => $this->id,
+            'status'              => $this->status,
+            'oral_score'          => $this->oral_score,
+            'final_level'         => $this->final_level,
+            'instructor_notes'    => $this->instructor_notes,
+            'pronunciation_score' => $this->pronunciation_score,
+            'grammar_score'       => $this->grammar_score,
+            'vocabulary_score'    => $this->vocabulary_score,
+            'fluency_score'       => $this->fluency_score,
+            'comprehension_score' => $this->comprehension_score,
+            'confidence_score'    => $this->confidence_score,
             'created_at'      => $this->created_at->toIso8601String(),
             'slot'            => $this->whenLoaded('slot', fn () => [
                 'id'        => $this->slot->id,

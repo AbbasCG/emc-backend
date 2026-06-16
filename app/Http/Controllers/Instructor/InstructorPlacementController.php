@@ -338,19 +338,42 @@ class InstructorPlacementController extends Controller
         }
 
         $request->validate([
-            'oral_score'       => ['nullable', 'integer', 'min:0', 'max:100'],
-            'final_level'      => ['required', 'string', 'in:Starter,A1,A2,B1,B2,C1'],
-            'instructor_notes' => ['nullable', 'string', 'max:2000'],
+            'oral_score'          => ['nullable', 'integer', 'min:0', 'max:100'],
+            'final_level'         => ['required', 'string', 'in:Starter,A1,A2,B1,B2,C1'],
+            'instructor_notes'    => ['nullable', 'string', 'max:2000'],
+            'pronunciation_score' => ['nullable', 'integer', 'min:0', 'max:10'],
+            'grammar_score'       => ['nullable', 'integer', 'min:0', 'max:10'],
+            'vocabulary_score'    => ['nullable', 'integer', 'min:0', 'max:10'],
+            'fluency_score'       => ['nullable', 'integer', 'min:0', 'max:10'],
+            'comprehension_score' => ['nullable', 'integer', 'min:0', 'max:10'],
+            'confidence_score'    => ['nullable', 'integer', 'min:0', 'max:10'],
         ]);
 
         DB::transaction(function () use ($request, $booking) {
+            $rubricFields = ['pronunciation_score', 'grammar_score', 'vocabulary_score',
+                             'fluency_score', 'comprehension_score', 'confidence_score'];
+
             $updateData = [
                 'final_level'      => $request->final_level,
                 'instructor_notes' => $request->instructor_notes,
                 'status'           => 'completed',
             ];
-            // Only overwrite oral_score when explicitly provided — preserves existing value on re-edit
-            if ($request->has('oral_score')) {
+
+            foreach ($rubricFields as $field) {
+                if ($request->has($field)) {
+                    $updateData[$field] = $request->input($field);
+                }
+            }
+
+            // If rubric scores provided, compute oral_score as sum (max 60 → scale to 100)
+            $rubricValues = array_filter(array_map(
+                fn ($f) => $updateData[$f] ?? null,
+                $rubricFields,
+            ), fn ($v) => $v !== null);
+
+            if (! $request->has('oral_score') && count($rubricValues) === 6) {
+                $updateData['oral_score'] = (int) round(array_sum($rubricValues) / 60 * 100);
+            } elseif ($request->has('oral_score')) {
                 $updateData['oral_score'] = $request->oral_score;
             }
 

@@ -242,7 +242,7 @@ class User extends Authenticatable
     {
         return match ($this->role) {
             'teacher' => 'instructor',
-            default   => $this->role,
+            default   => $this->role ?? 'student',
         };
     }
 }

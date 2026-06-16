@@ -50,7 +50,12 @@
       "Bash(php -l app/Http/Controllers/Admin/AdminCourseController.php)",
       "Bash(php -l app/Http/Resources/CourseResource.php)",
       "Bash(xargs grep -l \"placement\\\\|assignment\\\\|submission\")",
-      "Bash(xargs grep -l \"role\\\\|Role\")"
+      "Bash(xargs grep -l \"role\\\\|Role\")",
+      "Bash(cd \"D:\\\\\\\\xampp\\\\\\\\htdocs\\\\\\\\emc-backend\")",
+      "Bash(find \"D:\\\\\\\\xampp\\\\\\\\htdocs\\\\\\\\emc-backend\\\\\\\\app\\\\\\\\Models\" -name \"*.php\")",
+      "Bash(find \"D:\\\\\\\\xampp\\\\\\\\htdocs\\\\\\\\emc-backend\\\\\\\\database\\\\\\\\migrations\" -name \"*.php\")",
+      "Bash(find \"D:\\\\\\\\xampp\\\\\\\\htdocs\\\\\\\\emc-frontend\\\\\\\\src\\\\\\\\api\" -name \"*.ts\")",
+      "Bash(Select-String -Pattern \"oral|attendance_lock|lock\" -i)"
     ]
   },
   "enableAllProjectMcpServers": true,
