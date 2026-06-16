@@ -289,6 +289,8 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:instructor,admin'
     Route::get('/submissions',                                          [InstructorSubmissionController::class, 'index']);
     Route::get('/submissions/{submission}',                             [InstructorSubmissionController::class, 'show']);
     Route::put('/submissions/{submission}/review',                      [InstructorSubmissionController::class, 'review']);
+    Route::patch('/submissions/{submission}/review',                    [InstructorSubmissionController::class, 'review']);
+    Route::patch('/submissions/{submission}/grade',                     [InstructorSubmissionController::class, 'review']);
     Route::get('/assignments/{assignment}/submissions',                  [InstructorSubmissionController::class, 'forAssignment']);
     Route::get('/notifications', [NotificationController::class, 'index']);
 

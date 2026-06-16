@@ -246,10 +246,16 @@ class StudentPlacementTestController extends Controller
             );
         }
 
+        // Include score fields at the top level so the frontend result screen
+        // can read them immediately without needing a second /result request.
         return response()->json([
             'success' => true,
             'message' => 'تم تسليم الاختبار بنجاح.',
             'data'    => [
+                'score'            => $fresh->score,
+                'total_questions'  => $fresh->total_questions,
+                'percentage'       => $fresh->percentage,
+                'estimated_level'  => $fresh->estimated_level,
                 'placement_progress' => $this->placement->progress($fresh, null),
                 'can_book_oral'      => true,
                 'next_step'          => 'يرجى حجز موعد المقابلة الشفهية لإكمال عملية تحديد المستوى.',

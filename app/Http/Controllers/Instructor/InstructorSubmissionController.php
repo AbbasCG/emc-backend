@@ -226,11 +226,15 @@ class InstructorSubmissionController extends Controller
         };
 
         DB::transaction(function () use ($submission, $validated, $storedStatus) {
-            $submission->update([
+            $data = [
                 'score'    => $validated['score'] ?? $validated['grade'] ?? $submission->score,
                 'feedback' => $validated['feedback'] ?? $submission->feedback,
                 'status'   => $storedStatus,
-            ]);
+            ];
+            if (\Illuminate\Support\Facades\Schema::hasColumn('assignment_submissions', 'reviewed_at')) {
+                $data['reviewed_at'] = now();
+            }
+            $submission->update($data);
         });
 
         $progress->syncForUser($submission->user);

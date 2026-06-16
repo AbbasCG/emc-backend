@@ -46,7 +46,11 @@
       "Bash(php -l app/Models/LearningPath.php)",
       "Bash(php -l \"D:\\\\xampp\\\\htdocs\\\\emc-backend\\\\app\\\\Http\\\\Controllers\\\\Admin\\\\AdminCourseController.php\")",
       "Bash(cd /d/xampp/htdocs/emc-frontend)",
-      "Bash(powershell -c \"Get-ChildItem -Recurse -Path 'D:\\\\xampp\\\\htdocs\\\\emc-frontend\\\\src\\\\pages\\\\super-admin' -Filter '*.tsx' | Select-String -Pattern 'is_part_of_learning_path|can_delete|can_archive' -List | Select Path\")"
+      "Bash(powershell -c \"Get-ChildItem -Recurse -Path 'D:\\\\xampp\\\\htdocs\\\\emc-frontend\\\\src\\\\pages\\\\super-admin' -Filter '*.tsx' | Select-String -Pattern 'is_part_of_learning_path|can_delete|can_archive' -List | Select Path\")",
+      "Bash(php -l app/Http/Controllers/Admin/AdminCourseController.php)",
+      "Bash(php -l app/Http/Resources/CourseResource.php)",
+      "Bash(xargs grep -l \"placement\\\\|assignment\\\\|submission\")",
+      "Bash(xargs grep -l \"role\\\\|Role\")"
     ]
   },
   "enableAllProjectMcpServers": true,

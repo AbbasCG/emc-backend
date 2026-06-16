@@ -5,7 +5,6 @@ namespace App\Http\Resources;
 use App\Support\AssignmentSubmissionStatus;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 /**
@@ -30,8 +29,9 @@ class InstructorSubmissionResource extends JsonResource
 
         $instructorStatus = AssignmentSubmissionStatus::forInstructor($this->resource, $assignment);
         $textAnswer       = $this->text_answer;
+        // Use the authorized download endpoint (handles private disk + public fallback).
         $fileUrl          = $this->file_path
-            ? Storage::disk('public')->url($this->file_path)
+            ? route('submissions.download', $this->id)
             : null;
 
         $studentName = $user?->name ?? '';
@@ -90,7 +90,7 @@ class InstructorSubmissionResource extends JsonResource
             ] : ($assignment?->workshop_id ? ['id' => $assignment->workshop_id, 'title' => null, 'slug' => null] : null),
 
             'learning_path' => $lp,
-            'reviewed_at'   => null,
+            'reviewed_at'   => $this->reviewed_at?->toIso8601String() ?? null,
             'reviewed_by'   => null,
 
             // Legacy nested payloads (backward compatible)
