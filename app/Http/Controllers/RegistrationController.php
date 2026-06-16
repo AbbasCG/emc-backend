@@ -44,6 +44,16 @@ class RegistrationController extends Controller
             $course = Course::findOrFail($validated['course_id']);
             $course->loadMissing(['track', 'instructor.user', 'features']);
 
+            // Path-owned courses can only be reached via Learning Path enrollment
+            // (see StudentLearningPathController::enroll, which creates Registration rows
+            // directly and never goes through this controller).
+            if ($course->activeLearningPath()) {
+                return response()->json([
+                    'message'    => 'This course is part of a learning path and cannot be enrolled directly.',
+                    'message_ar' => 'هذه الدورة جزء من مسار تعليمي ولا يمكن التسجيل فيها مباشرة. يرجى التسجيل في المسار التعليمي.',
+                ], 422);
+            }
+
             if ($course->type === 'paid' && empty($validated['payment_provider'])) {
                 return response()->json([
                     'success' => false,

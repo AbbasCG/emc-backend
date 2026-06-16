@@ -242,8 +242,19 @@ class AdminLearningPathController extends Controller
             }
         });
 
-        AuditLogService::logModel('updated', $learningPath, $oldSnap,
-            ['title' => $learningPath->title, 'status' => $learningPath->status], null, $request);
+        $newStatus   = $learningPath->status;
+        $lpAction    = 'updated';
+        if (isset($data['status']) && $data['status'] !== $oldSnap['status']) {
+            if ($data['status'] === 'published') {
+                $lpAction = 'PUBLISH';
+            } elseif ($oldSnap['status'] === 'published') {
+                $lpAction = 'UNPUBLISH';
+            } else {
+                $lpAction = 'status_changed';
+            }
+        }
+        AuditLogService::logModel($lpAction, $learningPath, $oldSnap,
+            ['title' => $learningPath->title, 'status' => $newStatus], null, $request);
 
         $learningPath->load(['instructor.user', 'courses'])->loadCount('courses');
 
@@ -430,6 +441,11 @@ class AdminLearningPathController extends Controller
             'requirements.*'    => 'string|max:500',
             'course_ids'        => 'nullable|array',
             'course_ids.*'      => 'integer|exists:courses,id',
+            'study_days_per_week' => 'nullable|integer|min:0|max:7',
+            'study_days'        => 'nullable|array',
+            'study_days.*'      => 'string|max:50',
+            'study_time'        => 'nullable|string|max:100',
+            'schedule_note'     => 'nullable|string|max:255',
         ]);
 
         unset($data['featured_image']);

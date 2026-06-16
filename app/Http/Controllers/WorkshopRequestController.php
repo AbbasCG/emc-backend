@@ -257,10 +257,13 @@ class WorkshopRequestController extends Controller
             ], fn ($v) => $v !== null));
 
             AuditLogService::log(
-                'final_approved', 'WorkshopRequest', $workshopRequest->id,
-                $workshopRequest->program_name, null, null,
-                ['acted_by_id' => $user->id, 'selected_date_option' => $selectedDateOption],
-                $request
+                action:      'APPROVE',
+                entityType:  'WorkshopRequest',
+                entityId:    $workshopRequest->id,
+                entityName:  $workshopRequest->program_name,
+                extra:       ['final' => true, 'acted_by_id' => $user->id, 'selected_date_option' => $selectedDateOption],
+                request:     $request,
+                description: $user->name . ' gave final approval for workshop request "' . $workshopRequest->program_name . '"',
             );
 
             return response()->json(['success' => true, 'message' => 'تمت الموافقة النهائية على الطلب']);
@@ -291,10 +294,14 @@ class WorkshopRequestController extends Controller
         );
 
         AuditLogService::log(
-            'approved_step_' . $currentStep, 'WorkshopRequest', $workshopRequest->id,
-            $workshopRequest->program_name, null, ['next_step' => $nextStep, 'next_department' => $nextDeptKey],
-            ['acted_by_id' => $user->id, 'selected_date_option' => $selectedDateOption],
-            $request
+            action:      'APPROVE',
+            entityType:  'WorkshopRequest',
+            entityId:    $workshopRequest->id,
+            entityName:  $workshopRequest->program_name,
+            newValues:   ['next_step' => $nextStep, 'next_department' => $nextDeptKey],
+            extra:       ['step' => $currentStep, 'acted_by_id' => $user->id, 'selected_date_option' => $selectedDateOption],
+            request:     $request,
+            description: $user->name . ' approved step ' . $currentStep . ' for "' . $workshopRequest->program_name . '"',
         );
 
         return response()->json([
@@ -342,10 +349,13 @@ class WorkshopRequestController extends Controller
         ]);
 
         AuditLogService::log(
-            'rejected', 'WorkshopRequest', $workshopRequest->id,
-            $workshopRequest->program_name, null, ['step' => $currentStep],
-            ['acted_by_id' => $user->id, 'notes' => $notes ?: null],
-            $request
+            action:      'REJECT',
+            entityType:  'WorkshopRequest',
+            entityId:    $workshopRequest->id,
+            entityName:  $workshopRequest->program_name,
+            extra:       ['step' => $currentStep, 'acted_by_id' => $user->id, 'notes' => $notes ?: null],
+            request:     $request,
+            description: $user->name . ' rejected workshop request "' . $workshopRequest->program_name . '" at step ' . $currentStep,
         );
 
         NotificationService::workshopRequestRejected(

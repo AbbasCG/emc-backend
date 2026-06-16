@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\ReportResource;
 use App\Models\Report;
+use App\Services\AuditLogService;
 use App\Services\ReportGeneratorService;
 use Illuminate\Http\Request;
 
@@ -37,6 +38,12 @@ class ReportController extends Controller
         ]);
 
         $report = $this->generator->generate($data['type'], $data, $request->user()->id);
+
+        AuditLogService::logExport(
+            $data['type'],
+            $request->user()->name . ' exported ' . $data['type'],
+            $request
+        );
 
         return response()->json([
             'success' => true,

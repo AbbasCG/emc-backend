@@ -7,6 +7,7 @@ use App\Http\Resources\VolunteerRequestResource;
 use App\Models\Department;
 use App\Models\TeamProfile;
 use App\Models\VolunteerRequest;
+use App\Services\AuditLogService;
 use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -70,9 +71,36 @@ class AdminVolunteerRequestController extends Controller
             $updates['admin_notes'] = $data['admin_notes'];
         }
 
+        $oldStatus = $volunteerRequest->status;
         $volunteerRequest->update($updates);
 
         $fresh = $volunteerRequest->fresh()->load('reviewer');
+
+        $newStatus = $fresh->status;
+        $actor     = $request->user();
+        if (in_array($newStatus, ['accepted', 'approved'], true)) {
+            AuditLogService::log(
+                action:      'APPROVE',
+                entityType:  'VolunteerRequest',
+                entityId:    $fresh->id,
+                entityName:  $fresh->full_name,
+                oldValues:   ['status' => $oldStatus],
+                newValues:   ['status' => $newStatus],
+                request:     $request,
+                description: $actor->name . ' approved volunteer request from "' . $fresh->full_name . '"',
+            );
+        } elseif (in_array($newStatus, ['rejected', 'declined'], true)) {
+            AuditLogService::log(
+                action:      'REJECT',
+                entityType:  'VolunteerRequest',
+                entityId:    $fresh->id,
+                entityName:  $fresh->full_name,
+                oldValues:   ['status' => $oldStatus],
+                newValues:   ['status' => $newStatus],
+                request:     $request,
+                description: $actor->name . ' rejected volunteer request from "' . $fresh->full_name . '"',
+            );
+        }
 
         return response()->json([
             'success' => true,
@@ -88,19 +116,21 @@ class AdminVolunteerRequestController extends Controller
     {
         $path = $volunteerRequest->cvStoragePath();
 
-        if (! $path || ! Storage::disk('public')->exists($path)) {
+        [$disk, $resolvedPath] = $this->resolveCvDisk($path);
+
+        if (! $disk) {
             return response()->json([
                 'success' => false,
                 'message' => 'CV file not found.',
             ], 404);
         }
 
-        $filename = basename($path);
+        $filename = basename($resolvedPath);
         if (! str_contains($filename, '.')) {
             $filename .= '.pdf';
         }
 
-        return Storage::disk('public')->download($path, $filename);
+        return Storage::disk($disk)->download($resolvedPath, $filename);
     }
 
     // GET /api/admin/volunteer-requests/{id}/cv/view  (signed URL — inline view)
@@ -108,14 +138,37 @@ class AdminVolunteerRequestController extends Controller
     {
         $path = $volunteerRequest->cvStoragePath();
 
-        if (! $path || ! Storage::disk('public')->exists($path)) {
+        [$disk, $resolvedPath] = $this->resolveCvDisk($path);
+
+        if (! $disk) {
             return response()->json([
                 'success' => false,
                 'message' => 'CV file not found.',
             ], 404);
         }
 
-        return Storage::disk('public')->response($path);
+        return Storage::disk($disk)->response($resolvedPath);
+    }
+
+    /**
+     * Backward-compatible disk resolution: new CVs are stored on the private
+     * disk, but CVs uploaded before this fix may still be on `public`.
+     */
+    private function resolveCvDisk(?string $path): array
+    {
+        if (! $path) {
+            return [null, $path];
+        }
+
+        if (Storage::disk('private')->exists($path)) {
+            return ['private', $path];
+        }
+
+        if (Storage::disk('public')->exists($path)) {
+            return ['public', $path];
+        }
+
+        return [null, $path];
     }
 
     // POST /api/admin/volunteer-requests/{id}/convert-to-member

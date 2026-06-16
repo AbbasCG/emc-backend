@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -11,7 +12,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class LearningPath extends Model
 {
-    use HasFactory, SoftDeletes;
+    use Auditable, HasFactory, SoftDeletes;
 
     protected $fillable = [
         'instructor_id',
@@ -32,6 +33,10 @@ class LearningPath extends Model
         'enrollment_open',
         'learning_outcomes',
         'requirements',
+        'study_days_per_week',
+        'study_days',
+        'study_time',
+        'schedule_note',
     ];
 
     protected $casts = [
@@ -41,6 +46,7 @@ class LearningPath extends Model
         'discount_price'   => 'decimal:2',
         'learning_outcomes' => 'array',
         'requirements'     => 'array',
+        'study_days'       => 'array',
     ];
 
     public function instructor(): BelongsTo

@@ -154,12 +154,13 @@ class AdminCourseStudentsController extends Controller
         );
 
         AuditLogService::log(
-            'student_enrolled',
-            'Course', $course->id, $course->title,
-            [],
-            ['user_id' => $user->id, 'email' => $user->email, 'status' => $enrollStatus],
-            null,
-            $request
+            action:      'ENROLL',
+            entityType:  'Course',
+            entityId:    $course->id,
+            entityName:  $course->title,
+            newValues:   ['user_id' => $user->id, 'email' => $user->email, 'status' => $enrollStatus],
+            request:     $request,
+            description: $user->name . ' enrolled in course "' . $course->title . '"',
         );
 
         $progressMap = collect([$user->id => $progress]);

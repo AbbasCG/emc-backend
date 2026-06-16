@@ -462,13 +462,19 @@ class CalendarController extends Controller
         return $byLeader->merge($byDeptId)->merge($byName)->unique()->values();
     }
 
-    private function safeCarbon(mixed $value): ?Carbon
+    /** Europe/Amsterdam is the canonical display timezone for all EMC calendar events. */
+    private const DISPLAY_TZ = 'Europe/Amsterdam';
+
+    private function safeCarbon(mixed $value, ?string $tz = null): ?Carbon
     {
         if (! $value) {
             return null;
         }
         try {
-            return $value instanceof Carbon ? $value : Carbon::parse($value);
+            if ($value instanceof Carbon) {
+                return $value;
+            }
+            return $tz ? Carbon::parse($value, $tz) : Carbon::parse($value);
         } catch (\Throwable) {
             return null;
         }
@@ -508,7 +514,7 @@ class CalendarController extends Controller
             $time .= ':00';
         }
 
-        return $this->safeCarbon($dateStr . ' ' . $time);
+        return $this->safeCarbon($dateStr . ' ' . $time, self::DISPLAY_TZ);
     }
 
     private function courseScheduleEndAt(Course $course): ?Carbon
@@ -528,7 +534,7 @@ class CalendarController extends Controller
             $time .= ':00';
         }
 
-        return $this->safeCarbon($dateStr . ' ' . $time);
+        return $this->safeCarbon($dateStr . ' ' . $time, self::DISPLAY_TZ);
     }
 
     private function programImageUrl(?string $path): ?string
@@ -610,11 +616,11 @@ class CalendarController extends Controller
                 : (string) $s->session_date;
 
             $startAt = $dateStr && $s->start_time
-                ? Carbon::parse($dateStr . ' ' . $s->start_time)
-                : $this->safeCarbon($dateStr);
+                ? Carbon::parse($dateStr . ' ' . $s->start_time, self::DISPLAY_TZ)
+                : ($dateStr ? Carbon::parse($dateStr, self::DISPLAY_TZ) : null);
 
             $endAt = $dateStr && $s->end_time
-                ? Carbon::parse($dateStr . ' ' . $s->end_time)
+                ? Carbon::parse($dateStr . ' ' . $s->end_time, self::DISPLAY_TZ)
                 : null;
 
             return [
@@ -678,7 +684,7 @@ class CalendarController extends Controller
                 : (string) ($w->start_date ?? '');
 
             $startAt = $dateStr
-                ? Carbon::parse($dateStr . ' ' . ($w->start_time ?? '00:00:00'))
+                ? Carbon::parse($dateStr . ' ' . ($w->start_time ?? '00:00:00'), self::DISPLAY_TZ)
                 : null;
 
             $endDateStr = $w->end_date instanceof Carbon
@@ -686,7 +692,7 @@ class CalendarController extends Controller
                 : (string) ($w->end_date ?? $dateStr ?? '');
 
             $endAt = $endDateStr
-                ? Carbon::parse($endDateStr . ' ' . ($w->end_time ?? '23:59:00'))
+                ? Carbon::parse($endDateStr . ' ' . ($w->end_time ?? '23:59:00'), self::DISPLAY_TZ)
                 : null;
 
             return [
@@ -745,12 +751,14 @@ class CalendarController extends Controller
     private function normalizeMeetings(Collection $meetings, $user, bool $canEdit): Collection
     {
         return $meetings->map(function ($m) use ($user, $canEdit) {
-            $date    = $this->safeCarbon($m->meeting_date) ?? now();
-            $startAt = $m->start_time
-                ? $date->copy()->setTimeFromTimeString($m->start_time)
-                : $date->copy()->startOfDay();
-            $endAt = $m->end_time
-                ? $date->copy()->setTimeFromTimeString($m->end_time)
+            $dateStr = $m->meeting_date instanceof Carbon
+                ? $m->meeting_date->toDateString()
+                : (string) ($m->meeting_date ?? '');
+            $startAt = $dateStr && $m->start_time
+                ? Carbon::parse($dateStr . ' ' . $m->start_time, self::DISPLAY_TZ)
+                : ($dateStr ? Carbon::parse($dateStr, self::DISPLAY_TZ)->startOfDay() : now(self::DISPLAY_TZ)->startOfDay());
+            $endAt = $dateStr && $m->end_time
+                ? Carbon::parse($dateStr . ' ' . $m->end_time, self::DISPLAY_TZ)
                 : null;
 
             return [

@@ -15,7 +15,7 @@ class DocumentResource extends JsonResource
             'file_name'   => $this->file_name,
             'file_type'   => $this->file_type,
             'file_size'   => $this->file_size,
-            'file_path'   => $this->file_path,
+            'download_url' => $this->file_path ? route('documents.download', $this->id) : null,
             'visibility'  => $this->visibility,
             'tags'        => $this->tags,
             'folder'      => $this->whenLoaded('folder', fn () => [

@@ -38,6 +38,17 @@ return [
             'report' => false,
         ],
 
+        // Alias of `local` — non-public disk used by FileUploadService modules
+        // and secure-download controllers. Same root, kept as a separate name
+        // so "private" reads unambiguously at call sites.
+        'private' => [
+            'driver' => 'local',
+            'root' => storage_path('app/private'),
+            'serve' => true,
+            'throw' => false,
+            'report' => false,
+        ],
+
         'public' => [
             'driver' => 'local',
             'root' => storage_path('app/public'),

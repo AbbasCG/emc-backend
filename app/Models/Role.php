@@ -2,11 +2,13 @@
 
 namespace App\Models;
 
+use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class Role extends Model
 {
+    use Auditable;
     protected $fillable = ['name', 'display_name', 'description', 'is_system'];
 
     protected $casts = ['is_system' => 'boolean'];

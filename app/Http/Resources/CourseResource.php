@@ -46,6 +46,7 @@ class CourseResource extends JsonResource
             'location'              => $this->location,
             'meeting_link'          => $this->meeting_link,
             'is_online'             => (bool) $this->is_online,
+            'whatsapp_community_url' => $this->whatsapp_community_url,
 
             // Capacity
             'capacity'              => $this->capacity,

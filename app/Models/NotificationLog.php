@@ -8,13 +8,15 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class NotificationLog extends Model
 {
     protected $fillable = [
-        'user_id', 'channel', 'type', 'recipient',
-        'status', 'payload', 'error_message', 'sent_at',
+        'user_id', 'channel', 'type', 'recipient', 'subject',
+        'status', 'payload', 'error_message', 'sent_at', 'queued_at', 'failed_at',
     ];
 
     protected $casts = [
-        'payload' => 'array',
-        'sent_at' => 'datetime',
+        'payload'   => 'array',
+        'sent_at'   => 'datetime',
+        'queued_at' => 'datetime',
+        'failed_at' => 'datetime',
     ];
 
     public function user(): BelongsTo

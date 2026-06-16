@@ -4,7 +4,6 @@ namespace App\Http\Resources;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
-use Illuminate\Support\Facades\Storage;
 
 class AssignmentSubmissionResource extends JsonResource
 {
@@ -15,10 +14,10 @@ class AssignmentSubmissionResource extends JsonResource
             'assignment_id' => $this->assignment_id,
             'user_id'       => $this->user_id,
 
-            // File: always expose a public URL if a file path is stored
-            'file_path'     => $this->file_path,
+            // File: served through an authorized download endpoint —
+            // never expose the raw storage path or a direct public URL.
             'file_url'      => $this->file_path
-                ? Storage::disk('public')->url($this->file_path)
+                ? route('submissions.download', $this->id)
                 : null,
 
             // Text answer

@@ -3,6 +3,15 @@
 namespace App\Services;
 
 use App\Enums\RegistrationStatus;
+use App\Mail\AdminNewRegistrationMail;
+use App\Mail\AssignmentGradedMail;
+use App\Mail\AssignmentSubmittedMail;
+use App\Mail\CertificateMail;
+use App\Mail\CourseCompletionMail;
+use App\Mail\CourseEnrollmentMail;
+use App\Mail\LearningPathCompletionMail;
+use App\Mail\LearningPathEnrollmentMail;
+use App\Mail\WelcomeMail;
 use App\Models\Department;
 use App\Models\PlatformNotification;
 use App\Models\Registration;
@@ -217,8 +226,21 @@ class NotificationService
             ]
         );
 
+        $student = User::find($studentUserId);
+        if ($student?->email) {
+            EmailService::dispatch(
+                'course_enrollment',
+                $student->email,
+                $student->name,
+                $studentUserId,
+                new CourseEnrollmentMail($student->name, $courseTitle, ''),
+                "تم تسجيلك في الدورة: {$courseTitle}"
+            );
+        }
+
         // Notify admins
-        self::send(self::adminUserIds(), 'new_registration',
+        $adminIds = self::adminUserIds();
+        self::send($adminIds, 'new_registration',
             'تسجيل جديد',
             "طالب جديد سجّل في الدورة: {$courseTitle}",
             [
@@ -229,6 +251,24 @@ class NotificationService
                 'color'       => 'blue',
             ]
         );
+
+        $adminUsers = User::whereIn('id', $adminIds)->whereNotNull('email')->get();
+        foreach ($adminUsers as $admin) {
+            EmailService::dispatch(
+                'admin_new_registration',
+                $admin->email,
+                $admin->name,
+                $admin->id,
+                new AdminNewRegistrationMail(
+                    $admin->name,
+                    $student?->name ?? '',
+                    $student?->email ?? '',
+                    $courseTitle,
+                    $registrationId
+                ),
+                "تسجيل جديد: {$courseTitle}"
+            );
+        }
     }
 
     public static function registrationConfirmed(int $studentUserId, int $courseId, string $courseTitle, int $registrationId): void
@@ -356,7 +396,7 @@ class NotificationService
         );
     }
 
-    public static function accountCreated(int $userId, string $userName): void
+    public static function accountCreated(int $userId, string $userName, ?string $tempPassword = null): void
     {
         self::send($userId, 'account_created',
             'مرحباً بك في المنصة',
@@ -369,6 +409,18 @@ class NotificationService
                 'color'       => 'blue',
             ]
         );
+
+        $user = User::find($userId);
+        if ($user?->email) {
+            EmailService::dispatch(
+                'welcome',
+                $user->email,
+                $user->name,
+                $userId,
+                new WelcomeMail($user->name, $user->email, $tempPassword),
+                'مرحباً بك في منصة EMC'
+            );
+        }
     }
 
     // ── Volunteer request ────────────────────────────────────────────────────
@@ -591,6 +643,18 @@ class NotificationService
                 'color'       => 'green',
             ]
         );
+
+        $student = User::find($studentUserId);
+        if ($student?->email) {
+            EmailService::dispatch(
+                'assignment_graded',
+                $student->email,
+                $student->name,
+                $studentUserId,
+                new AssignmentGradedMail($student->name, $courseTitle, $assignmentTitle, $score, $maxScore, $feedback),
+                "تم تقييم واجبك: {$assignmentTitle}"
+            );
+        }
     }
 
     /**
@@ -614,6 +678,18 @@ class NotificationService
                 'color'       => 'yellow',
             ]
         );
+
+        $student = User::find($studentUserId);
+        if ($student?->email) {
+            EmailService::dispatch(
+                'certificate_issued',
+                $student->email,
+                $student->name,
+                $studentUserId,
+                new CertificateMail($student->name, $courseTitle, null, $verificationCode),
+                "شهادتك جاهزة: {$courseTitle}"
+            );
+        }
     }
 
     /**
@@ -672,6 +748,19 @@ class NotificationService
                 'color'       => 'blue',
             ]
         );
+
+        $instructor = User::find($instructorUserId);
+        if ($instructor?->email) {
+            $reviewUrl = config('app.frontend_url', config('app.url')) . "/dashboard/instructor/submissions/{$submissionId}";
+            EmailService::dispatch(
+                'assignment_submitted',
+                $instructor->email,
+                $instructor->name,
+                $instructorUserId,
+                new AssignmentSubmittedMail($instructor->name, $studentName, $courseTitle, $assignmentTitle, $reviewUrl),
+                "تسليم واجب جديد: {$assignmentTitle}"
+            );
+        }
     }
 
     /**
@@ -824,5 +913,104 @@ class NotificationService
         ->first();
 
         return $dept?->leader_id ? [$dept->leader_id] : [];
+    }
+
+    // ── New email-only notification methods ──────────────────────────────────
+
+    public static function learningPathEnrolled(
+        int    $studentUserId,
+        string $pathTitle,
+        int    $coursesCount,
+        int    $pathId,
+        ?string $estimatedDuration = null
+    ): void {
+        self::send($studentUserId, 'learning_path_enrolled',
+            'انضممت إلى مسار تعليمي',
+            "تم تسجيلك في المسار التعليمي: {$pathTitle}",
+            [
+                'entity_type' => 'learning_path',
+                'entity_id'   => $pathId,
+                'action_url'  => "/dashboard/student/learning-paths/{$pathId}",
+                'icon'        => 'map',
+                'color'       => 'green',
+            ]
+        );
+
+        $student = User::find($studentUserId);
+        if ($student?->email) {
+            $pathUrl = config('app.frontend_url', config('app.url')) . "/dashboard/student/learning-paths/{$pathId}";
+            EmailService::dispatch(
+                'learning_path_enrollment',
+                $student->email,
+                $student->name,
+                $studentUserId,
+                new LearningPathEnrollmentMail($student->name, $pathTitle, $coursesCount, $estimatedDuration, $pathUrl),
+                "انضممت إلى مسار: {$pathTitle}"
+            );
+        }
+    }
+
+    public static function learningPathCompleted(
+        int    $studentUserId,
+        string $pathTitle,
+        int    $coursesCompleted,
+        int    $pathId,
+        ?string $certificateUrl = null
+    ): void {
+        self::send($studentUserId, 'learning_path_completed',
+            'أكملت المسار التعليمي',
+            "تهانينا! أكملت المسار التعليمي: {$pathTitle}",
+            [
+                'entity_type' => 'learning_path',
+                'entity_id'   => $pathId,
+                'action_url'  => "/dashboard/student/certificates",
+                'icon'        => 'trophy',
+                'color'       => 'yellow',
+            ]
+        );
+
+        $student = User::find($studentUserId);
+        if ($student?->email) {
+            EmailService::dispatch(
+                'learning_path_completion',
+                $student->email,
+                $student->name,
+                $studentUserId,
+                new LearningPathCompletionMail($student->name, $pathTitle, $coursesCompleted, $certificateUrl),
+                "تهانينا! أكملت المسار: {$pathTitle}"
+            );
+        }
+    }
+
+    public static function courseStudentCompleted(
+        int    $studentUserId,
+        string $courseTitle,
+        string $completionDate,
+        int    $courseId,
+        ?string $certificateUrl = null
+    ): void {
+        self::send($studentUserId, 'course_completed_student',
+            'أتممت الدورة بنجاح',
+            "تهانينا! أتممت الدورة: {$courseTitle}",
+            [
+                'entity_type' => 'course',
+                'entity_id'   => $courseId,
+                'action_url'  => "/dashboard/student/certificates",
+                'icon'        => 'academic-cap',
+                'color'       => 'green',
+            ]
+        );
+
+        $student = User::find($studentUserId);
+        if ($student?->email) {
+            EmailService::dispatch(
+                'course_completion',
+                $student->email,
+                $student->name,
+                $studentUserId,
+                new CourseCompletionMail($student->name, $courseTitle, $completionDate, $certificateUrl),
+                "تهانينا! أتممت الدورة: {$courseTitle}"
+            );
+        }
     }
 }

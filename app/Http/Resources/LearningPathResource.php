@@ -29,6 +29,12 @@ class LearningPathResource extends JsonResource
             'learning_outcomes' => $this->ensureArray($this->learning_outcomes),
             'requirements'      => $this->ensureArray($this->requirements),
 
+            // Schedule fields
+            'study_days_per_week' => $this->study_days_per_week,
+            'study_days'        => $this->ensureArray($this->study_days),
+            'study_time'        => $this->study_time,
+            'schedule_note'     => $this->schedule_note,
+
             'courses_count'     => $this->whenLoaded('courses', fn () => $this->courses->count(), $this->courses_count ?? 0),
             'students_count'    => $this->students_count ?? 0,
 
@@ -43,6 +49,7 @@ class LearningPathResource extends JsonResource
                 'image_url'         => $this->resolveImageUrl($c->course_image),
                 'duration'          => $c->duration,
                 'level'             => $c->level,
+                'whatsapp_community_url' => $c->whatsapp_community_url,
                 'sort_order'        => $c->pivot->sort_order ?? 0,
             ])->sortBy('sort_order')->values()),
 

@@ -135,7 +135,7 @@ class StudentAssignmentController extends Controller
 
         $filePath = null;
         if ($request->hasFile('file') && $request->file('file')->isValid()) {
-            $filePath = $request->file('file')->store('assignment-submissions', 'public');
+            $filePath = $request->file('file')->store('assignment-submissions', 'private');
         }
 
         if (! $textAnswer && ! $filePath && ! $existing?->text_answer && ! $existing?->file_path) {

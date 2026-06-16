@@ -2,11 +2,13 @@
 
 namespace App\Models;
 
+use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class TeamMember extends Model
 {
+    use Auditable;
     protected $fillable = [
         'user_id', 'department_id', 'section_id', 'role_title', 'status', 'joined_at',
     ];

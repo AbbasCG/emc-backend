@@ -25,9 +25,7 @@ class CourseController extends Controller
             })
             // Exclude courses that belong to an active/published learning path —
             // those are only accessible via the learning path page, not as standalone courses.
-            ->whereDoesntHave('learningPaths', function ($q) {
-                $q->whereIn('learning_paths.status', ['published', 'active']);
-            })
+            ->publiclyVisible()
             ->latest();
 
         if ($request->filled('track_id')) {
@@ -59,6 +57,7 @@ class CourseController extends Controller
             ->withCount('registrations')
             ->where('slug', $slug)
             ->where('status', 'published')
+            ->publiclyVisible()
             ->firstOrFail();
 
         return (new CourseResource($course))
@@ -98,6 +97,7 @@ class CourseController extends Controller
             'learning_outcomes.*' => 'string|max:500',
             'features'         => 'nullable|array',
             'features.*'       => 'string|max:255',
+            'whatsapp_community_url' => ['nullable', 'string', 'starts_with:https://chat.whatsapp.com/'],
         ]);
 
         $validated['slug']   = $this->uniqueSlug($validated['title']);
@@ -156,6 +156,7 @@ class CourseController extends Controller
             'learning_outcomes.*' => 'string|max:500',
             'features'          => 'nullable|array',
             'features.*'        => 'string|max:255',
+            'whatsapp_community_url' => ['nullable', 'string', 'starts_with:https://chat.whatsapp.com/'],
         ]);
 
         if (isset($validated['title']) && ! isset($validated['slug'])) {

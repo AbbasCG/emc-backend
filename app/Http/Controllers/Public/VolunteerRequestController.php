@@ -36,7 +36,7 @@ class VolunteerRequestController extends Controller
         if ($request->hasFile('cv_file')) {
             $ext    = $request->file('cv_file')->getClientOriginalExtension();
             $safe   = 'cv_' . Str::uuid() . '.' . $ext;
-            $cvPath = $request->file('cv_file')->storeAs('volunteer-cvs', $safe, 'public');
+            $cvPath = $request->file('cv_file')->storeAs('volunteer-cvs', $safe, 'private');
         }
 
         $volunteerRequest = VolunteerRequest::create([

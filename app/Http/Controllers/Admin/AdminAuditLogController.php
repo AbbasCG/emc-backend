@@ -20,16 +20,16 @@ class AdminAuditLogController extends Controller
             $query->where('action', $request->action);
         }
 
-        if ($request->filled('actor_id')) {
-            $query->where('actor_id', (int) $request->actor_id);
-        }
-
-        if ($request->filled('actor_role')) {
-            $query->where('actor_role', $request->actor_role);
-        }
-
         if ($request->filled('entity_type')) {
             $query->where('entity_type', $request->entity_type);
+        }
+
+        if ($request->filled('user_id')) {
+            $query->where('user_id', (int) $request->user_id);
+        }
+
+        if ($request->filled('role')) {
+            $query->where('user_role', $request->role);
         }
 
         if ($request->filled('date_from')) {
@@ -43,9 +43,11 @@ class AdminAuditLogController extends Controller
         if ($request->filled('search')) {
             $term = $request->search;
             $query->where(function ($q) use ($term) {
-                $q->where('actor_name', 'like', "%{$term}%")
-                  ->orWhere('entity_label', 'like', "%{$term}%")
-                  ->orWhere('action', 'like', "%{$term}%");
+                $q->where('user_name',   'like', "%{$term}%")
+                  ->orWhere('user_email', 'like', "%{$term}%")
+                  ->orWhere('entity_name', 'like', "%{$term}%")
+                  ->orWhere('action',     'like', "%{$term}%")
+                  ->orWhere('description', 'like', "%{$term}%");
             });
         }
 
@@ -74,23 +76,44 @@ class AdminAuditLogController extends Controller
 
     private function format(AuditLog $l, bool $detailed = false): array
     {
+        $meta = $l->action_meta;
+
         $data = [
-            'id'           => $l->id,
-            'actor_id'     => $l->actor_id,
-            'actor_name'   => $l->actor_name,
-            'actor_role'   => $l->actor_role,
-            'action'       => $l->action,
-            'entity_type'  => $l->entity_type,
-            'entity_id'    => $l->entity_id,
-            'entity_label' => $l->entity_label,
-            'metadata'     => $l->metadata,
-            'ip_address'   => $l->ip_address,
-            'created_at'   => $l->created_at,
+            'id'             => $l->id,
+            'user'           => [
+                'id'    => $l->user_id,
+                'name'  => $l->user_name,
+                'email' => $l->user_email,
+                'role'  => $l->user_role,
+            ],
+            // Legacy field aliases for backward-compat with existing frontend
+            'actor_name'     => $l->user_name,
+            'actor_role'     => $l->user_role,
+            'entity_label'   => $l->entity_name,
+
+            'action'         => $l->action,
+            'action_label'   => $meta['label'],
+            'action_color'   => $meta['color'],
+            'action_icon'    => $meta['icon'],
+
+            'entity_type'    => $l->entity_type,
+            'entity_id'      => $l->entity_id,
+            'entity_name'    => $l->entity_name,
+            'description'    => $l->description,
+
+            // Diff fields — always returned so the list view can render changes inline
+            'old_values'     => $l->old_values,
+            'new_values'     => $l->new_values,
+            'changed_fields' => $l->changed_fields,
+
+            'ip_address'     => $l->ip_address,
+            'route'          => $l->route,
+            'method'         => $l->method,
+            'created_at'     => $l->created_at?->format('Y-m-d H:i:s'),
         ];
 
         if ($detailed) {
-            $data['old_values'] = $l->old_values;
-            $data['new_values'] = $l->new_values;
+            $data['metadata']   = $l->metadata;
             $data['user_agent'] = $l->user_agent;
         }
 

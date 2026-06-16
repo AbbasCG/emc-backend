@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -15,7 +16,7 @@ use App\Models\User;
 
 class Course extends Model
 {
-    use HasFactory, SoftDeletes;
+    use Auditable, HasFactory, SoftDeletes;
 
     protected $fillable = [
         'track_id',
@@ -63,6 +64,7 @@ class Course extends Model
         'course_thumbnail',
         'requires_placement_test',
         'placement_test_type',
+        'whatsapp_community_url',
     ];
 
     protected $casts = [
@@ -192,5 +194,17 @@ class Course extends Model
     public function requiresPlacement(): bool
     {
         return (bool) $this->requires_placement_test;
+    }
+
+    /**
+     * Scope: exclude courses owned by an active/published learning path.
+     * Such courses are only reachable through their learning path's detail page,
+     * never as standalone catalog items.
+     */
+    public function scopePubliclyVisible($query)
+    {
+        return $query->whereDoesntHave('learningPaths', function ($q) {
+            $q->whereIn('learning_paths.status', ['published', 'active']);
+        });
     }
 }

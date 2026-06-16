@@ -38,6 +38,13 @@ Schedule::call(function () {
     }
 })->dailyAt('04:00')->name('rotate-log')->withoutOverlapping();
 
+// Session reminders — 24h and 1h before upcoming sessions (CourseSession + LmsSession)
+Schedule::command('emc:send-session-reminders')
+    ->everyFifteenMinutes()
+    ->withoutOverlapping()
+    ->runInBackground()
+    ->appendOutputTo(storage_path('logs/scheduler.log'));
+
 // Optional: daily database backup at 01:00 (enable by setting ENABLE_SCHEDULED_BACKUP=true)
 // --prune-days=30 removes backup files older than 30 days after each successful run.
 if (env('ENABLE_SCHEDULED_BACKUP', false)) {

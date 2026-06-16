@@ -38,6 +38,8 @@ use App\Http\Controllers\Admin\AdminLmsProgressController;
 use App\Http\Controllers\Admin\AdminLmsSessionController;
 use App\Http\Controllers\Admin\DepartmentController;
 use App\Http\Controllers\Admin\DepartmentSectionController;
+use App\Http\Controllers\Admin\EmailLogsController;
+use App\Http\Controllers\Admin\EmailSettingsController;
 use App\Http\Controllers\Admin\DynamicFormController;
 use App\Http\Controllers\Admin\MarketingItemController;
 use App\Http\Controllers\Admin\MeetingController;
@@ -213,6 +215,12 @@ Route::middleware('auth:sanctum')->get(
     [\App\Http\Controllers\Student\MaterialDownloadController::class, 'download']
 )->name('materials.download');
 
+// ─── Protected assignment submission download (auth:sanctum, access checked inside) ──
+Route::middleware('auth:sanctum')->get(
+    '/submissions/{submission}/download',
+    [\App\Http\Controllers\SubmissionDownloadController::class, 'download']
+)->name('submissions.download');
+
 // ─── Notifications (auth:sanctum, any role) ───────────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/notifications',                   [NotificationController::class, 'index']);
@@ -224,6 +232,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Documents (auth:sanctum, any role; visibility enforced in controller)
     Route::get('/documents',  [DocumentController::class, 'index']);
     Route::post('/documents', [DocumentController::class, 'store']);
+    Route::get('/documents/{document}/download', [DocumentController::class, 'download'])->name('documents.download');
 
     // AI Conversations (Phase 5 — enhanced Phase 8)
     Route::prefix('ai')->middleware('throttle:ai')->group(function () {
@@ -263,6 +272,7 @@ Route::prefix('partner')->middleware(['auth:sanctum', 'role:partner,admin'])->gr
     Route::get('/reports',   [PartnerReportController::class, 'index']);
     Route::get('/documents', [PartnerDocumentController::class, 'index']);
     Route::post('/documents',[PartnerDocumentController::class, 'store']);
+    Route::get('/documents/{document}/download', [PartnerDocumentController::class, 'download'])->name('partner.documents.download');
 });
 
 // ─── Instructor LMS portal (auth:sanctum + role:instructor,admin) ───────────
@@ -686,6 +696,14 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
     Route::get('api-tokens',                         [ApiTokenController::class, 'index']);
     Route::post('api-tokens',                        [ApiTokenController::class, 'store']);
     Route::delete('api-tokens/{id}',                 [ApiTokenController::class, 'destroy']);
+
+    // ── Email settings & logs ─────────────────────────────────────────────────
+    Route::get('email-settings',            [EmailSettingsController::class, 'index']);
+    Route::put('email-settings',            [EmailSettingsController::class, 'update']);
+    Route::post('email-settings/test',      [EmailSettingsController::class, 'test']);
+    Route::get('email-logs',                [EmailLogsController::class, 'index']);
+    Route::get('email-logs/stats',          [EmailLogsController::class, 'stats']);
+    Route::post('email-logs/{id}/retry',    [EmailLogsController::class, 'retry']);
 
     // ── Phase 7: Notification templates & logs ────────────────────────────────
     Route::get('notification-templates',             [NotificationTemplateController::class, 'index']);

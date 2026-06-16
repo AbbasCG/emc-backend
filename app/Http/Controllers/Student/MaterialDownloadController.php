@@ -6,6 +6,7 @@ use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Models\CourseMaterial;
 use App\Models\Registration;
+use App\Services\AuditLogService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -31,6 +32,8 @@ class MaterialDownloadController extends Controller
         abort_if($disk === null, 404, 'File not found.');
 
         $filename = basename($path);
+
+        AuditLogService::logDownload($material, $filename, $request);
 
         return Storage::disk($disk)->download($path, $filename);
     }

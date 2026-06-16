@@ -272,7 +272,16 @@ class AdminCourseController extends Controller
             event(new CourseUpdatedEvent($fresh, $changes));
         }
 
-        $action = (isset($data['status']) && $data['status'] !== $oldSnap['status']) ? 'status_changed' : 'updated';
+        $statusChanged = isset($data['status']) && $data['status'] !== $oldSnap['status'];
+        if ($statusChanged && $data['status'] === 'published') {
+            $action = 'PUBLISH';
+        } elseif ($statusChanged && $oldSnap['status'] === 'published') {
+            $action = 'UNPUBLISH';
+        } elseif ($statusChanged) {
+            $action = 'status_changed';
+        } else {
+            $action = 'updated';
+        }
         AuditLogService::logModel($action, $fresh, $oldSnap, [
             'title'      => $fresh->title,
             'status'     => $fresh->status,
@@ -477,6 +486,7 @@ class AdminCourseController extends Controller
             'requires_placement_test' => 'nullable|boolean',
             'course_thumbnail'        => 'nullable|string',
             'learning_path_id'        => 'nullable|integer|exists:learning_paths,id',
+            'whatsapp_community_url'  => ['nullable', 'string', 'starts_with:https://chat.whatsapp.com/'],
         ];
 
         if ($request->hasFile('course_image')) {
@@ -659,6 +669,7 @@ class AdminCourseController extends Controller
             ] : null,
             'registrations_count' => $course->registrations_count ?? null,
             'features'            => $course->features?->pluck('title')->all() ?? [],
+            'whatsapp_community_url' => $course->whatsapp_community_url,
             'created_at'          => $course->created_at,
             'updated_at'          => $course->updated_at,
             // Learning path membership
