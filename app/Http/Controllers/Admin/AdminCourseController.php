@@ -8,6 +8,7 @@ use App\Events\InstructorAssignedEvent;
 use App\Http\Controllers\Controller;
 use App\Models\Course;
 use App\Models\Instructor;
+use App\Models\LearningPathEnrollment;
 use App\Models\LearningPathItem;
 use App\Services\AuditLogService;
 use App\Support\CourseDisplay;
@@ -72,9 +73,24 @@ class AdminCourseController extends Controller
             ->get()
             ->keyBy('course_id');
 
+        // Batch LP enrollment counts for LP-owned courses
+        $lpIds = $lpItemMap->map(fn ($i) => $i->learning_path_id)->unique()->values()->all();
+        $lpEnrollMap = collect();
+        if ($lpIds) {
+            $lpEnrollMap = LearningPathEnrollment::whereIn('learning_path_id', $lpIds)
+                ->whereIn('status', ['active', 'registered', 'enrolled', 'completed'])
+                ->selectRaw('learning_path_id, count(*) as cnt')
+                ->groupBy('learning_path_id')
+                ->pluck('cnt', 'learning_path_id');
+        }
+
         return response()->json([
             'success' => true,
-            'data'    => $courses->map(fn ($c) => $this->format($c, $lpItemMap->get($c->id))),
+            'data'    => $courses->map(function ($c) use ($lpItemMap, $lpEnrollMap) {
+                $lpItem = $lpItemMap->get($c->id);
+                $lpEnrollCount = $lpItem ? (int) $lpEnrollMap->get($lpItem->learning_path_id, 0) : null;
+                return $this->format($c, $lpItem, $lpEnrollCount);
+            }),
             'meta'    => [
                 'total'        => $courses->total(),
                 'current_page' => $courses->currentPage(),
@@ -141,11 +157,13 @@ class AdminCourseController extends Controller
         $course->load(['instructor.user', 'track', 'features', 'department']);
 
         $lpItem = LearningPathItem::with('learningPath')->where('course_id', $course->id)->first();
+        $lpEnrollCount = $lpItem ? LearningPathEnrollment::where('learning_path_id', $lpItem->learning_path_id)
+            ->whereIn('status', ['active', 'registered', 'enrolled', 'completed'])->count() : null;
 
         return response()->json([
             'success' => true,
             'message' => 'تم إنشاء الدورة بنجاح.',
-            'data'    => $this->format($course, $lpItem),
+            'data'    => $this->format($course, $lpItem, $lpEnrollCount),
         ], 201);
     }
 
@@ -156,10 +174,12 @@ class AdminCourseController extends Controller
             ->loadCount('registrations');
 
         $lpItem = LearningPathItem::with('learningPath')->where('course_id', $course->id)->first();
+        $lpEnrollCount = $lpItem ? LearningPathEnrollment::where('learning_path_id', $lpItem->learning_path_id)
+            ->whereIn('status', ['active', 'registered', 'enrolled', 'completed'])->count() : null;
 
         return response()->json([
             'success' => true,
-            'data'    => $this->format($course, $lpItem),
+            'data'    => $this->format($course, $lpItem, $lpEnrollCount),
         ]);
     }
 
@@ -289,11 +309,13 @@ class AdminCourseController extends Controller
         ], null, $request);
 
         $lpItemFresh = LearningPathItem::with('learningPath')->where('course_id', $fresh->id)->first();
+        $lpEnrollCountFresh = $lpItemFresh ? LearningPathEnrollment::where('learning_path_id', $lpItemFresh->learning_path_id)
+            ->whereIn('status', ['active', 'registered', 'enrolled', 'completed'])->count() : null;
 
         return response()->json([
             'success' => true,
             'message' => 'تم تحديث الدورة بنجاح.',
-            'data'    => $this->format($fresh, $lpItemFresh),
+            'data'    => $this->format($fresh, $lpItemFresh, $lpEnrollCountFresh),
         ]);
     }
 
@@ -574,7 +596,7 @@ class AdminCourseController extends Controller
 
     // ─── Response formatter ───────────────────────────────────────────────────
 
-    private function format(Course $course, ?LearningPathItem $lpItem = null): array
+    private function format(Course $course, ?LearningPathItem $lpItem = null, ?int $lpEnrollmentCount = null): array
     {
         $imageUrl = $this->storageUrl($course->course_image);
 
@@ -667,17 +689,24 @@ class AdminCourseController extends Controller
                 'id'   => $course->createdBy->id,
                 'name' => $course->createdBy->name,
             ] : null,
-            'registrations_count' => $course->registrations_count ?? null,
+            'registrations_count'      => $course->registrations_count ?? 0,
+            // For LP-owned courses students enroll via the learning path, not directly,
+            // so the direct registrations_count is 0. effective_enrollment_count returns
+            // the LP enrollment count instead (the true number of enrolled students).
+            'effective_enrollment_count' => $isActiveLp && $lpEnrollmentCount !== null
+                ? $lpEnrollmentCount
+                : ($course->registrations_count ?? 0),
             'features'            => $course->features?->pluck('title')->all() ?? [],
             'whatsapp_community_url' => $course->whatsapp_community_url,
             'created_at'          => $course->created_at,
             'updated_at'          => $course->updated_at,
             // Learning path membership
             'learning_path'             => $lp ? [
-                'id'     => $lp->id,
-                'title'  => $lp->title,
-                'slug'   => $lp->slug,
-                'status' => $lp->status,
+                'id'                   => $lp->id,
+                'title'                => $lp->title,
+                'slug'                 => $lp->slug,
+                'status'               => $lp->status,
+                'enrolled_students_count' => $lpEnrollmentCount ?? 0,
             ] : null,
             'is_part_of_learning_path'  => $lp !== null,
             'learning_path_status'      => $lp?->status,

@@ -51,7 +51,11 @@ class CourseResource extends JsonResource
             // Capacity
             'capacity'              => $this->capacity,
             'seats_count'           => $this->capacity,
-            'registrations_count'   => $this->registrations_count ?? 0,
+            'registrations_count'        => $this->registrations_count ?? 0,
+            // Public course listings exclude LP-owned courses (publiclyVisible scope),
+            // so effective_enrollment_count equals registrations_count here.
+            // It exists so the frontend can use one unified field across admin and public.
+            'effective_enrollment_count' => $this->registrations_count ?? 0,
             // true when capacity is set and all seats are taken
             'is_full'               => $this->capacity !== null && ($this->registrations_count ?? 0) >= $this->capacity,
             'registration_open'     => (bool) ($this->registration_open ?? true),
