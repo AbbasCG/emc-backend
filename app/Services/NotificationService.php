@@ -782,7 +782,12 @@ class NotificationService
         $verb    = $isUpdate ? 'تم تحديث' : 'تمت إضافة';
         $message = "{$verb} جلسة \"{$sessionTitle}\" في الدورة: {$courseTitle}";
         if ($startsAt) {
-            $message .= " — الموعد: {$startsAt}";
+            try {
+                $dt = \Carbon\Carbon::parse($startsAt)->setTimezone('Europe/Amsterdam');
+                $message .= ' — الموعد: ' . self::formatArabicDatetime($dt);
+            } catch (\Throwable) {
+                // omit datetime rather than embed a raw ISO string
+            }
         }
 
         self::send($recipients, 'session_scheduled',
@@ -1012,5 +1017,19 @@ class NotificationService
                 "تهانينا! أتممت الدورة: {$courseTitle}"
             );
         }
+    }
+
+    /**
+     * Format a Carbon datetime as a human-readable Arabic string in Amsterdam local time.
+     * e.g. "18 يونيو 2026، 23:00"
+     */
+    private static function formatArabicDatetime(\Carbon\Carbon $dt): string
+    {
+        $months = [
+            1 => 'يناير', 2 => 'فبراير', 3 => 'مارس',    4 => 'أبريل',
+            5 => 'مايو',  6 => 'يونيو',  7 => 'يوليو',   8 => 'أغسطس',
+            9 => 'سبتمبر', 10 => 'أكتوبر', 11 => 'نوفمبر', 12 => 'ديسمبر',
+        ];
+        return "{$dt->day} {$months[$dt->month]} {$dt->year}، {$dt->format('H:i')}";
     }
 }

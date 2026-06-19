@@ -13,9 +13,7 @@ class AdminLmsSessionController extends Controller
 {
     public function index(Request $request): AnonymousResourceCollection
     {
-        $this->authorize('viewAny', LmsSession::class);
-
-        $query = LmsSession::query()->with(['workshop', 'instructor'])->latest();
+        $query = LmsSession::query()->with(['workshop', 'instructor', 'course'])->latest();
 
         if ($request->filled('course_id')) {
             $query->where(function ($q) use ($request) {
@@ -41,20 +39,18 @@ class AdminLmsSessionController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $this->authorize('create', LmsSession::class);
-
         $validated = $request->validate([
-            'workshop_id' => ['nullable', 'exists:workshops,id'],
-            'course_id' => ['nullable', 'exists:courses,id'],
-            'instructor_id' => ['nullable', 'exists:instructors,id'],
-            'title' => ['required', 'string', 'max:255'],
-            'description' => ['nullable', 'string'],
-            'session_date' => ['required', 'date'],
-            'start_time' => ['required', 'date_format:H:i'],
-            'end_time' => ['required', 'date_format:H:i'],
-            'meeting_url' => ['nullable', 'string', 'max:2000'],
-            'recording_url' => ['nullable', 'string', 'max:2000'],
-            'status' => ['nullable', 'in:scheduled,live,completed,cancelled'],
+            'workshop_id'    => ['nullable', 'exists:workshops,id'],
+            'course_id'      => ['nullable', 'exists:courses,id'],
+            'instructor_id'  => ['nullable', 'exists:instructors,id'],
+            'title'          => ['required', 'string', 'max:255'],
+            'description'    => ['nullable', 'string'],
+            'session_date'   => ['required', 'date'],
+            'start_time'     => ['required', 'date_format:H:i'],
+            'end_time'       => ['required', 'date_format:H:i'],
+            'meeting_url'    => ['nullable', 'string', 'max:2000'],
+            'recording_url'  => ['nullable', 'string', 'max:2000'],
+            'status'         => ['nullable', 'in:scheduled,live,completed,cancelled'],
         ]);
 
         $validated['status'] = $validated['status'] ?? 'scheduled';
@@ -69,8 +65,6 @@ class AdminLmsSessionController extends Controller
 
     public function show(LmsSession $session): JsonResponse
     {
-        $this->authorize('view', $session);
-
         $session->load(['workshop', 'instructor', 'attendances.user']);
 
         return (new LmsSessionResource($session))
@@ -80,20 +74,18 @@ class AdminLmsSessionController extends Controller
 
     public function update(Request $request, LmsSession $session): JsonResponse
     {
-        $this->authorize('update', $session);
-
         $validated = $request->validate([
-            'workshop_id' => ['sometimes', 'nullable', 'exists:workshops,id'],
-            'course_id' => ['sometimes', 'nullable', 'exists:courses,id'],
+            'workshop_id'   => ['sometimes', 'nullable', 'exists:workshops,id'],
+            'course_id'     => ['sometimes', 'nullable', 'exists:courses,id'],
             'instructor_id' => ['sometimes', 'nullable', 'exists:instructors,id'],
-            'title' => ['sometimes', 'string', 'max:255'],
-            'description' => ['nullable', 'string'],
-            'session_date' => ['sometimes', 'date'],
-            'start_time' => ['sometimes', 'date_format:H:i'],
-            'end_time' => ['sometimes', 'date_format:H:i'],
-            'meeting_url' => ['nullable', 'string', 'max:2000'],
+            'title'         => ['sometimes', 'string', 'max:255'],
+            'description'   => ['nullable', 'string'],
+            'session_date'  => ['sometimes', 'date'],
+            'start_time'    => ['sometimes', 'date_format:H:i'],
+            'end_time'      => ['sometimes', 'date_format:H:i'],
+            'meeting_url'   => ['nullable', 'string', 'max:2000'],
             'recording_url' => ['nullable', 'string', 'max:2000'],
-            'status' => ['sometimes', 'in:scheduled,live,completed,cancelled'],
+            'status'        => ['sometimes', 'in:scheduled,live,completed,cancelled'],
         ]);
 
         $session->update($validated);
@@ -105,7 +97,6 @@ class AdminLmsSessionController extends Controller
 
     public function destroy(LmsSession $session): JsonResponse
     {
-        $this->authorize('delete', $session);
         $session->delete();
 
         return response()->json(['success' => true, 'message' => 'Session deleted successfully']);

@@ -21,6 +21,13 @@ final class Permissions
     const UPDATE_USERS  = 'update_users';
     const DELETE_USERS  = 'delete_users';
     const MANAGE_ROLES  = 'manage_roles';
+    /**
+     * Impersonate / login-as-user.
+     * Intentionally excluded from all() so no role inherits it automatically.
+     * Must be granted explicitly via the role/permission management UI or seeder.
+     * Gate::before(super_admin bypass) is also excluded for this permission.
+     */
+    const IMPERSONATE_USERS = 'users.impersonate';
     /** @deprecated Use granular view/create/update/delete_users */
     const MANAGE_USERS  = 'manage_users';
 
@@ -245,7 +252,7 @@ final class Permissions
     public static function forRole(string $role): array
     {
         return match ($role) {
-            'super_admin' => self::all(),
+            'super_admin', 'tech_admin' => self::all(),
 
             'executive_admin' => [
                 self::VIEW_USERS, self::VIEW_PROGRAMS, self::VIEW_COURSES, self::VIEW_WORKSHOPS,
@@ -309,23 +316,64 @@ final class Permissions
             ],
 
             'operations_manager' => [
-                self::VIEW_TASKS, self::MANAGE_TASKS, self::VIEW_MEETINGS, self::MANAGE_MEETINGS,
-                self::VIEW_DEPARTMENTS, self::VIEW_PROGRAMS, self::VIEW_COURSES,
-                self::VIEW_KPI, self::VIEW_REPORTS, self::VIEW_KNOWLEDGE, self::USE_AI_ASSISTANT,
+                self::VIEW_DEPARTMENTS, self::MANAGE_DEPARTMENTS,
+                self::VIEW_TASKS, self::MANAGE_TASKS,
+                self::VIEW_MEETINGS, self::MANAGE_MEETINGS,
+                self::VIEW_FORMS, self::MANAGE_FORMS,
+                self::VIEW_PROGRAMS, self::VIEW_COURSES,
+                self::VIEW_SESSIONS, self::VIEW_ATTENDANCE, self::VIEW_ASSIGNMENTS,
+                self::VIEW_KPI, self::VIEW_REPORTS, self::GENERATE_REPORTS,
+                self::VIEW_KNOWLEDGE, self::USE_AI_ASSISTANT,
                 // Granular
-                self::WR_VIEW_DEPARTMENT, self::WR_REVIEW, self::WR_APPROVE, self::WR_REJECT,
-                self::MEMBERS_VIEW, self::DEPTS_VIEW, self::COURSES_VIEW,
-                self::ATTENDANCE_VIEW, self::ASSIGNMENTS_VIEW,
+                self::WR_VIEW_ALL, self::WR_REVIEW, self::WR_APPROVE, self::WR_REJECT,
+                self::WR_ASSIGN, self::WR_EXPORT,
+                self::COURSES_VIEW, self::ATTENDANCE_VIEW, self::ASSIGNMENTS_VIEW,
+                self::MEMBERS_VIEW, self::DEPTS_VIEW, self::DEPTS_MANAGE,
             ],
 
             'programs_manager' => [
-                self::VIEW_PROGRAMS, self::MANAGE_PROGRAMS, self::VIEW_COURSES, self::VIEW_WORKSHOPS,
-                self::VIEW_TRACKS, self::VIEW_REGISTRATIONS,
-                self::VIEW_KPI, self::VIEW_REPORTS, self::VIEW_KNOWLEDGE, self::USE_AI_ASSISTANT,
+                self::VIEW_PROGRAMS, self::MANAGE_PROGRAMS,
+                self::VIEW_COURSES, self::MANAGE_COURSES,
+                self::VIEW_WORKSHOPS, self::VIEW_TRACKS, self::MANAGE_TRACKS,
+                self::VIEW_REGISTRATIONS,
+                self::VIEW_SESSIONS, self::MANAGE_SESSIONS,
+                self::VIEW_ATTENDANCE, self::VIEW_ASSIGNMENTS, self::MANAGE_ASSIGNMENTS, self::REVIEW_SUBMISSIONS,
+                self::VIEW_MATERIALS, self::MANAGE_MATERIALS,
+                self::VIEW_CERTIFICATES,
+                self::VIEW_KPI, self::VIEW_REPORTS, self::GENERATE_REPORTS,
+                self::VIEW_KNOWLEDGE, self::MANAGE_KNOWLEDGE, self::USE_AI_ASSISTANT,
                 // Granular
-                self::WR_VIEW_DEPARTMENT, self::WR_REVIEW, self::WR_APPROVE, self::WR_REJECT,
-                self::MEMBERS_VIEW, self::COURSES_VIEW, self::COURSES_CREATE, self::COURSES_UPDATE,
+                self::WR_VIEW_ALL, self::WR_REVIEW, self::WR_APPROVE, self::WR_REJECT,
+                self::WR_ASSIGN, self::WR_EXPORT,
+                self::COURSES_VIEW, self::COURSES_CREATE, self::COURSES_UPDATE,
+                self::COURSES_DELETE, self::COURSES_ASSIGN_INSTRUCTOR, self::COURSES_MANAGE,
                 self::ATTENDANCE_VIEW, self::ASSIGNMENTS_VIEW,
+                self::ASSIGNMENTS_CREATE, self::ASSIGNMENTS_UPDATE, self::ASSIGNMENTS_MANAGE,
+                self::MEMBERS_VIEW,
+            ],
+
+            'partnerships_manager' => [
+                self::VIEW_PARTNERS, self::MANAGE_PARTNERS, self::VIEW_PARTNER_REPORTS,
+                self::VIEW_PROGRAMS, self::VIEW_COURSES,
+                self::VIEW_REGISTRATIONS,
+                self::VIEW_REPORTS, self::GENERATE_REPORTS,
+                self::VIEW_KNOWLEDGE, self::USE_AI_ASSISTANT,
+                // Granular
+                self::WR_VIEW_ALL, self::WR_REVIEW, self::WR_APPROVE, self::WR_REJECT,
+                self::COURSES_VIEW, self::MEMBERS_VIEW,
+            ],
+
+            'community_manager' => [
+                self::VIEW_VOLUNTEERS, self::MANAGE_VOLUNTEERS,
+                self::VIEW_TASKS, self::MANAGE_TASKS,
+                self::VIEW_MEETINGS, self::MANAGE_MEETINGS,
+                self::VIEW_FORMS, self::MANAGE_FORMS,
+                self::VIEW_REGISTRATIONS,
+                self::VIEW_REPORTS,
+                self::VIEW_KNOWLEDGE, self::USE_AI_ASSISTANT,
+                // Granular
+                self::WR_VIEW_ALL, self::WR_REVIEW, self::WR_APPROVE, self::WR_REJECT,
+                self::MEMBERS_VIEW, self::MEMBERS_RECOGNIZE, self::MEMBERS_VIEW_DEPARTMENT,
             ],
 
             'finance_manager' => [
@@ -377,8 +425,6 @@ final class Permissions
                 self::ATTENDANCE_VIEW, self::ATTENDANCE_MARK, self::ATTENDANCE_UPDATE,
                 self::ASSIGNMENTS_VIEW, self::ASSIGNMENTS_CREATE, self::ASSIGNMENTS_REVIEW,
                 self::COURSES_VIEW,
-                // Legacy
-                self::MANAGE_COURSES, self::MANAGE_LMS, self::MANAGE_KNOWLEDGE,
             ],
 
             'student' => [
@@ -397,8 +443,6 @@ final class Permissions
 
             'partner' => [
                 self::VIEW_PARTNERS, self::VIEW_PARTNER_REPORTS, self::VIEW_PROGRAMS, self::VIEW_REPORTS,
-                // Legacy
-                self::MANAGE_PARTNERS,
             ],
 
             default => [],
@@ -409,7 +453,7 @@ final class Permissions
     public static function grouped(): array
     {
         return [
-            'users'        => [self::VIEW_USERS, self::CREATE_USERS, self::UPDATE_USERS, self::DELETE_USERS, self::MANAGE_ROLES],
+            'users'        => [self::VIEW_USERS, self::CREATE_USERS, self::UPDATE_USERS, self::DELETE_USERS, self::MANAGE_ROLES, self::IMPERSONATE_USERS],
             'education'    => [self::VIEW_PROGRAMS, self::MANAGE_PROGRAMS, self::VIEW_COURSES, self::MANAGE_COURSES, self::VIEW_WORKSHOPS, self::MANAGE_WORKSHOPS, self::VIEW_TRACKS, self::MANAGE_TRACKS, self::VIEW_REGISTRATIONS, self::MANAGE_REGISTRATIONS],
             'lms'          => [self::VIEW_SESSIONS, self::MANAGE_SESSIONS, self::VIEW_ATTENDANCE, self::MANAGE_ATTENDANCE, self::VIEW_ASSIGNMENTS, self::MANAGE_ASSIGNMENTS, self::REVIEW_SUBMISSIONS, self::VIEW_MATERIALS, self::MANAGE_MATERIALS],
             'finance'      => [self::VIEW_PAYMENTS, self::MANAGE_PAYMENTS, self::VIEW_REVENUE, self::MANAGE_COUPONS, self::MANAGE_SCHOLARSHIPS, self::VIEW_FINANCIAL_REPORTS],

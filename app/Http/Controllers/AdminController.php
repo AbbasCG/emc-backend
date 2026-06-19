@@ -6,12 +6,15 @@ use App\Enums\RegistrationStatus;
 use App\Http\Resources\PaymentResource;
 use App\Http\Resources\RegistrationResource;
 use App\Models\Course;
+use App\Models\Department;
 use App\Models\Instructor;
 use App\Models\Payment;
 use App\Models\Registration;
 use App\Models\StudentProgress;
 use App\Models\Track;
 use App\Models\User;
+use App\Models\Workshop;
+use App\Models\WorkshopRequest;
 use App\Services\AuditLogService;
 use App\Services\NotificationService;
 use App\Support\PaymentStatuses;
@@ -26,32 +29,46 @@ class AdminController extends Controller
 {
     public function dashboard(): JsonResponse
     {
-        $recentRegistrations = Registration::with(['course.track', 'course.instructor', 'payments'])
+        $recentRegistrations = Registration::with(['course', 'user'])
             ->latest()
-            ->take(5)
+            ->take(10)
             ->get();
 
-        $recentPayments = Payment::with(['registration.course'])
-            ->latest()
-            ->take(5)
-            ->get();
+        // Map backend statuses to the three-state model the frontend renders.
+        $statusMap = [
+            RegistrationStatus::PENDING_PAYMENT->value  => 'pending',
+            RegistrationStatus::REGISTERED->value       => 'active',
+            RegistrationStatus::PAYMENT_CONFIRMED->value => 'active',
+            RegistrationStatus::ATTENDED->value         => 'completed',
+            RegistrationStatus::NO_SHOW->value          => 'completed',
+            RegistrationStatus::CANCELLED->value        => 'completed',
+        ];
+
+        $recent = $recentRegistrations->map(fn (Registration $r) => [
+            'id'           => $r->id,
+            'student_name' => $r->user?->name ?? $r->full_name ?? '—',
+            'course_name'  => $r->course?->title ?? '—',
+            'enrolled_at'  => $r->created_at?->toDateString() ?? '',
+            'status'       => $statusMap[$r->status] ?? 'pending',
+        ])->values();
 
         return response()->json([
             'success' => true,
             'message' => 'Dashboard data retrieved successfully',
             'data'    => [
-                'total_courses'             => Course::count(),
-                'total_tracks'              => Track::count(),
-                'total_instructors'         => Instructor::count(),
-                'total_users'               => User::count(),
-                'total_registrations'       => Registration::count(),
-                'registered_count'          => Registration::where('status', RegistrationStatus::REGISTERED->value)->count(),
-                'pending_payment_count'     => Registration::where('status', RegistrationStatus::PENDING_PAYMENT->value)->count(),
-                'paid_count'                => Payment::where('status', PaymentStatuses::CONFIRMED)->count(),
-                'failed_payment_count'      => Payment::where('status', PaymentStatuses::FAILED)->count(),
-                'total_revenue_confirmed'   => (float) Payment::where('status', PaymentStatuses::CONFIRMED)->sum('amount'),
-                'recent_registrations'      => RegistrationResource::collection($recentRegistrations),
-                'recent_payments'           => PaymentResource::collection($recentPayments),
+                'stats' => [
+                    'total_users'       => User::count(),
+                    'active_courses'    => Course::count(),
+                    'total_enrollments' => Registration::count(),
+                    'total_programs'    => Course::count(),
+                    'pending_payments'  => Registration::where('status', RegistrationStatus::PENDING_PAYMENT->value)->count(),
+                    'workshop_requests' => WorkshopRequest::count(),
+                    'active_workshops'  => Workshop::count(),
+                    'tracks_count'      => Track::count(),
+                    'instructors_count' => Instructor::count(),
+                    'departments_count' => Department::count(),
+                ],
+                'recent_registrations' => $recent,
             ],
         ]);
     }

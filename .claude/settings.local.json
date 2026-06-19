@@ -55,7 +55,20 @@
       "Bash(find \"D:\\\\\\\\xampp\\\\\\\\htdocs\\\\\\\\emc-backend\\\\\\\\app\\\\\\\\Models\" -name \"*.php\")",
       "Bash(find \"D:\\\\\\\\xampp\\\\\\\\htdocs\\\\\\\\emc-backend\\\\\\\\database\\\\\\\\migrations\" -name \"*.php\")",
       "Bash(find \"D:\\\\\\\\xampp\\\\\\\\htdocs\\\\\\\\emc-frontend\\\\\\\\src\\\\\\\\api\" -name \"*.ts\")",
-      "Bash(Select-String -Pattern \"oral|attendance_lock|lock\" -i)"
+      "Bash(Select-String -Pattern \"oral|attendance_lock|lock\" -i)",
+      "Bash(pandoc --version)",
+      "Bash(node -e \"require\\('docx'\\); console.log\\('docx ok'\\)\")",
+      "Bash(npm install *)",
+      "Bash(node gen_qa.js)",
+      "Bash(python scripts/office/validate.py \"D:\\\\xampp\\\\htdocs\\\\emc-backend\\\\docs\\\\QA_TEST_PLAN_COMPLETE.docx\")",
+      "PowerShell(Get-ChildItem \"D:\\\\xampp\\\\htdocs\\\\emc-backend\\\\docs\\\\\" | Select-Object Name, @{N='Size';E={[math]::Round\\($_.Length/1KB,1\\)}} | Format-Table)",
+      "mcp__visualize__read_me",
+      "mcp__visualize__show_widget",
+      "Bash(xargs grep -l \"sidebar\\\\|Sidebar\\\\|navigation\\\\|Navigation\")",
+      "Bash(xargs grep -l \"role\\\\|isAdmin\\\\|programs_manager\\\\|executive_admin\")",
+      "Bash(cd /d/xampp/htdocs/emc-frontend && find src/pages/super-admin -name \"*.ts\" -o -name \"*.tsx\" 2>/dev/null | head -30)",
+      "Bash(xargs grep -l -i \"learning.path\\\\|learningpath\\\\|LearningPath\")",
+      "Bash(xargs grep -l \"AdminCourse\\\\|programs.*crud\\\\|ProgramsConsole\\\\|admin.*programs\")"
     ]
   },
   "enableAllProjectMcpServers": true,

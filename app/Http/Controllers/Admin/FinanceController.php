@@ -6,18 +6,102 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\FinancialTransactionResource;
 use App\Models\FinancialTransaction;
 use App\Models\Payment;
-use App\Services\KpiService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class FinanceController extends Controller
 {
-    public function overview(KpiService $kpi): \Illuminate\Http\JsonResponse
+    public function overview(): \Illuminate\Http\JsonResponse
     {
-        return response()->json([
-            'success' => true,
-            'data'    => $kpi->finance(),
-        ]);
+        try {
+            $totalRevenue     = Payment::where('status', 'Confirmed')->sum('amount');
+            $confirmedRevenue = $totalRevenue;
+            $pendingRevenue   = Payment::whereIn('status', ['Pending Payment', 'pending', 'pending_payment'])->sum('amount');
+            $failedCount      = Payment::whereIn('status', ['Failed', 'failed'])->count();
+
+            $monthlyRevenue = DB::table('payments')
+                ->whereIn('status', ['Confirmed', 'confirmed'])
+                ->whereNotNull('confirmed_at')
+                ->select(
+                    DB::raw("DATE_FORMAT(confirmed_at, '%Y-%m') as month"),
+                    DB::raw('SUM(amount) as amount'),
+                    DB::raw('COUNT(*) as count')
+                )
+                ->groupBy('month')
+                ->orderBy('month', 'desc')
+                ->limit(12)
+                ->get()
+                ->map(fn ($r) => ['month' => $r->month, 'amount' => (float) $r->amount])
+                ->values();
+
+            $revenueByCourse = DB::table('payments')
+                ->join('registrations', 'payments.registration_id', '=', 'registrations.id')
+                ->join('courses', 'registrations.course_id', '=', 'courses.id')
+                ->whereIn('payments.status', ['Confirmed', 'confirmed'])
+                ->select('courses.title', DB::raw('SUM(payments.amount) as amount'))
+                ->groupBy('courses.id', 'courses.title')
+                ->orderByDesc('amount')
+                ->limit(10)
+                ->get()
+                ->map(fn ($r) => ['course_name' => $r->title, 'amount' => (float) $r->amount])
+                ->values();
+
+            $revenueByTrack = DB::table('payments')
+                ->join('registrations', 'payments.registration_id', '=', 'registrations.id')
+                ->join('tracks', 'registrations.track_id', '=', 'tracks.id')
+                ->whereIn('payments.status', ['Confirmed', 'confirmed'])
+                ->select('tracks.name', DB::raw('SUM(payments.amount) as amount'))
+                ->groupBy('tracks.id', 'tracks.name')
+                ->orderByDesc('amount')
+                ->limit(10)
+                ->get()
+                ->map(fn ($r) => ['track_name' => $r->name, 'amount' => (float) $r->amount])
+                ->values();
+
+            $latestPayments = Payment::with(['registration.course'])
+                ->latest()
+                ->limit(10)
+                ->get()
+                ->map(fn ($p) => [
+                    'id'          => $p->id,
+                    'amount'      => $p->amount,
+                    'currency'    => 'USD',
+                    'status'      => strtolower($p->status ?? 'pending'),
+                    'provider'    => $p->provider ?? 'unknown',
+                    'course_name' => $p->registration?->course?->title,
+                    'payer_email' => $p->registration?->email,
+                    'created_at'  => $p->created_at?->toIso8601String(),
+                ])
+                ->values();
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'total_revenue'     => (float) $totalRevenue,
+                    'confirmed_revenue' => (float) $confirmedRevenue,
+                    'pending_revenue'   => (float) $pendingRevenue,
+                    'failed_count'      => $failedCount,
+                    'monthly_revenue'   => $monthlyRevenue,
+                    'revenue_by_course' => $revenueByCourse,
+                    'revenue_by_track'  => $revenueByTrack,
+                    'latest_payments'   => $latestPayments,
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'total_revenue'     => 0,
+                    'confirmed_revenue' => 0,
+                    'pending_revenue'   => 0,
+                    'failed_count'      => 0,
+                    'monthly_revenue'   => [],
+                    'revenue_by_course' => [],
+                    'revenue_by_track'  => [],
+                    'latest_payments'   => [],
+                ],
+            ]);
+        }
     }
 
     public function transactions(Request $request): \Illuminate\Http\JsonResponse

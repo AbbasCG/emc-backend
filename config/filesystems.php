@@ -38,13 +38,16 @@ return [
             'report' => false,
         ],
 
-        // Alias of `local` — non-public disk used by FileUploadService modules
-        // and secure-download controllers. Same root, kept as a separate name
-        // so "private" reads unambiguously at call sites.
+        // Non-public disk used by FileUploadService modules and secure-download
+        // controllers. Files are served exclusively via authenticated controller
+        // actions (Storage::disk('private')->download() / ->response()) — never
+        // via a public URL. `serve` must NOT be true here; it would register a
+        // public HTTP route at the same path as `local` and cause a boot error:
+        //   "The [private] disk conflicts with the [local] disk at [/storage]"
         'private' => [
             'driver' => 'local',
             'root' => storage_path('app/private'),
-            'serve' => true,
+            'serve' => false,
             'throw' => false,
             'report' => false,
         ],

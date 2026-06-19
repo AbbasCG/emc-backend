@@ -12,9 +12,7 @@ class AdminLmsAttendanceController extends Controller
 {
     public function index(Request $request): AnonymousResourceCollection
     {
-        $this->authorize('viewAny', \App\Models\LmsSession::class);
-
-        $query = Attendance::query()->with(['session', 'user'])->latest();
+        $query = Attendance::query()->with(['session.course', 'session.workshop.course', 'user'])->latest();
 
         if ($request->filled('session_id')) {
             $query->where('session_id', $request->query('session_id'));

@@ -26,8 +26,8 @@ class PermissionMiddleware
             return $this->deny('Unauthenticated.');
         }
 
-        // super_admin bypasses all permission checks
-        if ($user->isSuperAdmin()) {
+        // super_admin and tech_admin bypass all permission checks
+        if ($user->isSuperAdmin() || $user->isTechAdmin()) {
             return $next($request);
         }
 

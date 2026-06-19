@@ -31,8 +31,8 @@ class RoleMiddleware
             return $this->deny();
         }
 
-        // super_admin passes every role check
-        if ($user->isSuperAdmin()) {
+        // super_admin and tech_admin pass every role check
+        if ($user->isSuperAdmin() || $user->isTechAdmin()) {
             return $next($request);
         }
 

@@ -600,6 +600,24 @@ class InstructorCourseContentController extends Controller
         }
         unset($data['meeting_url']);
 
+        // Convert Amsterdam local time → UTC before storing.
+        // The frontend datetime-local input sends bare "YYYY-MM-DDTHH:mm" which
+        // represents Europe/Amsterdam local time. Carbon without a TZ hint would
+        // treat it as UTC (wrong). Parsing with the Amsterdam context gives the
+        // correct UTC value (e.g. Amsterdam 23:00 CEST → UTC 21:00).
+        $displayTz = 'Europe/Amsterdam';
+        foreach (['start_at', 'end_at'] as $field) {
+            if (!empty($data[$field])) {
+                try {
+                    $data[$field] = \Carbon\Carbon::parse($data[$field], $displayTz)
+                        ->utc()
+                        ->toDateTimeString();
+                } catch (\Throwable) {
+                    // leave original value; database cast will handle it
+                }
+            }
+        }
+
         return $data;
     }
 

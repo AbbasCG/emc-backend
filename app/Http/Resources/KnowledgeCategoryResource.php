@@ -16,6 +16,7 @@ class KnowledgeCategoryResource extends JsonResource
             'description' => $this->description,
             'status'      => $this->status,
             'sort_order'  => $this->sort_order,
+            'articles_count' => $this->articles_count ?? 0,
             'parent_id'   => $this->parent_id,
             'department'  => $this->whenLoaded('department', fn () => [
                 'id' => $this->department?->id, 'name' => $this->department?->name,

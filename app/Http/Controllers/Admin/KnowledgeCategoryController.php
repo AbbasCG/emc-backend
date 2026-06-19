@@ -13,6 +13,7 @@ class KnowledgeCategoryController extends Controller
     public function index(): \Illuminate\Http\JsonResponse
     {
         $categories = KnowledgeCategory::with(['department', 'children'])
+            ->withCount('articles')
             ->whereNull('parent_id')
             ->orderBy('sort_order')
             ->get();

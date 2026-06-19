@@ -24,6 +24,10 @@ class LmsAssignmentResource extends JsonResource
             'description'     => $this->description,
             'instructions'    => $this->instructions ?? null,
             'course_name'     => $this->whenLoaded('course', fn () => $this->course?->title),
+            'course_title'    => $this->whenLoaded('course', fn () => $this->course?->title),
+            'submissions_count' => $this->submissions_count ?? 0,
+            'pending_count'   => $this->pending_count ?? 0,
+            'graded_count'    => $this->graded_count ?? 0,
 
             // Deadline exposed under both the DB column name and a clean alias
             'due_date'        => $this->due_date?->toIso8601String(),

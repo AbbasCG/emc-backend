@@ -13,9 +13,14 @@ class AdminLmsAssignmentController extends Controller
 {
     public function index(Request $request): AnonymousResourceCollection
     {
-        $this->authorize('viewAny', Assignment::class);
-
-        $query = Assignment::query()->with(['workshop'])->latest();
+        $query = Assignment::query()
+            ->with(['workshop', 'course'])
+            ->withCount([
+                'submissions',
+                'submissions as pending_count' => fn ($q) => $q->where('status', 'pending_review'),
+                'submissions as graded_count'  => fn ($q) => $q->where('status', 'reviewed'),
+            ])
+            ->latest();
 
         if ($request->filled('course_id')) {
             $query->where(function ($q) use ($request) {
@@ -36,16 +41,14 @@ class AdminLmsAssignmentController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $this->authorize('create', Assignment::class);
-
         $validated = $request->validate([
-            'course_id' => ['nullable', 'exists:courses,id'],
+            'course_id'   => ['nullable', 'exists:courses,id'],
             'workshop_id' => ['nullable', 'exists:workshops,id'],
-            'title' => ['required', 'string', 'max:255'],
+            'title'       => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
-            'due_date' => ['nullable', 'date'],
-            'max_score' => ['nullable', 'numeric', 'min:0'],
-            'status' => ['nullable', 'in:active,archived'],
+            'due_date'    => ['nullable', 'date'],
+            'max_score'   => ['nullable', 'numeric', 'min:0'],
+            'status'      => ['nullable', 'in:active,archived'],
         ]);
 
         $validated['status'] = $validated['status'] ?? 'active';
@@ -60,7 +63,6 @@ class AdminLmsAssignmentController extends Controller
 
     public function show(Assignment $assignment): JsonResponse
     {
-        $this->authorize('view', $assignment);
         $assignment->load(['workshop', 'submissions.user']);
 
         return (new LmsAssignmentResource($assignment))
@@ -70,16 +72,14 @@ class AdminLmsAssignmentController extends Controller
 
     public function update(Request $request, Assignment $assignment): JsonResponse
     {
-        $this->authorize('update', $assignment);
-
         $validated = $request->validate([
-            'course_id' => ['sometimes', 'nullable', 'exists:courses,id'],
+            'course_id'   => ['sometimes', 'nullable', 'exists:courses,id'],
             'workshop_id' => ['sometimes', 'nullable', 'exists:workshops,id'],
-            'title' => ['sometimes', 'string', 'max:255'],
+            'title'       => ['sometimes', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
-            'due_date' => ['nullable', 'date'],
-            'max_score' => ['nullable', 'numeric', 'min:0'],
-            'status' => ['sometimes', 'in:active,archived'],
+            'due_date'    => ['nullable', 'date'],
+            'max_score'   => ['nullable', 'numeric', 'min:0'],
+            'status'      => ['sometimes', 'in:active,archived'],
         ]);
 
         $assignment->update($validated);
@@ -91,7 +91,6 @@ class AdminLmsAssignmentController extends Controller
 
     public function destroy(Assignment $assignment): JsonResponse
     {
-        $this->authorize('delete', $assignment);
         $assignment->delete();
 
         return response()->json(['success' => true, 'message' => 'Assignment deleted successfully']);

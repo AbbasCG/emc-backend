@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\SecurityLog;
 use App\Models\User;
+use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -21,9 +22,17 @@ class ImpersonationController extends Controller
      */
     public function start(Request $request, User $user): JsonResponse
     {
-        $superAdmin = $request->user();
+        $actor = $request->user();
 
-        if ($user->id === $superAdmin->id) {
+        if (! $actor->hasPermission(Permissions::IMPERSONATE_USERS)) {
+            return response()->json([
+                'success'    => false,
+                'message'    => 'You do not have permission to impersonate users.',
+                'message_ar' => 'لا تملك صلاحية تسجيل الدخول كمستخدم آخر.',
+            ], 403);
+        }
+
+        if ($user->id === $actor->id) {
             return response()->json([
                 'success' => false,
                 'message' => 'You cannot impersonate yourself.',
@@ -37,23 +46,30 @@ class ImpersonationController extends Controller
             ], 403);
         }
 
+        if (! $user->is_active || $user->trashed()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot impersonate an inactive or deleted user.',
+            ], 422);
+        }
+
         // Revoke any stale impersonation tokens previously issued for this target
         $user->tokens()->where('name', 'like', 'impersonation-by-%')->delete();
 
         $tokenResult = $user->createToken(
-            'impersonation-by-' . $superAdmin->id,
+            'impersonation-by-' . $actor->id,
             ['via-impersonation'],
             now()->addMinutes(30)
         );
 
         SecurityLog::create([
-            'actor_id'         => $superAdmin->id,
+            'actor_id'         => $actor->id,
             'event'            => 'impersonation_started',
             'target_user_id'   => $user->id,
             'sanctum_token_id' => $tokenResult->accessToken->id,
             'metadata'         => [
-                'impersonator_name' => $superAdmin->name,
-                'impersonator_role' => $superAdmin->role,
+                'impersonator_name' => $actor->name,
+                'impersonator_role' => $actor->role,
                 'target_name'       => $user->name,
                 'target_role'       => $user->role,
             ],
@@ -72,9 +88,9 @@ class ImpersonationController extends Controller
                 'role'  => $user->role,
             ],
             'impersonator' => [
-                'id'   => $superAdmin->id,
-                'name' => $superAdmin->name,
-                'role' => $superAdmin->role,
+                'id'   => $actor->id,
+                'name' => $actor->name,
+                'role' => $actor->role,
             ],
         ]);
     }

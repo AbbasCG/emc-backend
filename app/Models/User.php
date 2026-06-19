@@ -57,9 +57,32 @@ class User extends Authenticatable
         return $this->role === 'super_admin';
     }
 
+    /**
+     * Technical platform administrator — same operational power as super_admin.
+     * Distinct from super_admin (business owner) by intent only; both bypass all Gates.
+     */
+    public function isTechAdmin(): bool
+    {
+        return $this->role === 'tech_admin';
+    }
+
+    /**
+     * Read-only executive oversight role.
+     * Intentionally excluded from isAdmin() so policies do NOT grant write access.
+     */
+    public function isExecutiveAdmin(): bool
+    {
+        return $this->role === 'executive_admin';
+    }
+
+    /**
+     * Returns true for roles that may perform administrative write operations.
+     * executive_admin is deliberately excluded — it is read-only by design.
+     * tech_admin is included because it has full platform access.
+     */
     public function isAdmin(): bool
     {
-        return in_array($this->role, ['admin', 'super_admin', 'executive_admin'], true);
+        return in_array($this->role, ['admin', 'super_admin', 'tech_admin'], true);
     }
 
     public function isTeacher(): bool
@@ -127,9 +150,13 @@ class User extends Authenticatable
             return $this->permissionCache;
         }
 
-        // super_admin gets everything without touching the DB
-        if ($this->isSuperAdmin()) {
-            return $this->permissionCache = Permissions::all();
+        // super_admin and tech_admin get all standard permissions plus any DB-granted
+        // extras excluded from Permissions::all() (e.g. users.impersonate).
+        if ($this->isSuperAdmin() || $this->isTechAdmin()) {
+            $base   = Permissions::all();
+            $dbRole = Role::with('permissions')->where('name', $this->role)->first();
+            $extra  = $dbRole ? $dbRole->permissions->pluck('name')->diff($base)->values()->all() : [];
+            return $this->permissionCache = array_values(array_unique(array_merge($base, $extra)));
         }
 
         $dbRole = Role::with('permissions')

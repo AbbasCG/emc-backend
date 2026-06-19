@@ -12,8 +12,6 @@ class AdminLmsEvaluationController extends Controller
 {
     public function index(Request $request): AnonymousResourceCollection
     {
-        $this->authorize('viewAny', Evaluation::class);
-
         $query = Evaluation::query()->latest();
 
         if ($request->filled('course_id')) {

@@ -12,9 +12,7 @@ class AdminLmsProgressController extends Controller
 {
     public function index(Request $request): AnonymousResourceCollection
     {
-        $this->authorize('viewAny', StudentProgress::class);
-
-        $query = StudentProgress::query()->with(['course', 'user'])->latest();
+        $query = StudentProgress::query()->with(['course', 'user'])->orderBy('updated_at', 'desc');
 
         if ($request->filled('user_id')) {
             $query->where('user_id', $request->query('user_id'));

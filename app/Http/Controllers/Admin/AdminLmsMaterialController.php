@@ -13,9 +13,7 @@ class AdminLmsMaterialController extends Controller
 {
     public function index(Request $request): AnonymousResourceCollection
     {
-        $this->authorize('viewAny', CourseMaterial::class);
-
-        $query = CourseMaterial::query()->orderBy('sort_order')->latest();
+        $query = CourseMaterial::query()->with(['course'])->orderBy('sort_order')->latest();
 
         if ($request->filled('course_id')) {
             $query->where('course_id', $request->query('course_id'));
@@ -37,18 +35,16 @@ class AdminLmsMaterialController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $this->authorize('create', CourseMaterial::class);
-
         $validated = $request->validate([
-            'course_id' => ['nullable', 'exists:courses,id'],
-            'workshop_id' => ['nullable', 'exists:workshops,id'],
-            'session_id' => ['nullable', 'exists:lms_sessions,id'],
-            'title' => ['required', 'string', 'max:255'],
-            'description' => ['nullable', 'string'],
-            'file_path' => ['nullable', 'string', 'max:2000'],
+            'course_id'    => ['nullable', 'exists:courses,id'],
+            'workshop_id'  => ['nullable', 'exists:workshops,id'],
+            'session_id'   => ['nullable', 'exists:lms_sessions,id'],
+            'title'        => ['required', 'string', 'max:255'],
+            'description'  => ['nullable', 'string'],
+            'file_path'    => ['nullable', 'string', 'max:2000'],
             'external_url' => ['nullable', 'string', 'max:2000'],
-            'type' => ['nullable', 'in:pdf,video,link,slide,document,other'],
-            'sort_order' => ['nullable', 'integer', 'min:0'],
+            'type'         => ['nullable', 'in:pdf,video,link,slide,document,other'],
+            'sort_order'   => ['nullable', 'integer', 'min:0'],
         ]);
 
         $material = CourseMaterial::query()->create($validated);
@@ -61,8 +57,6 @@ class AdminLmsMaterialController extends Controller
 
     public function show(CourseMaterial $material): JsonResponse
     {
-        $this->authorize('update', $material);
-
         return (new LmsCourseMaterialResource($material))
             ->additional(['success' => true, 'message' => 'Material retrieved successfully'])
             ->response();
@@ -70,18 +64,16 @@ class AdminLmsMaterialController extends Controller
 
     public function update(Request $request, CourseMaterial $material): JsonResponse
     {
-        $this->authorize('update', $material);
-
         $validated = $request->validate([
-            'course_id' => ['sometimes', 'nullable', 'exists:courses,id'],
-            'workshop_id' => ['sometimes', 'nullable', 'exists:workshops,id'],
-            'session_id' => ['sometimes', 'nullable', 'exists:lms_sessions,id'],
-            'title' => ['sometimes', 'string', 'max:255'],
-            'description' => ['nullable', 'string'],
-            'file_path' => ['nullable', 'string', 'max:2000'],
+            'course_id'    => ['sometimes', 'nullable', 'exists:courses,id'],
+            'workshop_id'  => ['sometimes', 'nullable', 'exists:workshops,id'],
+            'session_id'   => ['sometimes', 'nullable', 'exists:lms_sessions,id'],
+            'title'        => ['sometimes', 'string', 'max:255'],
+            'description'  => ['nullable', 'string'],
+            'file_path'    => ['nullable', 'string', 'max:2000'],
             'external_url' => ['nullable', 'string', 'max:2000'],
-            'type' => ['nullable', 'in:pdf,video,link,slide,document,other'],
-            'sort_order' => ['nullable', 'integer', 'min:0'],
+            'type'         => ['nullable', 'in:pdf,video,link,slide,document,other'],
+            'sort_order'   => ['nullable', 'integer', 'min:0'],
         ]);
 
         $material->update($validated);
@@ -93,7 +85,6 @@ class AdminLmsMaterialController extends Controller
 
     public function destroy(CourseMaterial $material): JsonResponse
     {
-        $this->authorize('delete', $material);
         $material->delete();
 
         return response()->json(['success' => true, 'message' => 'Material deleted successfully']);

@@ -23,6 +23,12 @@ class RoleSeeder extends Seeder
         ['name' => 'student',           'display_name' => 'Student',             'description' => 'Enrolled learner with access to own data only.',                   'is_system' => true],
         ['name' => 'volunteer',         'display_name' => 'Volunteer',           'description' => 'Community contributor with limited operational access.',           'is_system' => true],
         ['name' => 'partner',           'display_name' => 'Partner',             'description' => 'External partner with access to own programs and reports.',        'is_system' => true],
+        // ── New roles added in Phase 1 ────────────────────────────────────────
+        ['name' => 'programs_manager',   'display_name' => 'Programs Manager — مدير البرامج والمسارات',   'description' => 'Manages courses, programs, learning paths, and instructor assignment.', 'is_system' => true],
+        ['name' => 'operations_manager', 'display_name' => 'Operations Manager — مدير التشغيل والعمليات', 'description' => 'Manages tasks, meetings, departments, and operational workflows.',           'is_system' => true],
+        ['name' => 'partnerships_manager','display_name' => 'Partnerships Manager — مدير الشراكات والعلاقات','description' => 'Manages partner relationships, partnership requests, and partner reports.', 'is_system' => true],
+        ['name' => 'community_manager',  'display_name' => 'Community Manager — مدير المجتمع والصحة',     'description' => 'Manages volunteers, community events, forms, and community programs.',   'is_system' => true],
+        ['name' => 'tech_admin',         'display_name' => 'Tech Admin — مدير التقنية',                   'description' => 'Technical platform administrator with full system access.',              'is_system' => true],
     ];
 
     public function run(): void

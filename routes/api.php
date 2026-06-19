@@ -821,11 +821,45 @@ Route::middleware('auth:sanctum')->prefix('lms')->group(function () {
     Route::post('quizzes/{quiz}/submit',     [StudentLearningController::class, 'submitQuiz']);
 });
 
-// ─── Admin LMS aliases (frontend uses /admin/lms/*) ──────────────────────────
-Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin/lms')->group(function () {
+// ─── Admin LMS (frontend uses /admin/lms/*) ──────────────────────────────────
+Route::middleware(['auth:sanctum', 'role:admin,programs_manager'])->prefix('admin/lms')->group(function () {
+    // Structure read-only
     Route::get('modules', [CourseModuleController::class, 'index']);
     Route::get('lessons', [LessonController::class,       'index']);
     Route::get('quizzes', [QuizController::class,         'index']);
+
+    // Sessions CRUD
+    Route::get('sessions',                   [AdminLmsSessionController::class,    'index']);
+    Route::post('sessions',                  [AdminLmsSessionController::class,    'store']);
+    Route::get('sessions/{session}',         [AdminLmsSessionController::class,    'show']);
+    Route::put('sessions/{session}',         [AdminLmsSessionController::class,    'update']);
+    Route::patch('sessions/{session}',       [AdminLmsSessionController::class,    'update']);
+    Route::delete('sessions/{session}',      [AdminLmsSessionController::class,    'destroy']);
+
+    // Attendance (read-only list; individual session records via instructor routes)
+    Route::get('attendance',                 [AdminLmsAttendanceController::class, 'index']);
+
+    // Assignments CRUD
+    Route::get('assignments',                [AdminLmsAssignmentController::class, 'index']);
+    Route::post('assignments',               [AdminLmsAssignmentController::class, 'store']);
+    Route::get('assignments/{assignment}',   [AdminLmsAssignmentController::class, 'show']);
+    Route::put('assignments/{assignment}',   [AdminLmsAssignmentController::class, 'update']);
+    Route::patch('assignments/{assignment}', [AdminLmsAssignmentController::class, 'update']);
+    Route::delete('assignments/{assignment}',[AdminLmsAssignmentController::class, 'destroy']);
+
+    // Materials CRUD
+    Route::get('materials',                  [AdminLmsMaterialController::class,   'index']);
+    Route::post('materials',                 [AdminLmsMaterialController::class,   'store']);
+    Route::get('materials/{material}',       [AdminLmsMaterialController::class,   'show']);
+    Route::put('materials/{material}',       [AdminLmsMaterialController::class,   'update']);
+    Route::patch('materials/{material}',     [AdminLmsMaterialController::class,   'update']);
+    Route::delete('materials/{material}',    [AdminLmsMaterialController::class,   'destroy']);
+
+    // Evaluations (read-only for now)
+    Route::get('evaluations',                [AdminLmsEvaluationController::class, 'index']);
+
+    // Progress (read-only overview)
+    Route::get('progress',                   [AdminLmsProgressController::class,   'index']);
 });
 
 // ─── Operations: department routes — accessible by admin AND department_manager ─
@@ -1013,6 +1047,11 @@ Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin'])->prefix
     Route::get('documents',                                [HrDashboardController::class, 'documents']);
 });
 
+// ─── Programs Manager portal ─────────────────────────────────────────────────
+Route::middleware(['auth:sanctum', 'role:programs_manager,admin,super_admin'])->prefix('programs-manager')->group(function () {
+    Route::get('dashboard', [\App\Http\Controllers\ProgramsManager\ProgramsManagerDashboardController::class, 'dashboard']);
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // SUPER_ADMIN / ADMIN — missing CRUD endpoints
 // super_admin bypasses all role checks via RoleMiddleware::isSuperAdmin()
@@ -1039,7 +1078,7 @@ Route::post('admin/users/{id}/restore', [AdminUserController::class, 'restore'])
     ->middleware(['auth:sanctum', 'role:super_admin']);
 
 // ─── Admin Courses CRUD — full management with filters + instructor assignment ─
-Route::middleware(['auth:sanctum', 'role:admin,super_admin,department_manager'])->group(function () {
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,department_manager,programs_manager'])->group(function () {
     Route::get('admin/courses',                                 [AdminCourseController::class, 'index']);
     Route::post('admin/courses',                                [AdminCourseController::class, 'store']);
     Route::get('admin/courses/{course}',                        [AdminCourseController::class, 'show']);
@@ -1117,8 +1156,8 @@ Route::middleware(['auth:sanctum', 'role:student'])->group(function () {
     Route::get('/learning-paths/{slug}/enrollment-status',   [\App\Http\Controllers\Student\StudentLearningPathController::class, 'enrollmentStatus']);
 });
 
-// ─── Learning Paths CRUD (admin + super_admin) ───────────────────────────────
-Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->group(function () {
+// ─── Learning Paths CRUD (admin + super_admin + programs_manager) ────────────
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,programs_manager'])->prefix('admin')->group(function () {
     Route::get('learning-paths',                               [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'index']);
     Route::post('learning-paths',                              [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'store']);
     Route::get('learning-paths/{learningPath}',                [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'show']);
@@ -1170,9 +1209,10 @@ Route::middleware(['auth:sanctum', 'role:super_admin,admin'])->prefix('admin')->
     Route::get('audit-logs/{auditLog}',  [AdminAuditLogController::class, 'show']);
 });
 
-// ─── Impersonation (super_admin only to start; any token to stop) ─────────────
-// Start: authenticated as super_admin with their own token
-Route::middleware(['auth:sanctum', 'role:super_admin'])->group(function () {
+// ─── Impersonation ────────────────────────────────────────────────────────────
+// Start: role:super_admin,admin — permission check (users.impersonate) is enforced
+// in the controller, so having the role alone is not sufficient.
+Route::middleware(['auth:sanctum', 'role:super_admin,admin'])->group(function () {
     Route::post('/admin/impersonate/{user}', [ImpersonationController::class, 'start']);
 });
 // Stop: authenticated with the impersonation token (role is the target user's role)
