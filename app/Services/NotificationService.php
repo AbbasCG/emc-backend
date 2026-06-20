@@ -764,6 +764,57 @@ class NotificationService
     }
 
     /**
+     * Notify the instructor that a student resubmitted after a revision request.
+     */
+    public static function studentResubmittedAssignment(
+        int $instructorUserId,
+        string $studentName,
+        string $courseTitle,
+        string $assignmentTitle,
+        int $submissionId
+    ): void {
+        self::send($instructorUserId, 'assignment_resubmitted',
+            'تمت إعادة تسليم الواجب',
+            "قام الطالب \"{$studentName}\" بإعادة تسليم واجب \"{$assignmentTitle}\" في الدورة: {$courseTitle}",
+            [
+                'entity_type' => 'assignment_submission',
+                'entity_id'   => $submissionId,
+                'action_url'  => "/dashboard/instructor/submissions/{$submissionId}",
+                'icon'        => 'document-check',
+                'color'       => 'green',
+            ]
+        );
+    }
+
+    /**
+     * Notify the student that the instructor has requested a new submission.
+     */
+    public static function requestedResubmission(
+        int $studentUserId,
+        string $courseTitle,
+        string $assignmentTitle,
+        ?string $feedback,
+        int $submissionId
+    ): void {
+        $body = "يرجى إعادة تسليم واجب \"{$assignmentTitle}\" في دورة \"{$courseTitle}\".";
+        if ($feedback) {
+            $body .= " ملاحظة المدرب: {$feedback}";
+        }
+
+        self::send($studentUserId, 'resubmission_requested',
+            'طلب إعادة تسليم الواجب',
+            $body,
+            [
+                'entity_type' => 'assignment_submission',
+                'entity_id'   => $submissionId,
+                'action_url'  => '/dashboard/student/assignments',
+                'icon'        => 'exclamation-circle',
+                'color'       => 'amber',
+            ]
+        );
+    }
+
+    /**
      * Notify all enrolled students that a session was created or updated.
      * Triggered by: POST|PUT /api/instructor/courses/{course}/sessions
      */

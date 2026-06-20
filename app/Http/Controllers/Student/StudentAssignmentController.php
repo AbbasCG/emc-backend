@@ -127,9 +127,14 @@ class StudentAssignmentController extends Controller
             ->where('user_id', $user->id)
             ->first();
 
-        if ($existing?->submitted_at && ! $assignment->resubmission_allowed) {
+        // Resubmission is allowed only when:
+        //   (a) the assignment has global resubmission_allowed flag, OR
+        //   (b) the instructor explicitly requested a new submission (status = needs_revision).
+        $instructorRequestedResubmission = $existing && $existing->status === 'needs_revision';
+
+        if ($existing?->submitted_at && ! $assignment->resubmission_allowed && ! $instructorRequestedResubmission) {
             throw ValidationException::withMessages([
-                'assignment' => ['This assignment has already been submitted and resubmission is not allowed.'],
+                'assignment' => ['تم تسليم هذا الواجب مسبقاً ولا يمكن إعادة التسليم إلا بطلب من المدرس.'],
             ]);
         }
 
@@ -146,37 +151,56 @@ class StudentAssignmentController extends Controller
 
         $submissionStatus = AssignmentSubmissionStatus::onSubmit($assignment);
 
-        $submission = DB::transaction(function () use ($user, $assignment, $textAnswer, $validated, $filePath, $existing, $submissionStatus) {
+        $submission = DB::transaction(function () use ($user, $assignment, $textAnswer, $validated, $filePath, $existing, $submissionStatus, $instructorRequestedResubmission) {
+            $data = [
+                'text_answer'  => $textAnswer ?? $existing?->text_answer,
+                'notes'        => array_key_exists('notes', $validated) ? $validated['notes'] : $existing?->notes,
+                'file_path'    => $filePath ?? $existing?->file_path,
+                'submitted_at' => now(),
+                'status'       => $submissionStatus,
+                'score'        => null,
+                'feedback'     => null,
+            ];
+
+            // Track when a resubmission occurs so the instructor sees a distinct status.
+            if ($instructorRequestedResubmission
+                && \Illuminate\Support\Facades\Schema::hasColumn('assignment_submissions', 'resubmitted_at')
+            ) {
+                $data['resubmitted_at'] = now();
+            }
+
             return AssignmentSubmission::query()->updateOrCreate(
                 [
                     'assignment_id' => $assignment->id,
                     'user_id'       => $user->id,
                 ],
-                [
-                    'text_answer'  => $textAnswer ?? $existing?->text_answer,
-                    'notes'        => array_key_exists('notes', $validated) ? $validated['notes'] : $existing?->notes,
-                    'file_path'    => $filePath ?? $existing?->file_path,
-                    'submitted_at' => now(),
-                    'status'       => $submissionStatus,
-                    'score'        => null,
-                    'feedback'     => null,
-                ]
+                $data
             );
         });
 
         $progress->syncForUser($user);
 
-        // Notify the instructor that a submission was received.
+        // Notify the instructor — distinguish resubmission from initial submission.
         $assignment->loadMissing('course.instructor');
         $instructorUserId = $assignment->course?->instructor?->user_id;
         if ($instructorUserId) {
-            NotificationService::studentSubmittedAssignment(
-                instructorUserId: $instructorUserId,
-                studentName:      $user->name,
-                courseTitle:      $assignment->course?->title ?? 'الدورة',
-                assignmentTitle:  $assignment->title,
-                submissionId:     $submission->id,
-            );
+            if ($instructorRequestedResubmission) {
+                NotificationService::studentResubmittedAssignment(
+                    instructorUserId: $instructorUserId,
+                    studentName:      $user->name,
+                    courseTitle:      $assignment->course?->title ?? 'الدورة',
+                    assignmentTitle:  $assignment->title,
+                    submissionId:     $submission->id,
+                );
+            } else {
+                NotificationService::studentSubmittedAssignment(
+                    instructorUserId: $instructorUserId,
+                    studentName:      $user->name,
+                    courseTitle:      $assignment->course?->title ?? 'الدورة',
+                    assignmentTitle:  $assignment->title,
+                    submissionId:     $submission->id,
+                );
+            }
         }
 
         return (new AssignmentSubmissionResource($submission->load('assignment')))

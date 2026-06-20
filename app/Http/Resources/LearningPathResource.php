@@ -36,7 +36,8 @@ class LearningPathResource extends JsonResource
             'schedule_note'     => $this->schedule_note,
 
             'courses_count'     => $this->whenLoaded('courses', fn () => $this->courses->count(), $this->courses_count ?? 0),
-            'students_count'    => $this->students_count ?? 0,
+            'students_count'     => $this->students_count ?? 0,
+            'is_path_instructor' => $this->is_path_instructor ?? null,
 
             'instructor'        => $this->whenLoaded('instructor', fn () => $this->buildInstructor()),
             'instructor_id'     => $this->instructor_id,

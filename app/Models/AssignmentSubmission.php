@@ -17,13 +17,15 @@ class AssignmentSubmission extends Model
         'feedback',
         'submitted_at',
         'reviewed_at',
+        'resubmitted_at',
         'status',
     ];
 
     protected $casts = [
-        'submitted_at' => 'datetime',
-        'reviewed_at'  => 'datetime',
-        'score'        => 'decimal:2',
+        'submitted_at'   => 'datetime',
+        'reviewed_at'    => 'datetime',
+        'resubmitted_at' => 'datetime',
+        'score'          => 'decimal:2',
     ];
 
     public function assignment(): BelongsTo

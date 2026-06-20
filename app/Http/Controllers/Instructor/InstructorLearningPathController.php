@@ -60,8 +60,11 @@ class InstructorLearningPathController extends Controller
             ->selectRaw('learning_path_id, count(*) as cnt')
             ->pluck('cnt', 'learning_path_id');
 
-        $paths->each(function (LearningPath $p) use ($enrollCounts) {
-            $p->students_count = $enrollCounts->get($p->id, 0);
+        $paths->each(function (LearningPath $p) use ($enrollCounts, $instructorId) {
+            $p->students_count     = $enrollCounts->get($p->id, 0);
+            // Indicates whether the logged-in instructor is the PATH's primary instructor
+            // (as opposed to just teaching a course within the path).
+            $p->is_path_instructor = $instructorId !== null && $p->instructor_id === $instructorId;
         });
 
         return response()->json([

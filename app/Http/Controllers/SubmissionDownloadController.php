@@ -3,7 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Models\AssignmentSubmission;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -32,6 +34,57 @@ class SubmissionDownloadController extends Controller
         abort_if($disk === null, 404, 'File not found.');
 
         return Storage::disk($disk)->download($path, basename($path));
+    }
+
+    /**
+     * GET /api/instructor/submissions/{submission}/file
+     *
+     * Instructor-facing file endpoint. Returns JSON errors (never redirects),
+     * streams inline by default, or as attachment when ?download=1.
+     */
+    public function instructorFile(Request $request, AssignmentSubmission $submission): StreamedResponse|JsonResponse
+    {
+        $user = Auth::guard('sanctum')->user();
+
+        if (! $user) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
+
+        if (! $this->canAccess($user, $submission)) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
+        if (! $submission->file_path) {
+            return response()->json(['message' => 'No file attached.'], 404);
+        }
+
+        [$disk, $path] = $this->resolveDisk($submission->file_path);
+
+        if ($disk === null) {
+            return response()->json(['message' => 'File not found.'], 404);
+        }
+
+        $forceDownload = $request->boolean('download');
+        $filename      = basename($path);
+
+        if ($forceDownload) {
+            return Storage::disk($disk)->download($path, $filename);
+        }
+
+        // Inline: detect MIME and stream without forcing download
+        $mime = Storage::disk($disk)->mimeType($path) ?: 'application/octet-stream';
+
+        return response()->stream(function () use ($disk, $path) {
+            $stream = Storage::disk($disk)->readStream($path);
+            if ($stream) {
+                fpassthru($stream);
+                fclose($stream);
+            }
+        }, 200, [
+            'Content-Type'        => $mime,
+            'Content-Disposition' => 'inline; filename="' . $filename . '"',
+            'Cache-Control'       => 'no-store',
+        ]);
     }
 
     private function canAccess($user, AssignmentSubmission $submission): bool

@@ -89,9 +89,10 @@ class InstructorSubmissionResource extends JsonResource
                 'slug'  => $workshop->slug  ?? null,
             ] : ($assignment?->workshop_id ? ['id' => $assignment->workshop_id, 'title' => null, 'slug' => null] : null),
 
-            'learning_path' => $lp,
-            'reviewed_at'   => $this->reviewed_at?->toIso8601String() ?? null,
-            'reviewed_by'   => null,
+            'learning_path'   => $lp,
+            'reviewed_at'     => $this->reviewed_at?->toIso8601String() ?? null,
+            'resubmitted_at'  => $this->resubmitted_at?->toIso8601String() ?? null,
+            'reviewed_by'     => null,
 
             // Legacy nested payloads (backward compatible)
             'user'         => UserResource::make($this->whenLoaded('user')),

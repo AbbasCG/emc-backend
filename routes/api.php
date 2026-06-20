@@ -221,6 +221,12 @@ Route::middleware('auth:sanctum')->get(
     [\App\Http\Controllers\SubmissionDownloadController::class, 'download']
 )->name('submissions.download');
 
+// ─── Instructor submission file (inline preview or attachment, JSON errors) ────
+Route::get(
+    '/instructor/submissions/{submission}/file',
+    [\App\Http\Controllers\SubmissionDownloadController::class, 'instructorFile']
+)->name('instructor.submissions.file');
+
 // ─── Notifications (auth:sanctum, any role) ───────────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/notifications',                   [NotificationController::class, 'index']);
@@ -429,8 +435,8 @@ Route::middleware(['auth:sanctum'])->prefix('admin')->group(function () {
     Route::get('members/{member}', [AdminMemberController::class, 'show']);
 });
 
-// ─── Admin: auth:sanctum + role:admin ────────────────────────────────────────
-Route::middleware(['auth:sanctum', 'role:admin'])->group(function () {
+// ─── Admin: auth:sanctum + role:admin,super_admin,tech_admin ─────────────────
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->group(function () {
 
     Route::get('/workshop-requests', [WorkshopRequestController::class, 'index']);
 
@@ -514,7 +520,7 @@ Route::post('/support-tickets', [PublicSupportTicketController::class, 'store'])
     ->middleware('throttle:workshop');
 
 // ─── Phase 3: Operations — auth:sanctum + role:admin ─────────────────────────
-Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(function () {
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('admin')->group(function () {
 
     // Departments
     Route::apiResource('departments', DepartmentController::class);
@@ -870,7 +876,7 @@ Route::middleware(['auth:sanctum', 'role:admin,department_manager'])->prefix('op
 });
 
 // ─── Operations aliases (frontend uses /operations/*, backend uses /admin/*) ─
-Route::middleware(['auth:sanctum', 'role:admin'])->prefix('operations')->group(function () {
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('operations')->group(function () {
     Route::get('dashboard',                                            [AdminController::class,                   'dashboard']);
     // NOTE: GET departments + departments/{id} are registered ABOVE this group with role:admin,department_manager
     // so that Dept. Managers can access their own department data.
@@ -1052,13 +1058,18 @@ Route::middleware(['auth:sanctum', 'role:programs_manager,admin,super_admin'])->
     Route::get('dashboard', [\App\Http\Controllers\ProgramsManager\ProgramsManagerDashboardController::class, 'dashboard']);
 });
 
+// ─── Tech Admin portal ───────────────────────────────────────────────────────
+Route::middleware(['auth:sanctum', 'role:tech_admin,super_admin'])->prefix('tech-admin')->group(function () {
+    Route::get('dashboard', [\App\Http\Controllers\TechAdmin\TechAdminDashboardController::class, 'dashboard']);
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // SUPER_ADMIN / ADMIN — missing CRUD endpoints
 // super_admin bypasses all role checks via RoleMiddleware::isSuperAdmin()
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ─── User management (admin + super_admin can read/create/update) ─────────────
-Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->group(function () {
+// ─── User management (admin + super_admin + tech_admin can read/create/update) ─
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('admin')->group(function () {
     Route::get('users/search',    [AdminUserController::class, 'search']);
     Route::get('users',           [AdminUserController::class, 'index']);
     Route::post('users',          [AdminUserController::class, 'store']);
@@ -1071,11 +1082,11 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->
     Route::post('registrations/repair-links',  [\App\Http\Controllers\AdminController::class, 'repairRegistrationLinks']);
 });
 
-// ─── Delete / restore user — super_admin only ────────────────────────────────
+// ─── Delete / restore user — super_admin + tech_admin ───────────────────────
 Route::delete('admin/users/{user}', [AdminUserController::class, 'destroy'])
-    ->middleware(['auth:sanctum', 'role:super_admin']);
+    ->middleware(['auth:sanctum', 'role:super_admin,tech_admin']);
 Route::post('admin/users/{id}/restore', [AdminUserController::class, 'restore'])
-    ->middleware(['auth:sanctum', 'role:super_admin']);
+    ->middleware(['auth:sanctum', 'role:super_admin,tech_admin']);
 
 // ─── Admin Courses CRUD — full management with filters + instructor assignment ─
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,department_manager,programs_manager'])->group(function () {
@@ -1132,8 +1143,8 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,department_manager,pr
     Route::delete('admin/programs/{track}', [AdminTrackController::class, 'destroy']);
 });
 
-// ─── Workshops CRUD (admin + super_admin) ────────────────────────────────────
-Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->group(function () {
+// ─── Workshops CRUD (admin + super_admin + tech_admin) ───────────────────────
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('admin')->group(function () {
     Route::get('workshops',                                 [AdminWorkshopController::class, 'index']);
     Route::post('workshops',                                [AdminWorkshopController::class, 'store']);
     Route::get('workshops/{workshop}',                      [AdminWorkshopController::class, 'show']);
@@ -1168,8 +1179,8 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,programs_manager'])->
     Route::get('learning-paths/{learningPath}/students',       [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'students']);
 });
 
-// ─── Team members CRUD (admin + super_admin) ─────────────────────────────────
-Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->group(function () {
+// ─── Team members CRUD (admin + super_admin + tech_admin) ────────────────────
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('admin')->group(function () {
     Route::get('team-members',                  [AdminTeamMemberController::class, 'index']);
     Route::post('team-members',                 [AdminTeamMemberController::class, 'store']);
     Route::get('team-members/{teamMember}',     [AdminTeamMemberController::class, 'show']);
@@ -1183,8 +1194,8 @@ Route::middleware(['auth:sanctum'])->prefix('admin')->group(function () {
     Route::get('workshop-requests', [WorkshopRequestController::class, 'index']);
 });
 
-// ─── Workshop Requests: mutations (admin + super_admin only) ─────────────────────────────────
-Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->group(function () {
+// ─── Workshop Requests: mutations (admin + super_admin + tech_admin) ─────────
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('admin')->group(function () {
     Route::put('workshop-requests/{workshopRequest}',      [WorkshopRequestController::class, 'update']);
     Route::patch('workshop-requests/{workshopRequest}',    [WorkshopRequestController::class, 'update']);
     Route::delete('workshop-requests/{workshopRequest}',   [WorkshopRequestController::class, 'destroy']);
@@ -1203,16 +1214,16 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('admin/workshop-requests-queue',            [WorkshopRequestController::class, 'index']);
 });
 
-// ─── Audit Logs (super_admin read-only) ───────────────────────────────────────
-Route::middleware(['auth:sanctum', 'role:super_admin,admin'])->prefix('admin')->group(function () {
+// ─── Audit Logs (super_admin + admin + tech_admin) ───────────────────────────
+Route::middleware(['auth:sanctum', 'role:super_admin,admin,tech_admin'])->prefix('admin')->group(function () {
     Route::get('audit-logs',             [AdminAuditLogController::class, 'index']);
     Route::get('audit-logs/{auditLog}',  [AdminAuditLogController::class, 'show']);
 });
 
 // ─── Impersonation ────────────────────────────────────────────────────────────
-// Start: role:super_admin,admin — permission check (users.impersonate) is enforced
+// Start: role:super_admin,admin,tech_admin — permission check (users.impersonate) is enforced
 // in the controller, so having the role alone is not sufficient.
-Route::middleware(['auth:sanctum', 'role:super_admin,admin'])->group(function () {
+Route::middleware(['auth:sanctum', 'role:super_admin,admin,tech_admin'])->group(function () {
     Route::post('/admin/impersonate/{user}', [ImpersonationController::class, 'start']);
 });
 // Stop: authenticated with the impersonation token (role is the target user's role)
@@ -1234,7 +1245,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
 });
 
 // ─── Placement tests — admin management ──────────────────────────────────────
-Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->group(function () {
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('admin')->group(function () {
     Route::get( 'placement-tests',                                        [AdminPlacementController::class, 'indexTests']);
     Route::post('courses/{course}/oral-assessment-slots',                 [AdminPlacementController::class, 'storeSlot']);
     Route::get( 'courses/{course}/oral-assessment-slots',                 [AdminPlacementController::class, 'indexSlots']);

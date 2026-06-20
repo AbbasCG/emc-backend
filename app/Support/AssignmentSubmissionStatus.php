@@ -27,6 +27,11 @@ class AssignmentSubmissionStatus
             return 'graded';
         }
 
+        // Instructor requested a new submission — student must resubmit.
+        if ($raw === 'needs_revision') {
+            return 'needs_resubmission';
+        }
+
         if ($raw === 'late') {
             return 'late';
         }
@@ -68,6 +73,11 @@ class AssignmentSubmissionStatus
 
         if ($raw === 'needs_revision') {
             return 'needs_revision';
+        }
+
+        // Student resubmitted after instructor requested revision — show distinct status.
+        if (! is_null($submission->resubmitted_at)) {
+            return 'resubmitted';
         }
 
         return 'pending_review';

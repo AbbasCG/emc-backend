@@ -225,6 +225,8 @@ class InstructorSubmissionController extends Controller
             default              => 'submitted',
         };
 
+        $requestingResubmission = $storedStatus === 'needs_revision';
+
         DB::transaction(function () use ($submission, $validated, $storedStatus) {
             $data = [
                 'score'    => $validated['score'] ?? $validated['grade'] ?? $submission->score,
@@ -251,16 +253,27 @@ class InstructorSubmissionController extends Controller
         $course     = $assignment?->course;
 
         if ($student) {
-            NotificationService::assignmentGraded(
-                studentUserId:   $student->id,
-                courseId:        $course?->id ?? 0,
-                courseTitle:     $course?->title ?? 'الدورة',
-                assignmentTitle: $assignment?->title ?? 'الواجب',
-                score:           $fresh->score,
-                maxScore:        $assignment?->max_score ?? null,
-                feedback:        $fresh->feedback,
-                submissionId:    $fresh->id,
-            );
+            if ($requestingResubmission) {
+                // Instructor asked the student to resubmit — send a targeted notification.
+                NotificationService::requestedResubmission(
+                    studentUserId:   $student->id,
+                    courseTitle:     $course?->title ?? 'الدورة',
+                    assignmentTitle: $assignment?->title ?? 'الواجب',
+                    feedback:        $fresh->feedback,
+                    submissionId:    $fresh->id,
+                );
+            } else {
+                NotificationService::assignmentGraded(
+                    studentUserId:   $student->id,
+                    courseId:        $course?->id ?? 0,
+                    courseTitle:     $course?->title ?? 'الدورة',
+                    assignmentTitle: $assignment?->title ?? 'الواجب',
+                    score:           $fresh->score,
+                    maxScore:        $assignment?->max_score ?? null,
+                    feedback:        $fresh->feedback,
+                    submissionId:    $fresh->id,
+                );
+            }
         }
 
         $profile  = $request->user()->instructorProfile;
@@ -283,7 +296,10 @@ class InstructorSubmissionController extends Controller
     private function applyInstructorStatusFilter($query, string $status): void
     {
         match ($status) {
-            'pending_review' => $query->whereIn('assignment_submissions.status', ['submitted', 'late']),
+            'pending_review' => $query->whereIn('assignment_submissions.status', ['submitted', 'late'])
+                                      ->whereNull('assignment_submissions.resubmitted_at'),
+            'resubmitted'    => $query->whereIn('assignment_submissions.status', ['submitted', 'late'])
+                                      ->whereNotNull('assignment_submissions.resubmitted_at'),
             'reviewed'       => $query->whereIn('assignment_submissions.status', ['graded', 'reviewed']),
             'needs_revision' => $query->where('assignment_submissions.status', 'needs_revision'),
             'not_submitted'  => $query->whereRaw('0 = 1'),

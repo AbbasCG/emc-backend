@@ -16,10 +16,12 @@ use Illuminate\Validation\Rule;
 class AdminUserController extends Controller
 {
     private const ALLOWED_ROLES = [
-        'super_admin', 'executive_admin', 'admin', 'department_manager',
-        'section_lead', 'finance_manager', 'marketing_manager', 'quality_manager',
-        'hr_manager', 'support_agent', 'instructor', 'teacher',
+        'super_admin', 'tech_admin', 'executive_admin', 'admin',
+        'department_manager', 'section_lead',
+        'finance_manager', 'marketing_manager', 'quality_manager', 'hr_manager',
+        'support_agent', 'instructor', 'teacher',
         'student', 'volunteer', 'partner',
+        'programs_manager', 'operations_manager', 'partnerships_manager', 'community_manager',
     ];
 
     // GET /api/admin/users/search?q=
