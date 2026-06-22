@@ -868,9 +868,9 @@ Route::middleware(['auth:sanctum', 'role:admin,programs_manager'])->prefix('admi
     Route::get('progress',                   [AdminLmsProgressController::class,   'index']);
 });
 
-// ─── Operations: department routes — accessible by admin AND department_manager ─
-// (department_manager sees only their own department; DepartmentController scopes automatically)
-Route::middleware(['auth:sanctum', 'role:admin,department_manager'])->prefix('operations')->group(function () {
+// ─── Operations: department routes — accessible by admin, department_manager, programs_manager ─
+// (department_manager scopes to own dept; programs_manager needs read-only for course dept dropdown)
+Route::middleware(['auth:sanctum', 'role:admin,department_manager,programs_manager'])->prefix('operations')->group(function () {
     Route::get('departments',              [DepartmentController::class, 'index']);
     Route::get('departments/{department}', [DepartmentController::class, 'show']);
 });
@@ -921,9 +921,9 @@ Route::middleware(['auth:sanctum', 'role:admin,finance_manager'])->prefix('finan
 });
 
 // ─── KPI unified endpoint (?tab=overview|education|finance|…) ────────────────
-// finance_manager and quality_manager have VIEW_KPI permission; include them
+// finance_manager, quality_manager, and programs_manager have VIEW_KPI permission
 Route::get('kpi', [KpiController::class, 'unified'])
-    ->middleware(['auth:sanctum', 'role:admin,finance_manager,quality_manager']);
+    ->middleware(['auth:sanctum', 'role:admin,finance_manager,quality_manager,programs_manager']);
 
 // ─── Quality aliases (frontend uses /quality/*, backend uses /admin/quality-reviews/*) ─
 // quality_manager role has MANAGE_QUALITY and APPROVE_QUALITY_REVIEWS permissions
@@ -934,7 +934,7 @@ Route::middleware(['auth:sanctum', 'role:admin,quality_manager'])->prefix('quali
 });
 
 // ─── Reports aliases (frontend uses /reports directly) ───────────────────────
-Route::middleware(['auth:sanctum', 'role:admin'])->group(function () {
+Route::middleware(['auth:sanctum', 'role:admin,programs_manager'])->group(function () {
     Route::get('reports',          [ReportController::class, 'index']);
     Route::post('reports/generate',[ReportController::class, 'generate']);
 });
@@ -1054,8 +1054,23 @@ Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin'])->prefix
 });
 
 // ─── Programs Manager portal ─────────────────────────────────────────────────
-Route::middleware(['auth:sanctum', 'role:programs_manager,admin,super_admin'])->prefix('programs-manager')->group(function () {
+Route::middleware(['auth:sanctum', 'role:programs_manager,admin,super_admin,tech_admin'])->prefix('programs-manager')->group(function () {
     Route::get('dashboard', [\App\Http\Controllers\ProgramsManager\ProgramsManagerDashboardController::class, 'dashboard']);
+});
+
+// ─── Programs Manager: registrations access (view + status) ──────────────────
+// programs_manager owns the program domain and must review registrations.
+Route::middleware(['auth:sanctum', 'role:programs_manager'])->prefix('admin')->group(function () {
+    Route::get('registrations',                                    [AdminController::class, 'registrations']);
+    Route::get('registrations/{registration}',                     [AdminController::class, 'showRegistration']);
+    Route::put('registrations/{registration}/status',              [AdminController::class, 'updateRegistrationStatus']);
+    Route::patch('registrations/{registration}/status',            [AdminController::class, 'updateRegistrationStatus']);
+});
+
+// ─── Material file: authenticated stream (replaces raw /storage/ links) ───────
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,programs_manager'])->group(function () {
+    Route::get('admin/lms/materials/{material}/file', [AdminLmsMaterialController::class, 'file'])
+        ->name('admin.lms.materials.file');
 });
 
 // ─── Tech Admin portal ───────────────────────────────────────────────────────
@@ -1177,6 +1192,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,programs_manager'])->
     Route::delete('learning-paths/{learningPath}',             [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'destroy']);
     Route::post('learning-paths/{learningPath}/courses',       [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'attachCourses']);
     Route::get('learning-paths/{learningPath}/students',       [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'students']);
+    Route::patch('learning-paths/{learningPath}/status',       [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'updateStatus']);
 });
 
 // ─── Team members CRUD (admin + super_admin + tech_admin) ────────────────────

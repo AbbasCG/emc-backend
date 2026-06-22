@@ -8,6 +8,8 @@ use App\Models\CourseMaterial;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\Storage;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AdminLmsMaterialController extends Controller
 {
@@ -88,5 +90,38 @@ class AdminLmsMaterialController extends Controller
         $material->delete();
 
         return response()->json(['success' => true, 'message' => 'Material deleted successfully']);
+    }
+
+    /**
+     * Serve a material file through an authenticated stream.
+     * Replaces direct /storage/ links that return 403 for protected paths.
+     */
+    public function file(Request $request, CourseMaterial $material): StreamedResponse|JsonResponse
+    {
+        if (! $material->file_path) {
+            return response()->json(['success' => false, 'message' => 'هذه المادة لا تحتوي على ملف للتحميل.'], 404);
+        }
+
+        $disk = 'public';
+        $path = $material->file_path;
+
+        if (! Storage::disk($disk)->exists($path)) {
+            return response()->json(['success' => false, 'message' => 'الملف غير موجود على الخادم.'], 404);
+        }
+
+        $inline    = $request->boolean('inline', true);
+        $mime      = Storage::disk($disk)->mimeType($path) ?: 'application/octet-stream';
+        $filename  = basename($path);
+        $disp      = $inline ? "inline; filename=\"{$filename}\"" : "attachment; filename=\"{$filename}\"";
+
+        return response()->streamDownload(
+            fn () => fpassthru(Storage::disk($disk)->readStream($path)),
+            $filename,
+            [
+                'Content-Type'        => $mime,
+                'Content-Disposition' => $disp,
+                'Cache-Control'       => 'private, no-store',
+            ]
+        );
     }
 }

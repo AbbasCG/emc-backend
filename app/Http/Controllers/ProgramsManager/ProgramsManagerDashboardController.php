@@ -9,28 +9,29 @@ use App\Models\LearningPath;
 use App\Models\LmsSession;
 use App\Models\Registration;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\DB;
 
 class ProgramsManagerDashboardController extends Controller
 {
     public function dashboard(): JsonResponse
     {
         // ── Counts ──────────────────────────────────────────────────────────────
-        $totalCourses      = Course::count();
-        $publishedCourses  = Course::where('is_published', true)->count();
-        $draftCourses      = Course::where('is_published', false)->count();
+        $totalCourses        = Course::count();
+        $publishedCourses    = Course::where('is_published', true)->count();
+        $draftCourses        = Course::where('is_published', false)->count();
 
-        $totalPaths        = LearningPath::count();
-        $activePaths       = LearningPath::where('status', 'published')->count();
+        $totalPaths          = LearningPath::count();
+        $publishedPaths      = LearningPath::where('status', 'published')->count();
 
-        $totalRegistrations = Registration::count();
-        $totalStudents      = Registration::distinct('user_id')->count('user_id');
+        $totalRegistrations  = Registration::count();
+        $pendingRegistrations = Registration::where('status', 'pending')->count();
+        $activeStudents      = Registration::where('status', 'approved')
+            ->distinct('user_id')->count('user_id');
 
-        $upcomingSessions   = LmsSession::where('session_date', '>=', now()->toDateString())
+        $upcomingSessionCount = LmsSession::where('session_date', '>=', now()->toDateString())
             ->where('status', '!=', 'cancelled')
             ->count();
 
-        $activeAssignments  = CourseAssignment::whereNull('due_date')
+        $pendingAssignments  = CourseAssignment::whereNull('due_date')
             ->orWhere('due_date', '>=', now())
             ->count();
 
@@ -51,18 +52,32 @@ class ProgramsManagerDashboardController extends Controller
             ]);
 
         // ── Recent Learning Paths ────────────────────────────────────────────────
-        $recentPaths = LearningPath::with(['instructor.user'])
-            ->withCount('courses')
+        $recentPaths = LearningPath::withCount('courses')
             ->latest()
             ->limit(5)
             ->get()
             ->map(fn (LearningPath $p) => [
-                'id'            => $p->id,
-                'title'         => $p->title,
-                'slug'          => $p->slug,
-                'status'        => $p->status,
-                'courses_count' => $p->courses_count,
+                'id'             => $p->id,
+                'title'          => $p->title,
+                'slug'           => $p->slug,
+                'status'         => $p->status,
+                'courses_count'  => $p->courses_count,
                 'featured_image' => $p->featured_image,
+            ]);
+
+        // ── Pending Registrations ────────────────────────────────────────────────
+        $pendingRegs = Registration::with(['user', 'course'])
+            ->where('status', 'pending')
+            ->latest()
+            ->limit(5)
+            ->get()
+            ->map(fn (Registration $r) => [
+                'id'          => $r->id,
+                'student'     => $r->user?->name,
+                'email'       => $r->user?->email ?? $r->email,
+                'course'      => $r->course?->title ?? $r->course_name,
+                'submitted_at' => $r->created_at?->toDateTimeString(),
+                'status'      => $r->status,
             ]);
 
         // ── Upcoming Sessions ────────────────────────────────────────────────────
@@ -84,52 +99,67 @@ class ProgramsManagerDashboardController extends Controller
                 'meeting_url'  => $s->meeting_url,
             ]);
 
-        // ── Warnings ────────────────────────────────────────────────────────────
-        $warnings = [];
+        // ── Program Alerts ────────────────────────────────────────────────────────
+        $alerts = [];
 
         $coursesWithoutInstructor = Course::whereNull('instructor_id')->count();
         if ($coursesWithoutInstructor > 0) {
-            $warnings[] = [
+            $alerts[] = [
                 'type'    => 'missing_instructor',
                 'message' => "هناك {$coursesWithoutInstructor} دورة بدون مدرب.",
                 'count'   => $coursesWithoutInstructor,
+                'severity' => 'warning',
             ];
         }
 
         $pathsWithoutCourses = LearningPath::doesntHave('courses')->count();
         if ($pathsWithoutCourses > 0) {
-            $warnings[] = [
+            $alerts[] = [
                 'type'    => 'empty_learning_path',
                 'message' => "هناك {$pathsWithoutCourses} مسار تعليمي بدون دورات.",
                 'count'   => $pathsWithoutCourses,
+                'severity' => 'warning',
             ];
         }
 
         if ($draftCourses > 0) {
-            $warnings[] = [
+            $alerts[] = [
                 'type'    => 'draft_courses',
                 'message' => "هناك {$draftCourses} دورة في وضع المسودة.",
                 'count'   => $draftCourses,
+                'severity' => 'info',
+            ];
+        }
+
+        if ($pendingRegistrations > 0) {
+            $alerts[] = [
+                'type'    => 'pending_registrations',
+                'message' => "هناك {$pendingRegistrations} طلب تسجيل بانتظار المراجعة.",
+                'count'   => $pendingRegistrations,
+                'severity' => 'action',
             ];
         }
 
         return response()->json([
             'success' => true,
-            'counts'  => [
+            'summary' => [
                 'courses'              => $totalCourses,
                 'published_courses'    => $publishedCourses,
                 'draft_courses'        => $draftCourses,
                 'learning_paths'       => $totalPaths,
-                'active_learning_paths' => $activePaths,
+                'published_paths'      => $publishedPaths,
                 'registrations'        => $totalRegistrations,
-                'students'             => $totalStudents,
-                'sessions'             => $upcomingSessions,
-                'assignments'          => $activeAssignments,
+                'pending_registrations' => $pendingRegistrations,
+                'active_students'      => $activeStudents,
+                'upcoming_sessions'    => $upcomingSessionCount,
+                'pending_assignments'  => $pendingAssignments,
             ],
-            'recent_courses'        => $recentCourses,
-            'recent_learning_paths' => $recentPaths,
+            'courses'               => $recentCourses,
+            'learning_paths'        => $recentPaths,
+            'pending_registrations' => $pendingRegs,
             'upcoming_sessions'     => $upcoming,
-            'warnings'              => $warnings,
+            'program_alerts'        => $alerts,
+            'recent_activity'       => [],
         ]);
     }
 }

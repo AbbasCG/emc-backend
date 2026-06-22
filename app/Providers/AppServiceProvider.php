@@ -11,6 +11,7 @@ use App\Models\Document;
 use App\Models\DynamicForm;
 use App\Models\Evaluation;
 use App\Models\KnowledgeArticle;
+use App\Models\LearningPath;
 use App\Models\LmsSession;
 use App\Models\Meeting;
 use App\Models\MeetingActionItem;
@@ -39,6 +40,7 @@ use App\Policies\DepartmentPolicy;
 use App\Policies\DocumentPolicy;
 use App\Policies\EvaluationPolicy;
 use App\Policies\KnowledgeArticlePolicy;
+use App\Policies\LearningPathPolicy;
 use App\Policies\LmsSessionPolicy;
 use App\Policies\MeetingPolicy;
 use App\Policies\PartnerPolicy;
@@ -169,6 +171,7 @@ class AppServiceProvider extends ServiceProvider
         // Phase RBAC new policies
         Gate::policy(User::class, UserPolicy::class);
         Gate::policy(Department::class, DepartmentPolicy::class);
+        Gate::policy(LearningPath::class, LearningPathPolicy::class);
     }
 
     /**

@@ -76,6 +76,8 @@ class AdminLearningPathController extends Controller
     // ─── POST /api/admin/learning-paths ───────────────────────────────────────
     public function store(Request $request): JsonResponse
     {
+        $this->authorize('create', LearningPath::class);
+
         $data = $this->validate($request);
         $data['slug']   = $data['slug'] ?? $this->uniqueSlug($data['title']);
         $data['status'] = $data['status'] ?? 'draft';
@@ -219,6 +221,8 @@ class AdminLearningPathController extends Controller
     // ─── PUT /api/admin/learning-paths/{learningPath} ─────────────────────────
     public function update(Request $request, LearningPath $learningPath): JsonResponse
     {
+        $this->authorize('update', $learningPath);
+
         $data = $this->validate($request, $learningPath);
 
         $oldSnap = ['title' => $learningPath->title, 'status' => $learningPath->status];
@@ -265,9 +269,47 @@ class AdminLearningPathController extends Controller
         ]);
     }
 
+    // ─── PATCH /api/admin/learning-paths/{learningPath}/status ───────────────
+    public function updateStatus(Request $request, LearningPath $learningPath): JsonResponse
+    {
+        $this->authorize('update', $learningPath);
+
+        $data = $request->validate([
+            'status' => 'required|in:draft,published,archived',
+        ]);
+
+        $old = $learningPath->status;
+        $learningPath->update(['status' => $data['status']]);
+
+        $action = match ($data['status']) {
+            'published' => 'PUBLISH',
+            'archived'  => 'ARCHIVE',
+            default     => 'UNPUBLISH',
+        };
+
+        AuditLogService::logModel(
+            $action, $learningPath,
+            ['status' => $old],
+            ['status' => $data['status']],
+            null, $request
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => match ($data['status']) {
+                'published' => 'تم نشر المسار التعليمي بنجاح.',
+                'archived'  => 'تم أرشفة المسار التعليمي.',
+                default     => 'تم إلغاء نشر المسار التعليمي.',
+            },
+            'data' => new LearningPathResource($learningPath),
+        ]);
+    }
+
     // ─── DELETE /api/admin/learning-paths/{learningPath} ──────────────────────
     public function destroy(Request $request, LearningPath $learningPath): JsonResponse
     {
+        $this->authorize('delete', $learningPath);
+
         $snap = ['title' => $learningPath->title, 'status' => $learningPath->status];
         $id   = $learningPath->id;
 
