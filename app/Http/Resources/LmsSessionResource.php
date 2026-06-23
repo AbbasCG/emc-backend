@@ -31,6 +31,7 @@ class LmsSessionResource extends JsonResource
             'ends_at'       => $endsAt,
             'end_at'        => $endsAt,
             'meeting_url'   => $this->meeting_url,
+            'meeting_link'  => $this->meeting_url,
             'recording_url' => $this->recording_url,
             'status'        => $this->status,
             'location'      => $this->location,
@@ -38,8 +39,9 @@ class LmsSessionResource extends JsonResource
             'instructor_name' => $this->whenLoaded('instructor', fn () => $this->instructor?->name),
             'course_title'  => $this->whenLoaded('course', fn () => $this->course?->title),
             'instructor'    => InstructorResource::make($this->whenLoaded('instructor')),
-            'attendances'   => AttendanceResource::collection($this->whenLoaded('attendances')),
-            'created_at'    => $this->created_at,
+            'attendances'      => AttendanceResource::collection($this->whenLoaded('attendances')),
+            'attendance_count' => $this->when(isset($this->attendances_count), fn () => (int) $this->attendances_count),
+            'created_at'       => $this->created_at,
         ];
     }
 }

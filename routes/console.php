@@ -45,6 +45,13 @@ Schedule::command('emc:send-session-reminders')
     ->runInBackground()
     ->appendOutputTo(storage_path('logs/scheduler.log'));
 
+// Daily: log ended courses (no DB mutation — computed status handles display).
+// Add --close-registration to also flip registration_open=false on expired courses.
+Schedule::command('courses:mark-ended')
+    ->dailyAt('05:00')
+    ->withoutOverlapping()
+    ->appendOutputTo(storage_path('logs/scheduler.log'));
+
 // Optional: daily database backup at 01:00 (enable by setting ENABLE_SCHEDULED_BACKUP=true)
 // --prune-days=30 removes backup files older than 30 days after each successful run.
 if (env('ENABLE_SCHEDULED_BACKUP', false)) {

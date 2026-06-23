@@ -56,6 +56,7 @@ class StoreRegistrationRequest extends FormRequest
             'phone_country_code' => ['nullable', 'string', 'max:10'],
             'gender'           => ['nullable', 'string', 'max:50'],
             'notes'            => ['nullable', 'string', 'max:2000'],
+            'registration_code' => ['nullable', 'string', 'max:100'],
             'payment_provider' => ['nullable', 'in:stripe,paypal,fake'],
             'receipt'          => ['nullable', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:4096'],
         ];

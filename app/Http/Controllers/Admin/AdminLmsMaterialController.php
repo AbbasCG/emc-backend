@@ -9,6 +9,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Support\Facades\Storage;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AdminLmsMaterialController extends Controller
@@ -93,35 +94,76 @@ class AdminLmsMaterialController extends Controller
     }
 
     /**
-     * Serve a material file through an authenticated stream.
-     * Replaces direct /storage/ links that return 403 for protected paths.
+     * Serve a material file inline (for preview). Auth + role enforced by route middleware.
      */
-    public function file(Request $request, CourseMaterial $material): StreamedResponse|JsonResponse
+    public function file(Request $request, CourseMaterial $material): BinaryFileResponse|JsonResponse
+    {
+        if (! $material->file_path) {
+            return response()->json(['success' => false, 'message' => 'لا يوجد ملف مرفق.'], 404);
+        }
+
+        [$disk, $path] = $this->resolveDisk($material->file_path);
+
+        if ($disk === null) {
+            return response()->json(['success' => false, 'message' => 'الملف غير موجود على الخادم.'], 404);
+        }
+
+        $mime     = Storage::disk($disk)->mimeType($path) ?: 'application/octet-stream';
+        $filename = basename($path);
+
+        return Storage::disk($disk)->response($path, $filename, [
+            'Content-Type'        => $mime,
+            'Content-Disposition' => 'inline; filename="' . addslashes($filename) . '"',
+            'Cache-Control'       => 'private, no-store',
+        ]);
+    }
+
+    /**
+     * Serve a material file as a downloadable attachment. Auth + role enforced by route middleware.
+     */
+    public function download(Request $request, CourseMaterial $material): StreamedResponse|JsonResponse
     {
         if (! $material->file_path) {
             return response()->json(['success' => false, 'message' => 'هذه المادة لا تحتوي على ملف للتحميل.'], 404);
         }
 
-        $disk = 'public';
-        $path = $material->file_path;
+        [$disk, $path] = $this->resolveDisk($material->file_path);
 
-        if (! Storage::disk($disk)->exists($path)) {
+        if ($disk === null) {
             return response()->json(['success' => false, 'message' => 'الملف غير موجود على الخادم.'], 404);
         }
 
-        $inline    = $request->boolean('inline', true);
-        $mime      = Storage::disk($disk)->mimeType($path) ?: 'application/octet-stream';
-        $filename  = basename($path);
-        $disp      = $inline ? "inline; filename=\"{$filename}\"" : "attachment; filename=\"{$filename}\"";
+        $filename = basename($path);
 
-        return response()->streamDownload(
-            fn () => fpassthru(Storage::disk($disk)->readStream($path)),
-            $filename,
-            [
-                'Content-Type'        => $mime,
-                'Content-Disposition' => $disp,
-                'Cache-Control'       => 'private, no-store',
-            ]
-        );
+        return Storage::disk($disk)->download($path, $filename, [
+            'Cache-Control' => 'private, no-store',
+        ]);
+    }
+
+    /**
+     * Resolve the storage disk for a given file path.
+     * Probes 'local' (private) first, then 'public' (legacy), returns [null, path] when missing.
+     *
+     * @return array{0: string|null, 1: string}
+     */
+    private function resolveDisk(string $path): array
+    {
+        $candidates = array_values(array_unique(array_filter([
+            $path,
+            ltrim($path, '/'),
+            preg_replace('#^(storage/|private/)#', '', $path) ?: null,
+        ])));
+
+        foreach ($candidates as $candidate) {
+            if (Storage::disk('local')->exists($candidate)) {
+                return ['local', $candidate];
+            }
+
+            if (Storage::disk('public')->exists($candidate)) {
+                return ['public', $candidate];
+            }
+        }
+
+        return [null, $path];
     }
 }

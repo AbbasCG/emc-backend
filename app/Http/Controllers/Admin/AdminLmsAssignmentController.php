@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Resources\AdminLmsAssignmentDetailResource;
 use App\Http\Resources\LmsAssignmentResource;
 use App\Models\Assignment;
 use Illuminate\Http\JsonResponse;
@@ -14,11 +15,16 @@ class AdminLmsAssignmentController extends Controller
     public function index(Request $request): AnonymousResourceCollection
     {
         $query = Assignment::query()
-            ->with(['workshop', 'course'])
+            ->with(['course.instructor.user', 'workshop.course.instructor.user'])
             ->withCount([
-                'submissions',
-                'submissions as pending_count' => fn ($q) => $q->where('status', 'pending_review'),
-                'submissions as graded_count'  => fn ($q) => $q->where('status', 'reviewed'),
+                'submissions as submissions_count',
+                'submissions as pending_submissions_count' => fn ($q) => $q
+                    ->whereNotNull('submitted_at')
+                    ->whereNotIn('status', ['reviewed', 'graded', 'needs_revision']),
+                'submissions as graded_submissions_count' => fn ($q) => $q
+                    ->whereIn('status', ['reviewed', 'graded']),
+                'submissions as needs_resubmission_count' => fn ($q) => $q
+                    ->where('status', 'needs_revision'),
             ])
             ->latest();
 
@@ -63,11 +69,17 @@ class AdminLmsAssignmentController extends Controller
 
     public function show(Assignment $assignment): JsonResponse
     {
-        $assignment->load(['workshop', 'submissions.user']);
+        $assignment->load([
+            'course.instructor.user',
+            'workshop.course.instructor.user',
+            'submissions.user',
+        ]);
 
-        return (new LmsAssignmentResource($assignment))
-            ->additional(['success' => true, 'message' => 'Assignment retrieved successfully'])
-            ->response();
+        return response()->json([
+            'success' => true,
+            'message' => 'Assignment detail retrieved successfully',
+            'data'    => (new AdminLmsAssignmentDetailResource($assignment))->resolve(),
+        ]);
     }
 
     public function update(Request $request, Assignment $assignment): JsonResponse

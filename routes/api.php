@@ -435,6 +435,15 @@ Route::middleware(['auth:sanctum'])->prefix('admin')->group(function () {
     Route::get('members/{member}', [AdminMemberController::class, 'show']);
 });
 
+// ─── Admin registrations — admin + programs_manager ──────────────────────────
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,programs_manager'])->prefix('admin')->group(function () {
+    Route::get('/registrations', [AdminController::class, 'registrations']);
+    Route::get('/registrations/{registration}', [AdminController::class, 'showRegistration']);
+    Route::put('/registrations/{registration}/status', [AdminController::class, 'updateRegistrationStatus']);
+    Route::patch('/registrations/{registration}/status', [AdminController::class, 'updateRegistrationStatus']);
+    Route::post('/registrations/{registration}/create-account', [AdminController::class, 'createAccountForRegistration']);
+});
+
 // ─── Admin: auth:sanctum + role:admin,super_admin,tech_admin ─────────────────
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->group(function () {
 
@@ -442,12 +451,6 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->group(
 
     Route::prefix('admin')->group(function () {
         Route::get('/dashboard', [AdminController::class, 'dashboard']);
-
-        Route::get('/registrations', [AdminController::class, 'registrations']);
-        Route::get('/registrations/{registration}', [AdminController::class, 'showRegistration']);
-        Route::put('/registrations/{registration}/status', [AdminController::class, 'updateRegistrationStatus']);
-        Route::patch('/registrations/{registration}/status', [AdminController::class, 'updateRegistrationStatus']);
-        Route::post('/registrations/{registration}/create-account', [AdminController::class, 'createAccountForRegistration']);
 
         Route::get('/payments',    [AdminPaymentController::class, 'index']);
         Route::get('/payments/{payment}', [AdminPaymentController::class, 'show']);
@@ -828,7 +831,7 @@ Route::middleware('auth:sanctum')->prefix('lms')->group(function () {
 });
 
 // ─── Admin LMS (frontend uses /admin/lms/*) ──────────────────────────────────
-Route::middleware(['auth:sanctum', 'role:admin,programs_manager'])->prefix('admin/lms')->group(function () {
+Route::middleware(['auth:sanctum', 'role:admin,programs_manager,tech_admin,super_admin'])->prefix('admin/lms')->group(function () {
     // Structure read-only
     Route::get('modules', [CourseModuleController::class, 'index']);
     Route::get('lessons', [LessonController::class,       'index']);
@@ -864,8 +867,9 @@ Route::middleware(['auth:sanctum', 'role:admin,programs_manager'])->prefix('admi
     // Evaluations (read-only for now)
     Route::get('evaluations',                [AdminLmsEvaluationController::class, 'index']);
 
-    // Progress (read-only overview)
-    Route::get('progress',                   [AdminLmsProgressController::class,   'index']);
+    // Progress (read-only overview + student detail)
+    Route::get('progress',                   [AdminLmsProgressController::class, 'index']);
+    Route::get('progress/students/{user}',   [AdminLmsProgressController::class, 'student']);
 });
 
 // ─── Operations: department routes — accessible by admin, department_manager, programs_manager ─
@@ -1058,19 +1062,14 @@ Route::middleware(['auth:sanctum', 'role:programs_manager,admin,super_admin,tech
     Route::get('dashboard', [\App\Http\Controllers\ProgramsManager\ProgramsManagerDashboardController::class, 'dashboard']);
 });
 
-// ─── Programs Manager: registrations access (view + status) ──────────────────
-// programs_manager owns the program domain and must review registrations.
-Route::middleware(['auth:sanctum', 'role:programs_manager'])->prefix('admin')->group(function () {
-    Route::get('registrations',                                    [AdminController::class, 'registrations']);
-    Route::get('registrations/{registration}',                     [AdminController::class, 'showRegistration']);
-    Route::put('registrations/{registration}/status',              [AdminController::class, 'updateRegistrationStatus']);
-    Route::patch('registrations/{registration}/status',            [AdminController::class, 'updateRegistrationStatus']);
-});
+// programs_manager registration access is now in the combined group above (line ~439).
 
-// ─── Material file: authenticated stream (replaces raw /storage/ links) ───────
+// ─── Material file/download: authenticated streams (replaces raw /storage/ links) ─
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,programs_manager'])->group(function () {
     Route::get('admin/lms/materials/{material}/file', [AdminLmsMaterialController::class, 'file'])
         ->name('admin.lms.materials.file');
+    Route::get('admin/lms/materials/{material}/download', [AdminLmsMaterialController::class, 'download'])
+        ->name('admin.lms.materials.download');
 });
 
 // ─── Tech Admin portal ───────────────────────────────────────────────────────
@@ -1104,7 +1103,7 @@ Route::post('admin/users/{id}/restore', [AdminUserController::class, 'restore'])
     ->middleware(['auth:sanctum', 'role:super_admin,tech_admin']);
 
 // ─── Admin Courses CRUD — full management with filters + instructor assignment ─
-Route::middleware(['auth:sanctum', 'role:admin,super_admin,department_manager,programs_manager'])->group(function () {
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,department_manager,programs_manager'])->group(function () {
     Route::get('admin/courses',                                 [AdminCourseController::class, 'index']);
     Route::post('admin/courses',                                [AdminCourseController::class, 'store']);
     Route::get('admin/courses/{course}',                        [AdminCourseController::class, 'show']);

@@ -12,7 +12,7 @@ class AdminLmsEvaluationController extends Controller
 {
     public function index(Request $request): AnonymousResourceCollection
     {
-        $query = Evaluation::query()->latest();
+        $query = Evaluation::query()->with(['course', 'user'])->latest();
 
         if ($request->filled('course_id')) {
             $query->where('course_id', $request->query('course_id'));

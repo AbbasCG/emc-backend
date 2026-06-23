@@ -6,12 +6,20 @@ use App\Events\CourseCreatedEvent;
 use App\Events\CourseUpdatedEvent;
 use App\Events\InstructorAssignedEvent;
 use App\Http\Controllers\Controller;
+use App\Models\Assignment;
+use App\Models\Attendance;
 use App\Models\Course;
+use App\Models\CourseMaterial;
+use App\Models\CourseSession;
 use App\Models\Instructor;
 use App\Models\LearningPathEnrollment;
 use App\Models\LearningPathItem;
+use App\Models\LmsSession;
+use App\Models\Registration;
+use App\Models\StudentProgress;
 use App\Services\AuditLogService;
 use App\Support\CourseDisplay;
+use App\Support\CourseComputedStatus;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -171,15 +179,17 @@ class AdminCourseController extends Controller
     public function show(Course $course): JsonResponse
     {
         $course->load(['instructor.user', 'track', 'features', 'department', 'createdBy', 'assignedBy'])
-            ->loadCount('registrations');
+            ->loadCount(['registrations', 'sessions', 'assignments', 'materials']);
 
         $lpItem = LearningPathItem::with('learningPath')->where('course_id', $course->id)->first();
         $lpEnrollCount = $lpItem ? LearningPathEnrollment::where('learning_path_id', $lpItem->learning_path_id)
             ->whereIn('status', ['active', 'registered', 'enrolled', 'completed'])->count() : null;
 
+        $base = $this->format($course, $lpItem, $lpEnrollCount);
+
         return response()->json([
             'success' => true,
-            'data'    => $this->format($course, $lpItem, $lpEnrollCount),
+            'data'    => array_merge($base, $this->buildDetailContext($course, $lpItem, $lpEnrollCount)),
         ]);
     }
 
@@ -482,6 +492,13 @@ class AdminCourseController extends Controller
             'seats_count'           => 'nullable|integer|min:1',   // alias for capacity
             'registration_open'     => 'nullable|boolean',
             'registration_status'   => 'nullable|in:open,closed,coming_soon',
+            'requires_registration_code' => 'nullable|boolean',
+            'registration_code'     => [
+                'nullable',
+                'string',
+                'max:100',
+                Rule::requiredIf(fn () => $request->boolean('requires_registration_code')),
+            ],
             'status'                => 'nullable|in:draft,published,archived',
             'notes'                 => 'nullable|string',
             'duration'              => 'nullable|string|max:255',
@@ -563,6 +580,13 @@ class AdminCourseController extends Controller
             $data['training_hours'] = (int) round((float) $data['training_hours']);
         }
 
+        if (empty($data['requires_registration_code'])) {
+            $data['requires_registration_code'] = false;
+            $data['registration_code']          = null;
+        } elseif (isset($data['registration_code'])) {
+            $data['registration_code'] = trim((string) $data['registration_code']) ?: null;
+        }
+
         return CourseDisplay::applyOneSessionDefaults($data);
     }
 
@@ -633,8 +657,14 @@ class AdminCourseController extends Controller
             'seats_count'           => $course->capacity,
             'registration_open'     => (bool) ($course->registration_open ?? true),
             'registration_status'   => $course->registration_status ?? 'open',
+            'requires_registration_code' => (bool) $course->requires_registration_code,
+            'registration_code'     => $course->registration_code,
             'next_cohort_pending'   => $course->start_date === null,
             'status'                => $course->status,
+            'is_published'          => $course->status === 'published',
+            'is_ended'              => CourseComputedStatus::isEnded($course),
+            'computed_status'       => CourseComputedStatus::computedStatus($course),
+            'status_label_ar'       => CourseComputedStatus::statusLabelAr($course),
             'notes'                 => $course->notes,
             'duration'              => CourseDisplay::resolvedDuration(
                 $course->program_type,
@@ -714,6 +744,100 @@ class AdminCourseController extends Controller
             'can_archive'               => ! $isActiveLp,
             'can_deactivate'            => ! $isActiveLp,
             'lock_reason'               => $lockReason,
+        ];
+    }
+
+    /** Extended context for admin course detail drawer (tabs, metrics, related lists). */
+    private function buildDetailContext(Course $course, ?LearningPathItem $lpItem, ?int $lpEnrollCount): array
+    {
+        $isActiveLp = $lpItem?->learningPath && in_array($lpItem->learningPath->status, ['published', 'active']);
+        $studentsCount = $isActiveLp && $lpEnrollCount !== null
+            ? $lpEnrollCount
+            : Registration::where('course_id', $course->id)
+                ->whereNotIn('status', ['cancelled'])
+                ->count();
+
+        $progressAvg = round((float) (StudentProgress::where('course_id', $course->id)->avg('progress_percentage') ?? 0), 1);
+
+        $lmsSessionIds     = LmsSession::where('course_id', $course->id)->pluck('id');
+        $courseSessionIds  = CourseSession::where('course_id', $course->id)->pluck('id');
+        $attendanceBase    = Attendance::query()->where(function ($q) use ($lmsSessionIds, $courseSessionIds) {
+            if ($lmsSessionIds->isNotEmpty()) {
+                $q->whereIn('session_id', $lmsSessionIds);
+            }
+            if ($courseSessionIds->isNotEmpty()) {
+                $q->orWhereIn('course_session_id', $courseSessionIds);
+            }
+        });
+        $attendanceTotal   = (clone $attendanceBase)->count();
+        $attendancePresent = (clone $attendanceBase)->where('status', 'present')->count();
+        $attendancePct     = $attendanceTotal > 0 ? round(($attendancePresent / $attendanceTotal) * 100, 1) : 0;
+
+        $sessions = LmsSession::where('course_id', $course->id)
+            ->orderByDesc('session_date')
+            ->limit(12)
+            ->get()
+            ->map(fn (LmsSession $s) => [
+                'id'           => $s->id,
+                'title'        => $s->title,
+                'session_date' => $this->dateStr($s->session_date),
+                'start_time'   => $s->start_time,
+                'status'       => $s->status,
+                'meeting_url'  => $s->meeting_url,
+            ]);
+
+        $assignments = Assignment::where('course_id', $course->id)
+            ->latest()
+            ->limit(12)
+            ->get()
+            ->map(fn (Assignment $a) => [
+                'id'         => $a->id,
+                'title'      => $a->title,
+                'due_date'   => $this->dateStr($a->due_date ?? null),
+                'status'     => $a->status ?? null,
+                'created_at' => $a->created_at?->toDateTimeString(),
+            ]);
+
+        $materials = CourseMaterial::where('course_id', $course->id)
+            ->orderBy('sort_order')
+            ->limit(12)
+            ->get()
+            ->map(fn (CourseMaterial $m) => [
+                'id'    => $m->id,
+                'title' => $m->title,
+                'type'  => $m->type ?? $m->material_type ?? null,
+            ]);
+
+        $registrations = Registration::with('user')
+            ->where('course_id', $course->id)
+            ->whereNotIn('status', ['cancelled'])
+            ->latest()
+            ->limit(12)
+            ->get()
+            ->map(fn (Registration $r) => [
+                'id'           => $r->id,
+                'student'      => $r->user?->name ?? $r->full_name,
+                'email'        => $r->user?->email ?? $r->email,
+                'status'       => $r->status,
+                'submitted_at' => $r->created_at?->toDateTimeString(),
+            ]);
+
+        return [
+            'students_count'       => $studentsCount,
+            'sessions_count'       => $course->sessions_count ?? $sessions->count(),
+            'assignments_count'    => $course->assignments_count ?? $assignments->count(),
+            'materials_count'      => $course->materials_count ?? $materials->count(),
+            'average_progress'     => $progressAvg,
+            'attendance_summary'   => [
+                'present_count' => $attendancePresent,
+                'total'         => $attendanceTotal,
+                'present_pct'   => $attendancePct,
+            ],
+            'category'             => $course->track?->title,
+            'sessions'             => $sessions->values()->all(),
+            'assignments'          => $assignments->values()->all(),
+            'materials'            => $materials->values()->all(),
+            'registrations'        => $registrations->values()->all(),
         ];
     }
 

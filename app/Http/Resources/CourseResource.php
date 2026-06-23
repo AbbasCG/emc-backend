@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Support\CourseComputedStatus;
 use App\Support\CourseDisplay;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -60,6 +61,7 @@ class CourseResource extends JsonResource
             'is_full'               => $this->capacity !== null && ($this->registrations_count ?? 0) >= $this->capacity,
             'registration_open'     => (bool) ($this->registration_open ?? true),
             'registration_status'   => $this->registration_status ?? 'open',
+            'requires_registration_code' => (bool) ($this->requires_registration_code ?? false),
 
             // Image — raw path, resolved full URL, and thumbnail
             'course_image'          => $this->course_image,
@@ -109,6 +111,13 @@ class CourseResource extends JsonResource
 
             // Relations
             'track'                 => $this->whenLoaded('track', fn () => $this->track ? TrackResource::make($this->track) : null),
+
+            // ── Ended-course computed fields ──────────────────────────────────
+            // is_ended: published course whose end_date is in the past.
+            // Does NOT mutate the DB status so the course stays visible publicly.
+            'is_ended'              => CourseComputedStatus::isEnded($this->resource),
+            'computed_status'       => CourseComputedStatus::computedStatus($this->resource),
+            'status_label_ar'       => CourseComputedStatus::statusLabelAr($this->resource),
 
             'created_at'            => $this->created_at,
             'updated_at'            => $this->updated_at,

@@ -16,7 +16,7 @@ use App\Models\StudentProgress;
 use App\Services\AuditLogService;
 use App\Services\NotificationService;
 use App\Services\PaymentGatewayService;
-use App\Support\PaymentStatuses;
+use App\Support\CourseComputedStatus;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
@@ -44,6 +44,15 @@ class RegistrationController extends Controller
             $course = Course::findOrFail($validated['course_id']);
             $course->loadMissing(['track', 'instructor.user', 'features']);
 
+            // Ended courses: block public enrollment unless admin keeps registration_open (override).
+            if (CourseComputedStatus::blocksPublicEnrollment($course)) {
+                return response()->json([
+                    'success'    => false,
+                    'message'    => 'This course has ended and enrollment is no longer available.',
+                    'message_ar' => 'انتهت هذه الدورة ولا يمكن التسجيل فيها حالياً.',
+                ], 422);
+            }
+
             // Path-owned courses can only be reached via Learning Path enrollment
             // (see StudentLearningPathController::enroll, which creates Registration rows
             // directly and never goes through this controller).
@@ -52,6 +61,18 @@ class RegistrationController extends Controller
                     'message'    => 'This course is part of a learning path and cannot be enrolled directly.',
                     'message_ar' => 'هذه الدورة جزء من مسار تعليمي ولا يمكن التسجيل فيها مباشرة. يرجى التسجيل في المسار التعليمي.',
                 ], 422);
+            }
+
+            if ($course->requires_registration_code) {
+                $submitted = trim((string) ($validated['registration_code'] ?? ''));
+                $stored    = trim((string) ($course->registration_code ?? ''));
+                if ($submitted === '' || $stored === '' || strcasecmp($submitted, $stored) !== 0) {
+                    return response()->json([
+                        'success'    => false,
+                        'message'    => 'Invalid or missing registration code for this course.',
+                        'message_ar' => 'رمز التسجيل غير صحيح أو مطلوب لهذه الدورة.',
+                    ], 422);
+                }
             }
 
             if ($course->type === 'paid' && empty($validated['payment_provider'])) {

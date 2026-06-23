@@ -18,10 +18,15 @@ class CourseController extends Controller
         $query = Course::with(['instructor.user', 'features', 'track'])
             ->withCount('registrations')
             ->where('status', 'published')
-            // registration_open defaults true; NULL means old row created before column existed
+            // Show active courses (registration_open true/null) OR ended courses (end_date in past).
+            // Ended courses must remain visible publicly even if registration_open was flipped off.
             ->where(function ($q) {
                 $q->whereNull('registration_open')
-                  ->orWhere('registration_open', true);
+                  ->orWhere('registration_open', true)
+                  ->orWhere(function ($q2) {
+                      $q2->whereNotNull('end_date')
+                         ->whereDate('end_date', '<', now());
+                  });
             })
             // Exclude courses that belong to an active/published learning path —
             // those are only accessible via the learning path page, not as standalone courses.

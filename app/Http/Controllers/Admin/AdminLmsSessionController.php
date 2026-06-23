@@ -13,7 +13,10 @@ class AdminLmsSessionController extends Controller
 {
     public function index(Request $request): AnonymousResourceCollection
     {
-        $query = LmsSession::query()->with(['workshop', 'instructor', 'course'])->latest();
+        $query = LmsSession::query()
+            ->with(['workshop', 'instructor', 'course'])
+            ->withCount('attendances')
+            ->latest();
 
         if ($request->filled('course_id')) {
             $query->where(function ($q) use ($request) {

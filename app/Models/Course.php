@@ -44,6 +44,8 @@ class Course extends Model
         'capacity',
         'registration_open',
         'registration_status',
+        'requires_registration_code',
+        'registration_code',
         'status',
         'notes',
         'duration',
@@ -79,6 +81,7 @@ class Course extends Model
         'registration_open'     => 'boolean',
         'certificate_available'  => 'boolean',
         'requires_placement_test'=> 'boolean',
+        'requires_registration_code' => 'boolean',
     ];
 
     public function instructor()

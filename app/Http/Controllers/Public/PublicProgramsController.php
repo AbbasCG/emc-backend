@@ -106,7 +106,14 @@ class PublicProgramsController extends Controller
         $courseQuery = Course::with(['instructor.user', 'features', 'track'])
             ->withCount('registrations')
             ->whereIn('status', self::COURSE_STATUSES)
-            ->where(fn ($q) => $q->whereNull('registration_open')->orWhere('registration_open', true))
+            ->where(function ($q) {
+                $q->whereNull('registration_open')
+                    ->orWhere('registration_open', true)
+                    ->orWhere(function ($q2) {
+                        $q2->whereNotNull('end_date')
+                            ->whereDate('end_date', '<', now());
+                    });
+            })
             ->publiclyVisible();
 
         if ($search) {
@@ -152,7 +159,14 @@ class PublicProgramsController extends Controller
         $latestCourses = Course::with(['instructor.user'])
             ->withCount('registrations')
             ->whereIn('status', self::COURSE_STATUSES)
-            ->where(fn ($q) => $q->whereNull('registration_open')->orWhere('registration_open', true))
+            ->where(function ($q) {
+                $q->whereNull('registration_open')
+                    ->orWhere('registration_open', true)
+                    ->orWhere(function ($q2) {
+                        $q2->whereNotNull('end_date')
+                            ->whereDate('end_date', '<', now());
+                    });
+            })
             ->publiclyVisible()
             ->when($search, fn ($q) => $q->where(fn ($s) => $s
                 ->where('title', 'like', "%{$search}%")
