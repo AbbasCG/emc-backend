@@ -30,8 +30,8 @@ class LmsSessionResource extends JsonResource
             'start_at'      => $startsAt,
             'ends_at'       => $endsAt,
             'end_at'        => $endsAt,
-            'meeting_url'   => $this->meeting_url,
-            'meeting_link'  => $this->meeting_url,
+            'meeting_url'   => $this->canSeeMeetingLink($request) ? $this->meeting_url : null,
+            'meeting_link'  => $this->canSeeMeetingLink($request) ? $this->meeting_url : null,
             'recording_url' => $this->recording_url,
             'status'        => $this->status,
             'location'      => $this->location,
@@ -43,5 +43,23 @@ class LmsSessionResource extends JsonResource
             'attendance_count' => $this->when(isset($this->attendances_count), fn () => (int) $this->attendances_count),
             'created_at'       => $this->created_at,
         ];
+    }
+
+    private function canSeeMeetingLink(Request $request): bool
+    {
+        $user = $request->user();
+        if (! $user) {
+            return false;
+        }
+        if ($user->hasAnyRole(['admin', 'super_admin', 'tech_admin', 'executive_admin', 'instructor', 'teacher', 'programs_manager'])) {
+            return true;
+        }
+        if ($user->isStudent()) {
+            return $user->registrations()
+                ->where('course_id', $this->course_id)
+                ->whereIn('status', ['active', 'registered', 'enrolled', 'completed'])
+                ->exists();
+        }
+        return false;
     }
 }

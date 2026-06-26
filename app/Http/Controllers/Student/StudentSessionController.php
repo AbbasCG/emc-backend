@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Student;
 use App\Http\Controllers\Controller;
 use App\Models\CourseSession;
 use App\Models\LmsSession;
+use App\Models\SessionLinkOpen;
 use App\Services\LmsEnrollmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -69,6 +70,72 @@ class StudentSessionController extends Controller
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * POST /api/student/sessions/{session}/open-link
+     *
+     * Records that the student opened the meeting link, then returns the URL.
+     * The {session} route-model-binding resolves CourseSession by default.
+     */
+    public function openLink(Request $request, LmsEnrollmentService $enrollment, int $session): JsonResponse
+    {
+        $user        = $request->user();
+        $courseSession = CourseSession::findOrFail($session);
+
+        // Verify enrollment
+        $enrolledIds = $enrollment->enrolledCourseIds($user);
+        if (! $enrolledIds->contains($courseSession->course_id)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'غير مسجّل في هذه الدورة.',
+            ], 403);
+        }
+
+        // Block ended / cancelled
+        if ($courseSession->status === 'cancelled') {
+            return response()->json([
+                'success' => false,
+                'message' => 'تم إلغاء هذه الجلسة.',
+            ], 409);
+        }
+
+        $now   = now();
+        $endAt = $courseSession->end_at;
+        if ($endAt && $endAt->lt($now) && $courseSession->status !== 'live') {
+            return response()->json([
+                'success' => false,
+                'message' => 'انتهت الجلسة.',
+            ], 409);
+        }
+
+        if (! $courseSession->meeting_link) {
+            return response()->json([
+                'success' => false,
+                'message' => 'لا يوجد رابط اجتماع لهذه الجلسة.',
+            ], 422);
+        }
+
+        // Record/update the open event
+        SessionLinkOpen::updateOrCreate(
+            [
+                'session_id'   => $courseSession->id,
+                'session_type' => 'course_session',
+                'user_id'      => $user->id,
+            ],
+            [
+                'course_id'  => $courseSession->course_id,
+                'opened_at'  => $now,
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+            ]
+        );
+
+        return response()->json([
+            'success'     => true,
+            'meeting_url' => $courseSession->meeting_link,
+            'message'     => 'تم تسجيل الدخول للجلسة.',
+        ]);
+    }
 
     private function formatLmsSession(LmsSession $s): array
     {

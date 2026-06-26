@@ -9,7 +9,6 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Support\Facades\Storage;
-use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AdminLmsMaterialController extends Controller
@@ -96,7 +95,7 @@ class AdminLmsMaterialController extends Controller
     /**
      * Serve a material file inline (for preview). Auth + role enforced by route middleware.
      */
-    public function file(Request $request, CourseMaterial $material): BinaryFileResponse|JsonResponse
+    public function file(Request $request, CourseMaterial $material): StreamedResponse|JsonResponse
     {
         if (! $material->file_path) {
             return response()->json(['success' => false, 'message' => 'لا يوجد ملف مرفق.'], 404);
@@ -108,14 +107,18 @@ class AdminLmsMaterialController extends Controller
             return response()->json(['success' => false, 'message' => 'الملف غير موجود على الخادم.'], 404);
         }
 
-        $mime     = Storage::disk($disk)->mimeType($path) ?: 'application/octet-stream';
-        $filename = basename($path);
+        try {
+            $mime     = Storage::disk($disk)->mimeType($path) ?: 'application/octet-stream';
+            $filename = basename($path);
 
-        return Storage::disk($disk)->response($path, $filename, [
-            'Content-Type'        => $mime,
-            'Content-Disposition' => 'inline; filename="' . addslashes($filename) . '"',
-            'Cache-Control'       => 'private, no-store',
-        ]);
+            return Storage::disk($disk)->response($path, $filename, [
+                'Content-Type'        => $mime,
+                'Content-Disposition' => 'inline; filename="' . addslashes($filename) . '"',
+                'Cache-Control'       => 'private, no-store',
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json(['success' => false, 'message' => 'تعذّر تحميل الملف: ' . $e->getMessage()], 500);
+        }
     }
 
     /**

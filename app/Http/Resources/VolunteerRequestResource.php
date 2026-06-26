@@ -39,9 +39,18 @@ class VolunteerRequestResource extends JsonResource
                 'name' => $this->reviewer->name,
             ] : null),
             'reviewed_at'             => $this->reviewed_at,
+            // Acceptance tracking
+            'accepted_at'             => $this->accepted_at ?? ($this->status === 'accepted' ? $this->reviewed_at : null),
+            'accepted_by'             => $this->whenLoaded('acceptedBy', fn () => $this->acceptedBy ? [
+                'id'   => $this->acceptedBy->id,
+                'name' => $this->acceptedBy->name,
+            ] : null),
+            'accepted_by_name'        => $this->whenLoaded('acceptedBy', fn () => $this->acceptedBy?->name),
+            // Conversion tracking
             'converted_to_member_at'  => $this->converted_to_member_at,
             'converted_member_id'     => $this->converted_member_id,
             'can_convert_to_member'   => $this->status === 'accepted' && $this->converted_to_member_at === null,
+            'is_converted'            => $this->converted_to_member_at !== null,
             'created_at'              => $this->created_at,
             'updated_at'              => $this->updated_at,
         ];

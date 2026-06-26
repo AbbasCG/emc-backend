@@ -9,21 +9,24 @@ use Illuminate\Support\Facades\Storage;
 class LmsCourseMaterialResource extends JsonResource
 {
     /** Extensions that browsers can preview inline. */
-    private const PREVIEWABLE = ['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'txt'];
+    private const PREVIEWABLE = ['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'txt', 'mp4', 'webm', 'ogg'];
 
-    /** Material type values that are treated as previewable even without a recognised extension. */
-    private const PREVIEWABLE_TYPES = ['pdf', 'image', 'slide', 'document'];
+    /** Types that are never previewable inline (require download). */
+    private const NON_PREVIEWABLE_TYPES = ['video', 'link'];
 
     public function toArray(Request $request): array
     {
         $hasFile  = ! empty($this->file_path);
         $fileName = $hasFile ? basename($this->file_path) : null;
-        $fileExt  = $fileName ? strtolower(pathinfo($fileName, PATHINFO_EXTENSION)) : null;
+        $fileExt  = $fileName ? strtolower(pathinfo($fileName, PATHINFO_EXTENSION)) : '';
 
-        // A hashed filename has no extension — also check the `type` DB column so
-        // materials uploaded as type="pdf" are still flagged as previewable.
-        $canPreview = ($fileExt !== null && in_array($fileExt, self::PREVIEWABLE, true))
-                   || in_array($this->type, self::PREVIEWABLE_TYPES, true);
+        // Previewable when: file exists AND the type is not a pure link/video download type.
+        // Extension-based detection first; if no recognisable extension (hashed filenames),
+        // fall back to permissive type check — browsers can always attempt inline display.
+        $canPreview = $hasFile && (
+            ($fileExt !== '' && in_array($fileExt, self::PREVIEWABLE, true))
+            || (! in_array($this->type, self::NON_PREVIEWABLE_TYPES, true))
+        );
 
         // Best-effort file size — probe disks without throwing.
         $fileSize = null;

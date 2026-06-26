@@ -8,13 +8,13 @@ use App\Http\Resources\RegistrationResource;
 use App\Mail\CourseRegistrationConfirmation;
 use App\Models\Payment;
 use App\Services\AuditLogService;
+use App\Services\EmailService;
 use App\Support\FakePaymentEnvironment;
 use App\Support\PaymentStatuses;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 use Srmklive\PayPal\Services\PayPal as PayPalClient;
 use Stripe\Exception\SignatureVerificationException;
 use Stripe\Webhook;
@@ -229,14 +229,16 @@ class PaymentController extends Controller
 
             $confirmedPayment = $payment;
             $registration = $payment->registration;
-            $registration->update([
-                'status' => RegistrationStatus::REGISTERED->value,
-            ]);
-            $registration->load('course.instructor', 'course.features', 'course.track');
+
+            if ($registration) {
+                $registration->update(['status' => RegistrationStatus::REGISTERED->value]);
+                $registration->load('course.instructor', 'course.features', 'course.track');
+            }
+
             $shouldSendMail = true;
         });
 
-        if (! $registration || ! $confirmedPayment || ! $shouldSendMail) {
+        if (! $confirmedPayment || ! $shouldSendMail) {
             return;
         }
 
@@ -254,8 +256,16 @@ class PaymentController extends Controller
             ],
         );
 
-        Mail::to($registration->email)
-            ->queue(new CourseRegistrationConfirmation($registration));
+        if ($registration) {
+            EmailService::dispatch(
+                'payment_confirmation',
+                $registration->email,
+                $registration->full_name ?? '',
+                $registration->user_id,
+                new CourseRegistrationConfirmation($registration),
+                'تأكيد تسجيلك في الدورة'
+            );
+        }
     }
 
     protected function failPayment(string $provider, string $providerPaymentId): void

@@ -17,9 +17,12 @@ use App\Services\AuditLogService;
 use App\Services\NotificationService;
 use App\Services\PaymentGatewayService;
 use App\Support\CourseComputedStatus;
+use App\Support\PaymentStatuses;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Stripe\Exception\ApiErrorException as StripeApiException;
 use Throwable;
 
 class RegistrationController extends Controller
@@ -75,11 +78,16 @@ class RegistrationController extends Controller
                 }
             }
 
-            if ($course->type === 'paid' && empty($validated['payment_provider'])) {
+            $courseIsPaid = $course->type === 'paid' || (bool) ($course->is_paid ?? false);
+
+            if ($courseIsPaid && empty($validated['payment_provider'])) {
+                // New checkout flow: client should use POST /courses/{id}/checkout instead
                 return response()->json([
-                    'success' => false,
-                    'message' => 'payment_provider is required for paid courses.',
-                ], 422);
+                    'success'      => false,
+                    'message'      => 'يرجى استخدام نقطة نهاية الدفع لهذه الدورة.',
+                    'requires_checkout' => true,
+                    'checkout_endpoint' => "/api/courses/{$course->id}/checkout",
+                ], 402);
             }
 
             $emailNorm = mb_strtolower(trim((string) (($authUser?->email) ?? $validated['email'])));
@@ -111,7 +119,7 @@ class RegistrationController extends Controller
                 $receiptPath = $request->file('receipt')->store('receipts', 'public');
             }
 
-            $result = DB::transaction(function () use ($validated, $course, $paymentGatewayService, $receiptPath, $authUser) {
+            $result = DB::transaction(function () use ($validated, $course, $paymentGatewayService, $receiptPath, $authUser, $courseIsPaid) {
                 $registration = Registration::create([
                     'course_id'          => $validated['course_id'],
                     'user_id'            => $authUser?->id,
@@ -124,10 +132,10 @@ class RegistrationController extends Controller
                     'phone_country_code' => $validated['phone_country_code'] ?? null,
                     'gender'             => $validated['gender'] ?? null,
                     'notes'              => $validated['notes'] ?? null,
-                    'status'             => $course->type === 'paid' ? RegistrationStatus::PENDING_PAYMENT->value : RegistrationStatus::REGISTERED->value,
+                    'status'             => $courseIsPaid ? RegistrationStatus::PENDING_PAYMENT->value : RegistrationStatus::REGISTERED->value,
                 ]);
 
-                if ($course->type !== 'paid') {
+                if (! $courseIsPaid) {
                     // Ensure student_progress exists for authenticated users
                     if ($authUser) {
                         StudentProgress::updateOrCreate(
@@ -183,7 +191,7 @@ class RegistrationController extends Controller
                 return ['registration' => $registration, 'payment' => $payment];
             });
 
-            if ($course->type === 'paid') {
+            if ($courseIsPaid) {
                 $payment = $result['payment'];
                 $registration = $result['registration']->loadMissing([
                     'course.track',
@@ -264,12 +272,23 @@ class RegistrationController extends Controller
                 'registration'   => new RegistrationResource($freeRegistration),
                 'course'         => new CourseResource($course),
             ], 201);
+        } catch (StripeApiException $exception) {
+            Log::error('Stripe API error during registration', [
+                'course_id' => $validated['course_id'] ?? null,
+                'message'   => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'success'    => false,
+                'message'    => 'تعذّر الاتصال ببوابة الدفع. تحقق من إعدادات Stripe أو حاول مرة أخرى.',
+                'message_en' => 'Payment gateway error: ' . $exception->getMessage(),
+            ], 502);
         } catch (Throwable $exception) {
             report($exception);
 
             return response()->json([
                 'success' => false,
-                'message' => 'Unable to process registration at this time.',
+                'message' => 'تعذّر معالجة طلبك في الوقت الحالي. حاول مرة أخرى.',
             ], 500);
         }
     }

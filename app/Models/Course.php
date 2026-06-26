@@ -67,6 +67,10 @@ class Course extends Model
         'requires_placement_test',
         'placement_test_type',
         'whatsapp_community_url',
+        'is_paid',
+        'currency',
+        'stripe_product_id',
+        'stripe_price_id',
     ];
 
     protected $casts = [
@@ -78,6 +82,8 @@ class Course extends Model
         'keywords'              => 'array',
         'is_online'             => 'boolean',
         'is_free'               => 'boolean',
+        'is_paid'               => 'boolean',
+        'price'                 => 'decimal:2',
         'registration_open'     => 'boolean',
         'certificate_available'  => 'boolean',
         'requires_placement_test'=> 'boolean',

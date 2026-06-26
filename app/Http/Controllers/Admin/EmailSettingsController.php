@@ -22,6 +22,8 @@ class EmailSettingsController extends Controller
         'session_reminder'         => ['label' => 'تذكير بالجلسة', 'description' => 'يُرسل قبل 24 ساعة وساعة واحدة من موعد الجلسة'],
         'certificate_issued'       => ['label' => 'إصدار شهادة', 'description' => 'يُرسل للطالب عند إصدار شهادة إتمامه'],
         'admin_new_registration'   => ['label' => 'تسجيل جديد (للإدارة)', 'description' => 'يُرسل للمشرفين عند كل تسجيل طالب جديد'],
+        'certificate_issued'       => ['label' => 'إصدار شهادة', 'description' => 'يُرسل للطالب عند إصدار شهادة إتمامه'],
+        'payment_confirmation'     => ['label' => 'تأكيد الدفع', 'description' => 'يُرسل للطالب عند تأكيد الدفع وإتمام التسجيل في الدورة'],
     ];
 
     public function index(): JsonResponse

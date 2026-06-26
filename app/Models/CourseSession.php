@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Attendance;
 use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -44,6 +45,11 @@ class CourseSession extends Model
         return $this->belongsTo(CourseModule::class, 'module_id');
     }
 
+    public function attendances(): HasMany
+    {
+        return $this->hasMany(Attendance::class, 'course_session_id');
+    }
+
     public function materials(): HasMany
     {
         return $this->hasMany(CourseMaterial::class, 'course_session_id')->orderBy('sort_order');
@@ -52,5 +58,11 @@ class CourseSession extends Model
     public function assignments(): HasMany
     {
         return $this->hasMany(CourseAssignment::class, 'course_session_id')->orderBy('sort_order');
+    }
+
+    public function linkOpens(): HasMany
+    {
+        return $this->hasMany(SessionLinkOpen::class, 'session_id')
+            ->where('session_type', 'course_session');
     }
 }

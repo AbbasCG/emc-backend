@@ -24,6 +24,9 @@ class CourseResource extends JsonResource
             'type'                  => $this->type,
             'price'                 => (float) $this->price,
             'is_free'               => (bool) $this->is_free,
+            // is_paid: true when new column is set OR legacy type='paid'
+            'is_paid'               => (bool) ($this->is_paid ?? false) || $this->type === 'paid',
+            'currency'              => strtoupper($this->currency ?? 'EUR'),
             'status'                => $this->status,
             'program_type'          => $this->program_type,
             'content_type'          => $this->program_type,
@@ -45,7 +48,7 @@ class CourseResource extends JsonResource
             'delivery_type'         => $this->location_type ?? 'unknown',
             'location_type'         => $this->location_type ?? 'unknown',
             'location'              => $this->location,
-            'meeting_link'          => $this->meeting_link,
+            'meeting_link'          => $this->canSeeMeetingLink($request) ? $this->meeting_link : null,
             'is_online'             => (bool) $this->is_online,
             'whatsapp_community_url' => $this->whatsapp_community_url,
 
@@ -122,6 +125,26 @@ class CourseResource extends JsonResource
             'created_at'            => $this->created_at,
             'updated_at'            => $this->updated_at,
         ];
+    }
+
+    private function canSeeMeetingLink(Request $request): bool
+    {
+        $user = $request->user();
+        if (! $user) {
+            return false;
+        }
+        // Admins and staff always see it
+        if ($user->hasAnyRole(['admin', 'super_admin', 'tech_admin', 'executive_admin', 'instructor', 'teacher', 'programs_manager'])) {
+            return true;
+        }
+        // Students only if enrolled in this course
+        if ($user->isStudent()) {
+            return $user->registrations()
+                ->where('course_id', $this->id)
+                ->whereIn('status', ['active', 'registered', 'enrolled', 'completed'])
+                ->exists();
+        }
+        return false;
     }
 
     private function buildInstructor(): ?array

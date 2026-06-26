@@ -53,6 +53,65 @@ class AdminVolunteerRequestController extends Controller
         ]);
     }
 
+    // GET /api/admin/volunteers/accepted
+    public function acceptedIndex(Request $request): JsonResponse
+    {
+        $query = VolunteerRequest::with(['reviewer', 'acceptedBy'])
+            ->where('status', 'accepted')
+            ->whereNull('converted_to_member_at')  // not yet converted
+            ->when($request->filled('search'), function ($q) use ($request) {
+                $term = $request->search;
+                $q->where(function ($sub) use ($term) {
+                    $sub->where('full_name',         'like', "%{$term}%")
+                        ->orWhere('email',            'like', "%{$term}%")
+                        ->orWhere('phone',            'like', "%{$term}%");
+                });
+            })
+            ->when($request->filled('desired_department'), fn ($q) => $q->where('desired_department', $request->desired_department))
+            ->when($request->filled('city'),   fn ($q) => $q->where('city',   $request->city))
+            ->when($request->filled('gender'), fn ($q) => $q->where('gender', $request->gender))
+            ->when($request->filled('availability'), fn ($q) => $q->where('availability', 'like', '%' . $request->availability . '%'))
+            ->when($request->filled('date_from'), fn ($q) => $q->whereDate('accepted_at', '>=', $request->date_from))
+            ->when($request->filled('date_to'),   fn ($q) => $q->whereDate('accepted_at', '<=', $request->date_to))
+            ->when($request->filled('has_cv'), function ($q) use ($request) {
+                $request->has_cv === 'yes'
+                    ? $q->whereNotNull('cv_file_path')
+                    : $q->whereNull('cv_file_path');
+            });
+
+        $sortField = match ($request->query('sort', 'accepted_asc')) {
+            'accepted_desc' => ['accepted_at', 'desc'],
+            'name_asc'      => ['full_name',   'asc'],
+            'department'    => ['desired_department', 'asc'],
+            'city'          => ['city',         'asc'],
+            default         => ['accepted_at',  'asc'],  // oldest accepted first
+        };
+
+        $query->orderBy($sortField[0], $sortField[1]);
+
+        $perPage = min((int) $request->query('per_page', 50), 200);
+        $items   = $query->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'data'    => VolunteerRequestResource::collection($items)->response()->getData(true),
+            'meta'    => [
+                'total_accepted'   => VolunteerRequest::where('status', 'accepted')->whereNull('converted_to_member_at')->count(),
+                'total_converted'  => VolunteerRequest::where('status', 'converted_to_member')->count(),
+                'accepted_this_month' => VolunteerRequest::where('status', 'accepted')
+                    ->whereMonth('accepted_at', now()->month)
+                    ->whereYear('accepted_at',  now()->year)
+                    ->count(),
+                'top_department' => VolunteerRequest::where('status', 'accepted')
+                    ->whereNull('converted_to_member_at')
+                    ->select('desired_department', \Illuminate\Support\Facades\DB::raw('count(*) as cnt'))
+                    ->groupBy('desired_department')
+                    ->orderByDesc('cnt')
+                    ->value('desired_department'),
+            ],
+        ]);
+    }
+
     // PATCH /api/admin/volunteer-requests/{id}/status
     public function updateStatus(Request $request, VolunteerRequest $volunteerRequest): JsonResponse
     {
@@ -61,11 +120,19 @@ class AdminVolunteerRequestController extends Controller
             'admin_notes' => 'nullable|string',
         ]);
 
+        $newStatusNorm = VolunteerRequest::normalizeStatus($data['status']);
+
         $updates = [
-            'status'      => VolunteerRequest::normalizeStatus($data['status']),
+            'status'      => $newStatusNorm,
             'reviewed_by' => $request->user()->id,
             'reviewed_at' => now(),
         ];
+
+        // Stamp accepted_at/accepted_by the first time status becomes 'accepted'
+        if ($newStatusNorm === 'accepted' && $volunteerRequest->accepted_at === null) {
+            $updates['accepted_at'] = now();
+            $updates['accepted_by'] = $request->user()->id;
+        }
 
         if (array_key_exists('admin_notes', $data)) {
             $updates['admin_notes'] = $data['admin_notes'];
@@ -176,7 +243,7 @@ class AdminVolunteerRequestController extends Controller
     {
         // Role guard — admin/super_admin covered by route middleware; also allow hr_manager.
         $user = $request->user();
-        if (! in_array($user->role, ['super_admin', 'admin', 'hr_manager'], true)) {
+        if (! in_array($user->role, ['super_admin', 'tech_admin', 'admin', 'hr_manager'], true)) {
             return response()->json(['success' => false, 'message' => 'غير مصرح لك بهذا الإجراء.'], 403);
         }
 
@@ -236,10 +303,12 @@ class AdminVolunteerRequestController extends Controller
                 'joined_at'     => now(),
             ]);
 
-            // 6. Stamp the volunteer request.
+            // 6. Stamp the volunteer request with conversion metadata.
             $volunteerRequest->update([
+                'status'                 => 'converted_to_member',
                 'converted_to_member_at' => now(),
                 'converted_member_id'    => $member->id,
+                'converted_by'           => $request->user()->id,
             ]);
 
             // 7. Notify admins and department leader.

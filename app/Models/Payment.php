@@ -11,6 +11,7 @@ class Payment extends Model
     use HasFactory, SoftDeletes;
 
     protected $fillable = [
+        'order_id',
         'registration_id',
         'amount',
         'provider',
@@ -29,6 +30,11 @@ class Payment extends Model
     public function registration()
     {
         return $this->belongsTo(Registration::class);
+    }
+
+    public function order()
+    {
+        return $this->belongsTo(Order::class);
     }
 
     public function financialTransactions()

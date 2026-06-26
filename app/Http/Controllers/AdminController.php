@@ -133,14 +133,36 @@ class AdminController extends Controller
 
     public function showRegistration(Registration $registration): JsonResponse
     {
-        $registration->load(['course.track', 'course.instructor', 'course.features', 'payments']);
+        $registration->load(['course.track', 'course.instructor', 'course.features', 'payments', 'user']);
 
-        return (new RegistrationResource($registration))
-            ->additional([
-                'success' => true,
-                'message' => 'Registration retrieved successfully',
-            ])
-            ->response();
+        $progress = null;
+        if ($registration->user_id && $registration->course_id) {
+            $progress = \App\Models\StudentProgress::where('user_id', $registration->user_id)
+                ->where('course_id', $registration->course_id)
+                ->first();
+        }
+
+        $cert = null;
+        if ($registration->user_id && $registration->course_id) {
+            $cert = \App\Models\Certificate::where('user_id', $registration->user_id)
+                ->where('course_id', $registration->course_id)
+                ->whereIn('status', ['issued', 'approved'])
+                ->first();
+        }
+
+        $base = (new RegistrationResource($registration))->resolve();
+
+        return response()->json([
+            'success' => true,
+            'data'    => array_merge($base, [
+                'progress' => $progress ? [
+                    'percentage'             => $progress->progress_percentage ?? 0,
+                    'attendance_percentage'  => $progress->attendance_percentage ?? 0,
+                    'assignments_completed'  => $progress->assignment_completion_percentage ?? 0,
+                    'certificate_status'     => $cert?->status,
+                ] : null,
+            ]),
+        ]);
     }
 
     public function updateRegistrationStatus(Request $request, Registration $registration): JsonResponse

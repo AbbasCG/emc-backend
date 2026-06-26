@@ -24,7 +24,7 @@ use Illuminate\Support\Facades\DB;
  */
 class PublicProgramsController extends Controller
 {
-    private const COURSE_STATUSES   = ['published'];
+    private const COURSE_STATUSES   = ['published', 'active', 'ended'];
     private const WORKSHOP_STATUSES = ['published', 'active', 'scheduled'];
     private const LP_STATUS         = ['published'];
 

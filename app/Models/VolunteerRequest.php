@@ -31,12 +31,16 @@ class VolunteerRequest extends Model
         'reviewed_by',
         'reviewed_at',
         'admin_notes',
+        'accepted_at',
+        'accepted_by',
         'converted_to_member_at',
         'converted_member_id',
+        'converted_by',
     ];
 
     protected $casts = [
-        'reviewed_at'           => 'datetime',
+        'reviewed_at'            => 'datetime',
+        'accepted_at'            => 'datetime',
         'converted_to_member_at' => 'datetime',
     ];
 
@@ -69,9 +73,19 @@ class VolunteerRequest extends Model
         return $path && trim($path) !== '' ? $path : null;
     }
 
+    public function acceptedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'accepted_by');
+    }
+
+    public function convertedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'converted_by');
+    }
+
     public static function allowedStatuses(): array
     {
-        return ['pending', 'reviewing', 'reviewed', 'accepted', 'rejected', 'contacted'];
+        return ['pending', 'reviewing', 'reviewed', 'accepted', 'rejected', 'contacted', 'converted_to_member'];
     }
 
     /** Normalize legacy/alternate status values before persistence. */

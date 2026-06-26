@@ -57,16 +57,15 @@ return Application::configure(basePath: dirname(__DIR__))
         });
 
         // 401 — Unauthenticated (Sanctum token missing / expired)
+        // Always return JSON — this is an API-only project; there is no login route.
         $exceptions->render(function (
             \Illuminate\Auth\AuthenticationException $e,
             \Illuminate\Http\Request $request,
         ) {
-            if ($request->expectsJson() || $request->is('api/*')) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Unauthenticated. Please provide a valid Bearer token.',
-                ], 401);
-            }
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthenticated. Please provide a valid Bearer token.',
+            ], 401);
         });
 
         // 403 — Unauthorized action (policy / gate failure)

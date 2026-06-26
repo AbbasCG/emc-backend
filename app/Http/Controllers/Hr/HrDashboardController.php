@@ -11,6 +11,9 @@ use App\Models\Instructor;
 use App\Models\Task;
 use App\Models\User;
 use App\Models\VolunteerProfile;
+use App\Models\VolunteerRequest;
+use App\Models\TeamProfile;
+use App\Models\CourseSession;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -25,22 +28,98 @@ class HrDashboardController extends Controller
                        'department_manager', 'section_lead', 'support_agent',
                        'instructor', 'teacher'];
 
+        $hrDeptIds = Department::where('slug', 'human-resources')->pluck('id');
+
+        // Volunteer Requests (public طلب التطوع form submissions)
+        $pendingVolunteerRequests  = VolunteerRequest::where('status', 'pending')->count();
+        $acceptedVolunteers        = VolunteerRequest::where('status', 'accepted')->count();
+        $waitingConversion         = VolunteerRequest::where('status', 'accepted')->whereNull('converted_to_member_at')->count();
+        $convertedVolunteers       = VolunteerRequest::where('status', 'converted_to_member')->count();
+
+        // Internal team / members
+        $totalMembers  = User::whereIn('role', $staffRoles)->count();
+        $activeMembers = User::whereIn('role', $staffRoles)->where('is_active', true)->count();
+        $teamProfiles  = TeamProfile::where('is_active', true)->count();
+
+        // Instructors
+        $instructorCount = Instructor::count();
+
+        // Tasks
+        $openHrTasks = $hrDeptIds->isNotEmpty()
+            ? Task::whereIn('department_id', $hrDeptIds)->where('status', '!=', 'done')->count()
+            : Task::where('status', '!=', 'done')->whereNotNull('due_date')->where('due_date', '<=', now()->addDays(7))->count();
+
+        // Recent volunteer requests (last 6)
+        $recentRequests = VolunteerRequest::with('reviewer')
+            ->latest()
+            ->limit(6)
+            ->get()
+            ->map(fn ($r) => [
+                'id'                 => $r->id,
+                'full_name'          => $r->full_name,
+                'email'              => $r->email,
+                'desired_department' => $r->desired_department,
+                'status'             => $r->status,
+                'created_at'         => $r->created_at,
+            ]);
+
+        // Accepted volunteers pending conversion (last 5)
+        $acceptedList = VolunteerRequest::where('status', 'accepted')
+            ->whereNull('converted_to_member_at')
+            ->latest('accepted_at')
+            ->limit(5)
+            ->get()
+            ->map(fn ($r) => [
+                'id'                 => $r->id,
+                'full_name'          => $r->full_name,
+                'email'              => $r->email,
+                'desired_department' => $r->desired_department,
+                'accepted_at'        => $r->accepted_at,
+            ]);
+
+        // Recent instructors (last 4)
+        $recentInstructors = Instructor::with('user')
+            ->latest()
+            ->limit(4)
+            ->get()
+            ->map(fn ($i) => [
+                'id'            => $i->id,
+                'name'          => $i->name,
+                'title'         => $i->title,
+                'email'         => $i->user?->email,
+                'courses_count' => $i->courses()->count(),
+            ]);
+
+        // Department headcount from TeamProfile
+        $deptBreakdown = Department::withCount(['teamProfiles as members_count' => fn ($q) => $q->where('is_active', true)])
+            ->orderBy('sort_order')
+            ->get()
+            ->map(fn ($d) => [
+                'name'          => $d->name_ar ?? $d->name,
+                'members_count' => $d->members_count,
+            ])
+            ->filter(fn ($d) => $d['members_count'] > 0)
+            ->values();
+
         return response()->json([
             'success' => true,
             'data'    => [
-                'total_team_members'  => User::whereIn('role', $staffRoles)->count(),
-                'active_volunteers'   => VolunteerProfile::where('status', 'active')->count(),
-                'active_instructors'  => Instructor::count(),
-                'pending_applications'=> HrApplication::where('status', 'pending')->count(),
-                'departments_count'   => Department::where('status', 'active')->count(),
-                'onboarding_pending'  => HrOnboarding::where('status', 'pending')->count(),
-                'upcoming_interviews' => HrInterview::where('status', 'scheduled')
-                                            ->where('scheduled_at', '>=', now())
-                                            ->count(),
-                'hr_tasks_due'        => Task::where('status', '!=', 'done')
-                                            ->whereNotNull('due_date')
-                                            ->where('due_date', '<=', now()->addDays(7))
-                                            ->count(),
+                'stats' => [
+                    'total_members'               => $totalMembers,
+                    'active_members'              => $activeMembers,
+                    'team_members'                => $teamProfiles,
+                    'instructors'                 => $instructorCount,
+                    'pending_volunteer_requests'  => $pendingVolunteerRequests,
+                    'accepted_volunteers'         => $acceptedVolunteers,
+                    'volunteers_waiting_conversion' => $waitingConversion,
+                    'converted_volunteers'        => $convertedVolunteers,
+                    'departments_count'           => Department::where('status', 'active')->count(),
+                    'open_hr_tasks'               => $openHrTasks,
+                ],
+                'recent_volunteer_requests' => $recentRequests,
+                'accepted_volunteers'       => $acceptedList,
+                'recent_instructors'        => $recentInstructors,
+                'department_breakdown'      => $deptBreakdown,
             ],
         ]);
     }
@@ -121,26 +200,97 @@ class HrDashboardController extends Controller
     public function instructors(Request $request): JsonResponse
     {
         $instructors = Instructor::with(['user', 'courses'])
-            ->when($request->search, function ($q) use ($request) {
-                $q->where('name', 'like', "%{$request->search}%");
+            ->when($request->filled('search'), function ($q) use ($request) {
+                $term = $request->search;
+                $q->where(function ($sub) use ($term) {
+                    $sub->where('name', 'like', "%{$term}%")
+                        ->orWhere('title', 'like', "%{$term}%")
+                        ->orWhereHas('user', fn ($u) => $u->where('email', 'like', "%{$term}%")
+                            ->orWhere('phone', 'like', "%{$term}%"));
+                });
+            })
+            ->when($request->filled('status'), function ($q) use ($request) {
+                $active = $request->status === 'active';
+                $q->whereHas('user', fn ($u) => $u->where('is_active', $active));
             })
             ->latest()
-            ->paginate(20);
+            ->paginate((int) $request->query('per_page', 30));
+
+        $rows = $instructors->map(function ($i) {
+            $allCourses    = $i->courses;
+            $activeCourses = $allCourses->whereIn('status', ['published', 'active']);
+            $user          = $i->user;
+
+            return [
+                'id'                   => $i->id,
+                'user_id'              => $i->user_id,
+                'name'                 => $i->name,
+                'email'                => $user?->email,
+                'phone'                => $user?->phone,
+                'avatar_url'           => $user?->avatar_url,
+                'instructor_image_url' => $i->image ? asset('storage/' . $i->image) : null,
+                'title'                => $i->title,
+                'bio'                  => $i->bio,
+                'is_active'            => (bool) ($user?->is_active ?? true),
+                'assigned_courses_count' => $allCourses->count(),
+                'active_courses_count'   => $activeCourses->count(),
+                'workshops_count'        => $i->workshops()->count(),
+                'expertise'              => [],
+                'created_at'             => $i->created_at,
+            ];
+        });
 
         return response()->json([
             'success' => true,
-            'data'    => $instructors->map(fn ($i) => [
-                'id'           => $i->id,
-                'name'         => $i->name,
-                'title'        => $i->title,
-                'email'        => $i->user?->email,
-                'courses_count'=> $i->courses->count(),
-                'created_at'   => $i->created_at,
-            ]),
+            'data'    => $rows,
             'meta'    => [
                 'total'        => $instructors->total(),
                 'current_page' => $instructors->currentPage(),
                 'last_page'    => $instructors->lastPage(),
+            ],
+        ]);
+    }
+
+    // ── GET /api/hr/instructors/{id} ─────────────────────────────────────────
+
+    public function instructorShow(Instructor $instructor): JsonResponse
+    {
+        $instructor->loadMissing(['user', 'courses', 'workshops']);
+
+        $allCourses    = $instructor->courses;
+        $activeCourses = $allCourses->whereIn('status', ['published', 'active']);
+        $user          = $instructor->user;
+
+        $studentsCount = \App\Models\Registration::whereIn('course_id', $allCourses->pluck('id'))
+            ->where('status', '!=', 'cancelled')
+            ->distinct('email')
+            ->count();
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'id'                     => $instructor->id,
+                'user_id'                => $instructor->user_id,
+                'name'                   => $instructor->name,
+                'email'                  => $user?->email,
+                'phone'                  => $user?->phone,
+                'avatar_url'             => $user?->avatar_url,
+                'instructor_image_url'   => $instructor->image ? asset('storage/' . $instructor->image) : null,
+                'title'                  => $instructor->title,
+                'bio'                    => $instructor->bio,
+                'is_active'              => (bool) ($user?->is_active ?? true),
+                'assigned_courses_count' => $allCourses->count(),
+                'active_courses_count'   => $activeCourses->count(),
+                'workshops_count'        => $instructor->workshops->count(),
+                'students_count'         => $studentsCount,
+                'expertise'              => [],
+                'courses'                => $allCourses->map(fn ($c) => [
+                    'id'     => $c->id,
+                    'title'  => $c->title,
+                    'status' => $c->status,
+                    'slug'   => $c->slug,
+                ]),
+                'created_at'             => $instructor->created_at,
             ],
         ]);
     }

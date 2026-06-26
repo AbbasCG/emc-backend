@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\FinancialTransactionResource;
 use App\Models\FinancialTransaction;
 use App\Models\Payment;
+use App\Support\PaymentStatuses;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -14,13 +15,13 @@ class FinanceController extends Controller
     public function overview(): \Illuminate\Http\JsonResponse
     {
         try {
-            $totalRevenue     = Payment::where('status', 'Confirmed')->sum('amount');
+            $totalRevenue     = Payment::where('status', PaymentStatuses::CONFIRMED)->sum('amount');
             $confirmedRevenue = $totalRevenue;
-            $pendingRevenue   = Payment::whereIn('status', ['Pending Payment', 'pending', 'pending_payment'])->sum('amount');
-            $failedCount      = Payment::whereIn('status', ['Failed', 'failed'])->count();
+            $pendingRevenue   = Payment::where('status', PaymentStatuses::PENDING)->sum('amount');
+            $failedCount      = Payment::where('status', PaymentStatuses::FAILED)->count();
 
             $monthlyRevenue = DB::table('payments')
-                ->whereIn('status', ['Confirmed', 'confirmed'])
+                ->where('status', PaymentStatuses::CONFIRMED)
                 ->whereNotNull('confirmed_at')
                 ->select(
                     DB::raw("DATE_FORMAT(confirmed_at, '%Y-%m') as month"),
@@ -37,7 +38,7 @@ class FinanceController extends Controller
             $revenueByCourse = DB::table('payments')
                 ->join('registrations', 'payments.registration_id', '=', 'registrations.id')
                 ->join('courses', 'registrations.course_id', '=', 'courses.id')
-                ->whereIn('payments.status', ['Confirmed', 'confirmed'])
+                ->where('payments.status', PaymentStatuses::CONFIRMED)
                 ->select('courses.title', DB::raw('SUM(payments.amount) as amount'))
                 ->groupBy('courses.id', 'courses.title')
                 ->orderByDesc('amount')
@@ -49,7 +50,7 @@ class FinanceController extends Controller
             $revenueByTrack = DB::table('payments')
                 ->join('registrations', 'payments.registration_id', '=', 'registrations.id')
                 ->join('tracks', 'registrations.track_id', '=', 'tracks.id')
-                ->whereIn('payments.status', ['Confirmed', 'confirmed'])
+                ->where('payments.status', PaymentStatuses::CONFIRMED)
                 ->select('tracks.name', DB::raw('SUM(payments.amount) as amount'))
                 ->groupBy('tracks.id', 'tracks.name')
                 ->orderByDesc('amount')
@@ -65,7 +66,7 @@ class FinanceController extends Controller
                 ->map(fn ($p) => [
                     'id'          => $p->id,
                     'amount'      => $p->amount,
-                    'currency'    => 'USD',
+                    'currency'    => strtoupper($p->registration?->course?->currency ?? 'eur'),
                     'status'      => strtolower($p->status ?? 'pending'),
                     'provider'    => $p->provider ?? 'unknown',
                     'course_name' => $p->registration?->course?->title,
@@ -150,7 +151,7 @@ class FinanceController extends Controller
         $data = DB::table('payments')
             ->join('registrations', 'payments.registration_id', '=', 'registrations.id')
             ->join('courses', 'registrations.course_id', '=', 'courses.id')
-            ->where('payments.status', 'Confirmed')
+            ->where('payments.status', PaymentStatuses::CONFIRMED)
             ->select(
                 'courses.id',
                 'courses.title',

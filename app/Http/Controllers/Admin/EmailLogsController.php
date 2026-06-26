@@ -75,6 +75,14 @@ class EmailLogsController extends Controller
             return response()->json(['message' => 'بريد المستلم غير صالح.'], 422);
         }
 
+        // Only welcome emails can be safely retried — other types require original
+        // mailable constructor data (course title, score, etc.) that is not stored in the log.
+        if ($log->type !== 'welcome') {
+            return response()->json([
+                'message' => 'لا يمكن إعادة إرسال هذا النوع من الرسائل تلقائياً. يُرجى إعادة تشغيل العملية التي أنشأت البريد الأصلي.',
+            ], 422);
+        }
+
         $log->update([
             'status'        => 'pending',
             'queued_at'     => now(),
@@ -82,8 +90,6 @@ class EmailLogsController extends Controller
             'error_message' => null,
         ]);
 
-        // Re-send as a generic branded email using stored subject/payload
-        $subject = $log->subject ?? 'رسالة من منصة EMC';
         $mailable = new WelcomeMail($name, $recipient);
 
         SendLoggedEmailJob::dispatch($mailable, $recipient, $name, $log->id)->onQueue('emails');

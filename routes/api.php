@@ -6,7 +6,9 @@ use App\Http\Controllers\Admin\AdminLmsAssignmentController;
 use App\Http\Controllers\Admin\AdminPartnerPortalController;
 use App\Http\Controllers\Admin\AuditLogController;
 use App\Http\Controllers\Admin\AutomationRuleController;
+use App\Http\Controllers\Admin\CertificateBatchController;
 use App\Http\Controllers\Admin\CertificateController;
+use App\Http\Controllers\Admin\CertificateTemplateController;
 use App\Http\Controllers\Admin\CouponController;
 use App\Http\Controllers\Admin\CourseModuleController;
 use App\Http\Controllers\Admin\DocumentFolderController;
@@ -108,6 +110,10 @@ use App\Http\Controllers\Admin\AdminTeamMemberController;
 use App\Http\Controllers\Admin\AdminAuditLogController;
 use App\Http\Controllers\Admin\AdminCourseController;
 use App\Http\Controllers\Admin\AdminInstructorController;
+use App\Http\Controllers\Admin\AdminOrderController;
+use App\Http\Controllers\CheckoutController;
+use App\Http\Controllers\StripeWebhookController;
+use App\Http\Controllers\Student\StudentOrderController;
 use App\Http\Controllers\Admin\ImpersonationController;
 use App\Http\Controllers\Instructor\InstructorWorkshopController;
 use App\Http\Controllers\ProfileController;
@@ -138,6 +144,9 @@ Route::prefix('auth')->middleware('throttle:auth')->group(function () {
 // ─── Public: Certificate verification ────────────────────────────────────────
 Route::get('/certificates/verify/{code}', [CertificateVerificationController::class, 'verify']);
 
+// Legacy compat: GET /api/certificates → admin or student list (avoid 404 from old clients)
+Route::middleware('auth:sanctum')->get('/certificates', [\App\Http\Controllers\Admin\CertificateController::class, 'legacyList']);
+
 // ─── Public: Knowledge base (published + public articles) ────────────────────
 Route::get('/knowledge',        [KnowledgeController::class, 'index']);
 Route::get('/knowledge/{slug}', [KnowledgeController::class, 'show']);
@@ -162,13 +171,16 @@ Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(fu
     Route::get('/attendance/{session}', [\App\Http\Controllers\Student\StudentAttendanceController::class, 'show']);
     Route::post('/evaluations',  [StudentEvaluationController::class, 'store']);
     Route::get('/reviews',       [StudentEvaluationController::class, 'index']);
-    Route::get('/certificates',  [StudentCertificateController::class, 'index']);
+    Route::get('/certificates',                       [StudentCertificateController::class, 'index']);
+    Route::get('/certificates/{certificate}',         [StudentCertificateController::class, 'show']);
+    Route::get('/certificates/{certificate}/download',[StudentCertificateController::class, 'download']);
 
     // Enrolled courses, registration history, discovery, and completed exams
     Route::get('/registrations',    [StudentRegistrationsController::class, 'index']);
     Route::get('/courses',          [StudentRegistrationsController::class, 'courses']);
     Route::get('/available-courses',[StudentRegistrationsController::class, 'availableCourses']);
     Route::get('/upcoming-sessions',[StudentSessionController::class, 'index']);
+    Route::post('/sessions/{session}/open-link', [StudentSessionController::class, 'openLink']);
     Route::get('/exams',            [StudentRegistrationsController::class, 'exams']);
 
     // Advanced LMS
@@ -201,6 +213,11 @@ Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(fu
     // ── Learning Paths (student) ─────────────────────────────────────────────
     Route::get('/learning-paths',      [\App\Http\Controllers\Student\StudentLearningPathController::class, 'index']);
     Route::get('/learning-paths/{id}', [\App\Http\Controllers\Student\StudentLearningPathController::class, 'show']);
+
+    // Orders & invoices
+    Route::get('/orders',                              [StudentOrderController::class, 'index']);
+    Route::get('/orders/{order}',                      [StudentOrderController::class, 'show']);
+    Route::get('/invoices/{invoice}/download',         [StudentOrderController::class, 'downloadInvoice']);
 });
 
 // ─── Generic dashboard alias: GET /api/dashboard ─────────────────────────────
@@ -416,6 +433,10 @@ Route::post('/register', [RegistrationController::class, 'store'])
 Route::post('/courses/{course}/register', [RegistrationController::class, 'storeForCourse'])
     ->middleware(['throttle:registration', 'optional.sanctum']);
 
+// Paid course checkout — student only
+Route::post('/courses/{course}/checkout', [CheckoutController::class, 'checkout'])
+    ->middleware(['auth:sanctum', 'role:student']);
+
 // ─── Workshop Request Submission (throttle:workshop — 5 req/min per IP) ──────
 Route::post('/workshop-requests', [WorkshopRequestController::class, 'store'])
     ->middleware('throttle:workshop');
@@ -424,6 +445,9 @@ Route::post('/workshop-requests', [WorkshopRequestController::class, 'store'])
 // No throttle — webhook retry logic must not be blocked
 Route::post('/payments/stripe/webhook', [PaymentController::class, 'stripeWebhook'])->name('payments.stripe.webhook');
 Route::post('/payments/paypal/webhook', [PaymentController::class, 'paypalWebhook'])->name('payments.paypal.webhook');
+
+// New order-based Stripe webhook (handles CheckoutController sessions)
+Route::post('/webhooks/stripe', [StripeWebhookController::class, 'handle'])->name('webhooks.stripe');
 
 // Fake payment endpoints — FakePaymentEnvironment enforced in controller
 Route::post('/payments/fake/confirm/{payment}', [PaymentController::class, 'confirmFakePayment'])->name('payments.fake.confirm');
@@ -454,6 +478,12 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->group(
 
         Route::get('/payments',    [AdminPaymentController::class, 'index']);
         Route::get('/payments/{payment}', [AdminPaymentController::class, 'show']);
+
+        // Orders (Stripe-based paid course flow)
+        Route::get('/orders',                              [AdminOrderController::class, 'index']);
+        Route::get('/orders/{order}',                      [AdminOrderController::class, 'show']);
+        Route::get('/invoices',                            [AdminOrderController::class, 'invoices']);
+        Route::get('/invoices/{invoice}/download',         [AdminOrderController::class, 'downloadInvoice']);
 
         Route::get('/tracks',            [AdminTrackController::class, 'index']);
         Route::post('/tracks',           [AdminTrackController::class, 'store']);
@@ -522,6 +552,14 @@ Route::get('admin/volunteer-requests/{volunteerRequest}/cv/view', [AdminVoluntee
 Route::post('/support-tickets', [PublicSupportTicketController::class, 'store'])
     ->middleware('throttle:workshop');
 
+// ─── HR + Admin: accepted volunteers list & volunteer conversion ──────────────
+// Registered BEFORE the admin group so hr_manager is not blocked by the
+// admin-only group that contains volunteers/{volunteer} wildcard below.
+Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin'])->prefix('admin')->group(function () {
+    Route::get('volunteers/accepted',                                        [AdminVolunteerRequestController::class, 'acceptedIndex']);
+    Route::post('volunteer-requests/{volunteerRequest}/convert-to-member',   [AdminVolunteerRequestController::class, 'convertToMember']);
+});
+
 // ─── Phase 3: Operations — auth:sanctum + role:admin ─────────────────────────
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('admin')->group(function () {
 
@@ -570,10 +608,10 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::put('partnership-requests/{partnershipRequest}/status', [PartnershipRequestAdminController::class, 'updateStatus']);
 
     // Volunteer requests (public form submissions — طلب التطوع)
+    // Note: These four routes are also duplicated below with hr_manager access.
     Route::get('volunteer-requests',                                           [AdminVolunteerRequestController::class, 'index']);
     Route::get('volunteer-requests/{volunteerRequest}',                        [AdminVolunteerRequestController::class, 'show']);
     Route::patch('volunteer-requests/{volunteerRequest}/status',               [AdminVolunteerRequestController::class, 'updateStatus']);
-    Route::post('volunteer-requests/{volunteerRequest}/convert-to-member',     [AdminVolunteerRequestController::class, 'convertToMember']);
 
     // NOTE: GET /admin/members (index + show) are registered OUTSIDE this admin group
     // (auth:sanctum only) so that department_manager and other non-admin roles can access
@@ -656,14 +694,6 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::get('finance/transactions',     [FinanceController::class, 'transactions']);
     Route::get('finance/payments',         [FinanceController::class, 'payments']);
     Route::get('finance/revenue-by-course',[FinanceController::class, 'revenueByCourse']);
-
-    // ── Phase 4: Certificates ─────────────────────────────────────────────────
-    Route::get('certificates',                      [CertificateController::class, 'index']);
-    Route::post('certificates',                     [CertificateController::class, 'store']);
-    Route::get('certificates/{certificate}',        [CertificateController::class, 'show']);
-    Route::put('certificates/{certificate}/approve',[CertificateController::class, 'approve']);
-    Route::put('certificates/{certificate}/issue',  [CertificateController::class, 'issue']);
-    Route::put('certificates/{certificate}/revoke', [CertificateController::class, 'revoke']);
 
     // ── Phase 4: Quality ─────────────────────────────────────────────────────
     Route::get('quality-reviews',                        [QualityReviewController::class, 'index']);
@@ -837,13 +867,14 @@ Route::middleware(['auth:sanctum', 'role:admin,programs_manager,tech_admin,super
     Route::get('lessons', [LessonController::class,       'index']);
     Route::get('quizzes', [QuizController::class,         'index']);
 
-    // Sessions CRUD
-    Route::get('sessions',                   [AdminLmsSessionController::class,    'index']);
-    Route::post('sessions',                  [AdminLmsSessionController::class,    'store']);
-    Route::get('sessions/{session}',         [AdminLmsSessionController::class,    'show']);
-    Route::put('sessions/{session}',         [AdminLmsSessionController::class,    'update']);
-    Route::patch('sessions/{session}',       [AdminLmsSessionController::class,    'update']);
-    Route::delete('sessions/{session}',      [AdminLmsSessionController::class,    'destroy']);
+    // Sessions CRUD + link-open tracking
+    Route::get('sessions',                            [AdminLmsSessionController::class, 'index']);
+    Route::post('sessions',                           [AdminLmsSessionController::class, 'store']);
+    Route::get('sessions/{session}',                  [AdminLmsSessionController::class, 'show']);
+    Route::put('sessions/{session}',                  [AdminLmsSessionController::class, 'update']);
+    Route::patch('sessions/{session}',                [AdminLmsSessionController::class, 'update']);
+    Route::delete('sessions/{session}',               [AdminLmsSessionController::class, 'destroy']);
+    Route::get('sessions/{session}/link-opens',       [AdminLmsSessionController::class, 'linkOpens']);
 
     // Attendance (read-only list; individual session records via instructor routes)
     Route::get('attendance',                 [AdminLmsAttendanceController::class, 'index']);
@@ -912,10 +943,14 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
 
 // ─── Finance aliases (frontend uses /finance/*, backend uses /admin/finance/*) ─
 // finance_manager role has full finance permissions (VIEW_PAYMENTS, MANAGE_PAYMENTS, etc.)
-Route::middleware(['auth:sanctum', 'role:admin,finance_manager'])->prefix('finance')->group(function () {
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_manager'])->prefix('finance')->group(function () {
     Route::get('dashboard',               [FinanceController::class,    'overview']);
     Route::get('payments',                [FinanceController::class,    'payments']);
     Route::get('transactions',            [FinanceController::class,    'transactions']);
+    Route::get('orders',                  [AdminOrderController::class, 'index']);
+    Route::get('orders/{order}',          [AdminOrderController::class, 'show']);
+    Route::get('invoices',                [AdminOrderController::class, 'invoices']);
+    Route::get('invoices/{invoice}/download', [AdminOrderController::class, 'downloadInvoice']);
     Route::get('scholarships',            [ScholarshipController::class,'index']);
     Route::patch('scholarships/{scholarship}/approve', [ScholarshipController::class, 'approve']);
     Route::patch('scholarships/{scholarship}/reject',  [ScholarshipController::class, 'reject']);
@@ -1038,12 +1073,22 @@ Route::get('platform/scale', function () {
 Route::get('mobile/readiness', [MobileController::class, 'home'])
     ->middleware('auth:sanctum');
 
-// ─── HR Manager portal (auth:sanctum + role:hr_manager,admin,super_admin) ────
-Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin'])->prefix('hr')->group(function () {
+// ─── Volunteer requests — accessible to hr_manager + admin roles ─────────────
+Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin'])->prefix('admin')->group(function () {
+    // Allow hr_manager to view/update volunteer requests
+    Route::get('volunteer-requests',                                       [AdminVolunteerRequestController::class, 'index']);
+    Route::get('volunteer-requests/{volunteerRequest}',                    [AdminVolunteerRequestController::class, 'show']);
+    Route::patch('volunteer-requests/{volunteerRequest}/status',           [AdminVolunteerRequestController::class, 'updateStatus']);
+    Route::post('volunteer-requests/{volunteerRequest}/convert-to-member', [AdminVolunteerRequestController::class, 'convertToMember']);
+});
+
+// ─── HR Manager portal (auth:sanctum + role:hr_manager,admin,super_admin,tech_admin) ────
+Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin'])->prefix('hr')->group(function () {
     Route::get('dashboard',                                [HrDashboardController::class, 'dashboard']);
     Route::get('team',                                     [HrDashboardController::class, 'team']);
     Route::get('volunteers',                               [HrDashboardController::class, 'volunteers']);
     Route::get('instructors',                              [HrDashboardController::class, 'instructors']);
+    Route::get('instructors/{instructor}',                 [HrDashboardController::class, 'instructorShow']);
     Route::get('applications',                             [HrDashboardController::class, 'applications']);
     Route::post('applications',                            [HrDashboardController::class, 'storeApplication']);
     Route::patch('applications/{application}/status',      [HrDashboardController::class, 'updateApplicationStatus']);
@@ -1064,6 +1109,36 @@ Route::middleware(['auth:sanctum', 'role:programs_manager,admin,super_admin,tech
 
 // programs_manager registration access is now in the combined group above (line ~439).
 
+// ─── Admin certificates (admin + programs_manager) — static paths before wildcard ─
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,programs_manager'])->prefix('admin')->group(function () {
+    Route::get('certificates/stats',                          [CertificateController::class, 'stats']);
+    Route::get('certificates/eligibility',                    [CertificateController::class, 'eligibility']);
+    Route::post('certificates/bulk-issue',                    [CertificateController::class, 'bulkIssue']);
+
+    Route::get('certificates/templates',                      [CertificateTemplateController::class, 'index']);
+    Route::post('certificates/templates',                     [CertificateTemplateController::class, 'store']);
+    Route::get('certificates/templates/{template}',           [CertificateTemplateController::class, 'show']);
+    Route::put('certificates/templates/{template}',           [CertificateTemplateController::class, 'update']);
+    Route::delete('certificates/templates/{template}',        [CertificateTemplateController::class, 'destroy']);
+    Route::put('certificates/templates/{template}/activate',  [CertificateTemplateController::class, 'toggleActive']);
+    Route::get('certificates/templates/{template}/preview',   [CertificateTemplateController::class, 'preview']);
+
+    Route::get('certificates/batches',                        [CertificateBatchController::class, 'index']);
+    Route::get('certificates/batches/{batch}',                [CertificateBatchController::class, 'show']);
+
+    Route::get('certificates',                      [CertificateController::class, 'index']);
+    Route::post('certificates',                     [CertificateController::class, 'store']);
+    Route::get('certificates/{certificate}',        [CertificateController::class, 'show']);
+    Route::put('certificates/{certificate}/approve',  [CertificateController::class, 'approve']);
+    Route::post('certificates/{certificate}/approve', [CertificateController::class, 'approve']);
+    Route::put('certificates/{certificate}/issue',   [CertificateController::class, 'issue']);
+    Route::post('certificates/{certificate}/issue',  [CertificateController::class, 'issue']);
+    Route::put('certificates/{certificate}/revoke',  [CertificateController::class, 'revoke']);
+    Route::post('certificates/{certificate}/revoke', [CertificateController::class, 'revoke']);
+    Route::post('certificates/{certificate}/regenerate',      [CertificateController::class, 'regenerate']);
+    Route::get('certificates/{certificate}/download',         [CertificateController::class, 'download']);
+});
+
 // ─── Material file/download: authenticated streams (replaces raw /storage/ links) ─
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,programs_manager'])->group(function () {
     Route::get('admin/lms/materials/{material}/file', [AdminLmsMaterialController::class, 'file'])
@@ -1083,8 +1158,11 @@ Route::middleware(['auth:sanctum', 'role:tech_admin,super_admin'])->prefix('tech
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── User management (admin + super_admin + tech_admin can read/create/update) ─
-Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('admin')->group(function () {
+// programs_manager also gets user SEARCH so they can find existing students when enrolling in courses
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,programs_manager'])->prefix('admin')->group(function () {
     Route::get('users/search',    [AdminUserController::class, 'search']);
+});
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('admin')->group(function () {
     Route::get('users',           [AdminUserController::class, 'index']);
     Route::post('users',          [AdminUserController::class, 'store']);
     Route::get('users/{user}',    [AdminUserController::class, 'show']);
@@ -1101,6 +1179,12 @@ Route::delete('admin/users/{user}', [AdminUserController::class, 'destroy'])
     ->middleware(['auth:sanctum', 'role:super_admin,tech_admin']);
 Route::post('admin/users/{id}/restore', [AdminUserController::class, 'restore'])
     ->middleware(['auth:sanctum', 'role:super_admin,tech_admin']);
+
+// ─── HR Manager read-only access to instructors directory ────────────────────
+Route::middleware(['auth:sanctum', 'role:hr_manager'])->group(function () {
+    Route::get('admin/instructors',        [AdminInstructorController::class, 'index']);
+    Route::get('admin/instructors/{user}', [AdminInstructorController::class, 'show']);
+});
 
 // ─── Admin Courses CRUD — full management with filters + instructor assignment ─
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,department_manager,programs_manager'])->group(function () {
@@ -1254,7 +1338,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
 // ─── Self-service profile (any authenticated role) ────────────────────────────
 Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('/profile',        [ProfileController::class, 'show']);
-    Route::put('/profile',        [ProfileController::class, 'update']);
+    Route::match(['put', 'patch'], '/profile', [ProfileController::class, 'update']);
     Route::post('/profile/avatar', [ProfileController::class, 'uploadAvatar']);
     Route::delete('/profile',     [ProfileController::class, 'destroy']);
 });
