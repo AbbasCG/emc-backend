@@ -3,18 +3,19 @@
 namespace App\Http\Controllers;
 
 use App\Enums\RegistrationStatus;
-use App\Mail\CourseRegistrationConfirmation;
 use App\Models\Invoice;
 use App\Models\Order;
 use App\Models\Payment;
+use App\Models\Registration;
 use App\Models\StudentProgress;
 use App\Services\AuditLogService;
+use App\Services\EmailService;
+use App\Mail\CourseRegistrationConfirmation;
 use App\Support\PaymentStatuses;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 use Stripe\Exception\SignatureVerificationException;
 use Stripe\Webhook;
 use Throwable;
@@ -42,86 +43,170 @@ class StripeWebhookController extends Controller
         }
 
         try {
-            $session   = $event->data->object ?? null;
-            $sessionId = $session?->id ?? null;
-            $metadata  = (array) ($session?->metadata ?? []);
+            $session  = $event->data->object ?? null;
+            $metadata = (array) ($session?->metadata ?? []);
 
-            if ($sessionId === null) {
+            if (($session?->id ?? null) === null) {
                 return response()->json(['message' => 'Missing session identifier.'], 422);
             }
 
             // Only handle the order-based flow from CheckoutController
             if (($metadata['flow'] ?? '') !== 'order') {
+                Log::info('Stripe webhook: non-order flow ignored', [
+                    'event_type' => $event->type,
+                    'flow'       => $metadata['flow'] ?? null,
+                    'session_id' => $session->id,
+                ]);
                 return response()->json(['message' => 'Not an order-based session — ignored.']);
             }
 
             if ($event->type === 'checkout.session.completed') {
-                $this->handleCompleted($sessionId, $session);
+                $this->handleCompleted($session);
             } elseif (in_array($event->type, ['checkout.session.expired', 'payment_intent.payment_failed'], true)) {
-                $this->handleFailed($sessionId);
+                $this->handleFailed($session->id);
             }
 
             return response()->json(['message' => 'Stripe webhook processed successfully.']);
         } catch (Throwable $e) {
             report($e);
+            Log::error('Stripe webhook processing failed', [
+                'error'      => $e->getMessage(),
+                'session_id' => $session?->id ?? null,
+            ]);
             return response()->json(['message' => 'Unable to process Stripe webhook.'], 500);
         }
     }
 
-    private function handleCompleted(string $sessionId, mixed $session): void
+    private function handleCompleted(mixed $session): void
     {
-        $registration = null;
+        $meta           = $session->metadata ?? null;
+        $sessionId      = $session->id ?? null;
+        $orderId        = isset($meta->order_id)        ? (int) $meta->order_id        : null;
+        $registrationId = isset($meta->registration_id) ? (int) $meta->registration_id : null;
+        $paymentStatus  = $session->payment_status ?? null;
+        $sessionStatus  = $session->status ?? null;
+
+        Log::info('Stripe checkout.session.completed received', [
+            'session_id'      => $sessionId,
+            'order_id'        => $orderId,
+            'registration_id' => $registrationId,
+            'payment_status'  => $paymentStatus,
+            'status'          => $sessionStatus,
+        ]);
+
+        // Guard: only process confirmed payments
+        if ($paymentStatus !== 'paid' && $sessionStatus !== 'complete') {
+            Log::warning('Stripe session not yet paid — skipping', [
+                'session_id'     => $sessionId,
+                'payment_status' => $paymentStatus,
+                'status'         => $sessionStatus,
+            ]);
+            return;
+        }
+
         $order        = null;
+        $registration = null;
         $payment      = null;
         $shouldMail   = false;
 
-        DB::transaction(function () use ($sessionId, $session, &$registration, &$order, &$payment, &$shouldMail) {
-            $payment = Payment::with(['registration', 'order'])
-                ->where('provider', 'stripe')
-                ->where('provider_payment_id', $sessionId)
-                ->lockForUpdate()
-                ->first();
+        DB::transaction(function () use (
+            $session, $sessionId, $orderId, $registrationId,
+            &$order, &$registration, &$payment, &$shouldMail
+        ) {
+            // Primary lookup via metadata (reliable).
+            // lockForUpdate prevents duplicate processing under concurrent delivery.
+            if ($orderId !== null) {
+                $order = Order::lockForUpdate()->find($orderId);
+            }
+            if ($registrationId !== null) {
+                $registration = Registration::lockForUpdate()->find($registrationId);
+            }
 
-            if (! $payment || $payment->status === PaymentStatuses::CONFIRMED) {
+            if (! $order && ! $registration) {
+                Log::warning('Stripe webhook: order and registration not found — cannot process', [
+                    'session_id'      => $sessionId,
+                    'order_id'        => $orderId,
+                    'registration_id' => $registrationId,
+                ]);
                 return;
             }
 
-            $order = $payment->order;
-            if ($order && $order->status === 'paid') {
+            // Idempotency: order already paid means we already processed this event
+            if ($order?->status === 'paid') {
+                Log::info('Stripe webhook: order already paid — idempotent skip', [
+                    'order_id'   => $orderId,
+                    'session_id' => $sessionId,
+                ]);
                 return;
             }
 
+            // Locate payment row: try order_id → registration_id → provider_payment_id
+            $payment = Payment::where(function ($q) use ($orderId, $registrationId, $sessionId) {
+                if ($orderId !== null) {
+                    $q->orWhere('order_id', $orderId);
+                }
+                if ($registrationId !== null) {
+                    $q->orWhere('registration_id', $registrationId);
+                }
+                if ($sessionId !== null) {
+                    $q->orWhere('provider_payment_id', $sessionId);
+                }
+            })->lockForUpdate()->first();
+
+            if (! $payment) {
+                Log::warning('Stripe webhook: no Payment row found', [
+                    'session_id'      => $sessionId,
+                    'order_id'        => $orderId,
+                    'registration_id' => $registrationId,
+                ]);
+                return;
+            }
+
+            // Idempotency: payment already confirmed
+            if ($payment->status === PaymentStatuses::CONFIRMED) {
+                Log::info('Stripe webhook: payment already confirmed — idempotent skip', [
+                    'payment_id' => $payment->id,
+                    'session_id' => $sessionId,
+                ]);
+                return;
+            }
+
+            // ── Update payment ────────────────────────────────────────────────
             $payment->update([
-                'status'       => PaymentStatuses::CONFIRMED,
-                'confirmed_at' => now(),
+                'status'              => PaymentStatuses::CONFIRMED,
+                'confirmed_at'        => now(),
+                'provider_payment_id' => $sessionId,
+                'receipt_url'         => $session->receipt_url ?? null,
             ]);
 
-            $registration = $payment->registration;
+            // ── Update registration ───────────────────────────────────────────
             if ($registration) {
                 $registration->update(['status' => RegistrationStatus::REGISTERED->value]);
                 $registration->load('course.instructor', 'course.features', 'course.track');
 
-                // Create StudentProgress if not already existing
-                if ($registration->course_id) {
-                    StudentProgress::firstOrCreate([
-                        'user_id'   => $registration->user_id,
-                        'course_id' => $registration->course_id,
-                    ], [
-                        'status'            => 'in_progress',
-                        'progress_percent'  => 0,
-                        'registration_id'   => $registration->id,
-                    ]);
+                if ($registration->course_id && $registration->user_id) {
+                    StudentProgress::firstOrCreate(
+                        [
+                            'user_id'   => $registration->user_id,
+                            'course_id' => $registration->course_id,
+                        ],
+                        [
+                            'status'           => 'in_progress',
+                            'progress_percent' => 0,
+                            'registration_id'  => $registration->id,
+                        ]
+                    );
                 }
             }
 
+            // ── Update order + invoice ────────────────────────────────────────
             if ($order) {
                 $order->update([
                     'status'                     => 'paid',
                     'paid_at'                    => now(),
-                    'provider_payment_intent_id' => $session?->payment_intent ?? null,
+                    'provider_payment_intent_id' => $session->payment_intent ?? null,
                 ]);
 
-                // Generate invoice idempotently
                 Invoice::firstOrCreate(
                     ['order_id' => $order->id],
                     [
@@ -133,9 +218,16 @@ class StripeWebhookController extends Controller
             }
 
             $shouldMail = true;
+
+            Log::info('Stripe webhook: payment processing complete', [
+                'session_id'      => $sessionId,
+                'payment_id'      => $payment->id,
+                'order_id'        => $order?->id,
+                'registration_id' => $registration?->id,
+            ]);
         });
 
-        if (! $payment || ! $shouldMail) {
+        if (! $shouldMail || ! $payment) {
             return;
         }
 
@@ -147,18 +239,23 @@ class StripeWebhookController extends Controller
         if ($registration) {
             AuditLogService::log('student_enrolled_after_payment', 'Registration', $registration->id);
 
-            Mail::to($registration->email)
-                ->queue(new CourseRegistrationConfirmation($registration));
+            EmailService::dispatch(
+                'payment_confirmation',
+                $registration->email,
+                $registration->full_name ?? '',
+                $registration->user_id,
+                new CourseRegistrationConfirmation($registration),
+                'تأكيد تسجيلك في الدورة'
+            );
         }
     }
 
     private function handleFailed(string $sessionId): void
     {
         DB::transaction(function () use ($sessionId) {
-            $payment = Payment::where('provider', 'stripe')
-                ->where('provider_payment_id', $sessionId)
-                ->lockForUpdate()
-                ->first();
+            $payment = Payment::where(function ($q) use ($sessionId) {
+                $q->where('provider_payment_id', $sessionId);
+            })->lockForUpdate()->first();
 
             if (! $payment || $payment->status === PaymentStatuses::CONFIRMED) {
                 return;

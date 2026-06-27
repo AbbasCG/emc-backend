@@ -3,13 +3,12 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Mail\TemporaryPasswordMail;
 use App\Models\User;
 use App\Services\AuditLogService;
+use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 
@@ -151,10 +150,13 @@ class AdminUserController extends Controller
             AdminInstructorController::ensureProfile($user);
         }
 
-        if ($usedTemporaryPassword) {
-            // Queue the email — plaintext never leaves the server via the API response
-            Mail::to($user->email)->queue(new TemporaryPasswordMail($user, $temporaryPassword));
-        }
+        // Send welcome email with temp password if generated, or plain welcome otherwise.
+        // Routes through EmailService → NotificationLog (logged, respects email settings toggle).
+        NotificationService::accountCreated(
+            $user->id,
+            $user->name,
+            $usedTemporaryPassword ? $temporaryPassword : null
+        );
 
         AuditLogService::logModel('created', $user, null, [
             'name'  => $user->name,
