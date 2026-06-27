@@ -123,26 +123,57 @@ class FinanceController extends Controller
 
     public function payments(Request $request): \Illuminate\Http\JsonResponse
     {
-        $payments = Payment::with(['registration.course'])
+        $payments = Payment::with([
+                'registration.course',
+                'order.user',
+                'order.course',
+                'order.invoice',
+            ])
             ->when($request->status, fn ($q) => $q->where('status', $request->status))
             ->when($request->provider, fn ($q) => $q->where('provider', $request->provider))
             ->when($request->from, fn ($q) => $q->whereDate('created_at', '>=', $request->from))
             ->when($request->to, fn ($q) => $q->whereDate('created_at', '<=', $request->to))
+            ->when($request->search, function ($q) use ($request) {
+                $s = $request->search;
+                $q->whereHas('order', fn ($oq) => $oq->where('order_number', 'like', "%{$s}%")
+                    ->orWhereHas('user', fn ($uq) => $uq->where('name', 'like', "%{$s}%")
+                        ->orWhere('email', 'like', "%{$s}%")))
+                  ->orWhereHas('registration', fn ($rq) => $rq->where('full_name', 'like', "%{$s}%")
+                        ->orWhere('email', 'like', "%{$s}%"));
+            })
             ->latest()
             ->paginate(30);
 
         return response()->json([
             'success' => true,
-            'data'    => $payments->through(fn ($p) => [
-                'id'              => $p->id,
-                'amount'          => $p->amount,
-                'status'          => $p->status,
-                'provider'        => $p->provider,
-                'payment_method'  => $p->payment_method,
-                'confirmed_at'    => $p->confirmed_at,
-                'course'          => $p->registration?->course?->title,
-                'student'         => $p->registration?->full_name,
-            ]),
+            'data'    => $payments->through(function ($p) {
+                // Resolve student name/email from order.user (Stripe flow) or registration (legacy)
+                $studentName  = $p->order?->user?->name  ?? $p->registration?->full_name  ?? null;
+                $studentEmail = $p->order?->user?->email ?? $p->registration?->email       ?? null;
+                $courseTitle  = $p->order?->course?->title ?? $p->registration?->course?->title ?? null;
+                $currency     = strtoupper($p->order?->currency ?? $p->registration?->course?->currency ?? 'eur');
+                $orderNumber  = $p->order?->order_number ?? null;
+                $invoiceNum   = $p->order?->invoice?->invoice_number ?? null;
+
+                return [
+                    'id'              => $p->id,
+                    'amount'          => $p->amount,
+                    'currency'        => $currency,
+                    'status'          => $p->status,
+                    'provider'        => $p->provider,
+                    'payment_method'  => $p->payment_method,
+                    'receipt_url'     => $p->receipt_url ?? null,
+                    'confirmed_at'    => $p->confirmed_at,
+                    'created_at'      => $p->created_at,
+                    'student_name'    => $studentName,
+                    'student_email'   => $studentEmail,
+                    'course'          => $courseTitle,
+                    'order_number'    => $orderNumber,
+                    'invoice_number'  => $invoiceNum,
+                    'order_id'        => $p->order_id,
+                    'registration_id' => $p->registration_id,
+                ];
+            }),
         ]);
     }
 
