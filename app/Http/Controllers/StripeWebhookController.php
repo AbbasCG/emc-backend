@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Enums\RegistrationStatus;
+use App\Mail\CourseRegistrationConfirmation;
 use App\Models\Invoice;
 use App\Models\Order;
 use App\Models\Payment;
@@ -10,7 +11,6 @@ use App\Models\Registration;
 use App\Models\StudentProgress;
 use App\Services\AuditLogService;
 use App\Services\EmailService;
-use App\Mail\CourseRegistrationConfirmation;
 use App\Support\PaymentStatuses;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -22,6 +22,42 @@ use Throwable;
 
 class StripeWebhookController extends Controller
 {
+    /**
+     * Convert Stripe metadata (StripeObject, ArrayObject, array, or plain object)
+     * to a plain PHP associative array.
+     *
+     * NEVER use (array) cast directly on a StripeObject — it returns the internal
+     * _values/_opts properties, not the actual metadata key-value pairs.
+     */
+    private function metadataArray(mixed $metadata): array
+    {
+        if ($metadata === null) {
+            return [];
+        }
+
+        if (is_array($metadata)) {
+            return $metadata;
+        }
+
+        // Stripe\StripeObject (and all subclasses) expose toArray()
+        if (is_object($metadata) && method_exists($metadata, 'toArray')) {
+            return (array) $metadata->toArray();
+        }
+
+        // Fallback: JSON round-trip to get a plain array from any object
+        $json = json_encode($metadata);
+        if ($json !== false) {
+            $decoded = json_decode($json, true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        return [];
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
     public function handle(Request $request): JsonResponse
     {
         $payload   = $request->getContent();
@@ -29,7 +65,7 @@ class StripeWebhookController extends Controller
         $secret    = (string) config('services.stripe.webhook_secret', '');
 
         if ($secret === '') {
-            Log::error('Stripe webhook received but STRIPE_WEBHOOK_SECRET is not configured.');
+            Log::error('Stripe webhook: STRIPE_WEBHOOK_SECRET is not configured.');
             return response()->json(['message' => 'Webhook secret not configured.'], 500);
         }
 
@@ -43,46 +79,61 @@ class StripeWebhookController extends Controller
         }
 
         try {
-            $session  = $event->data->object ?? null;
-            $metadata = (array) ($session?->metadata ?? []);
+            $session = $event->data->object ?? null;
+
+            Log::info('Stripe webhook received', [
+                'event'   => $event->type,
+                'session' => $session?->id,
+            ]);
 
             if (($session?->id ?? null) === null) {
+                Log::warning('Stripe webhook: missing session identifier.');
                 return response()->json(['message' => 'Missing session identifier.'], 422);
             }
 
-            // Only handle the order-based flow from CheckoutController
-            if (($metadata['flow'] ?? '') !== 'order') {
-                Log::info('Stripe webhook: non-order flow ignored', [
-                    'event_type' => $event->type,
-                    'flow'       => $metadata['flow'] ?? null,
-                    'session_id' => $session->id,
+            // Convert metadata to a reliable plain array ONCE here
+            $meta = $this->metadataArray($session->metadata ?? null);
+            $flow = $meta['flow'] ?? '';
+
+            Log::info('Stripe metadata', array_merge(['session' => $session->id], $meta));
+
+            // Only handle the order-based flow created by CheckoutController
+            if ($flow !== 'order') {
+                Log::info('Stripe webhook: non-order flow — ignored', [
+                    'flow'    => $flow ?: '(empty)',
+                    'event'   => $event->type,
+                    'session' => $session->id,
                 ]);
                 return response()->json(['message' => 'Not an order-based session — ignored.']);
             }
 
             if ($event->type === 'checkout.session.completed') {
-                $this->handleCompleted($session);
+                $this->handleCompleted($session, $meta);
             } elseif (in_array($event->type, ['checkout.session.expired', 'payment_intent.payment_failed'], true)) {
-                $this->handleFailed($session->id);
+                $this->handleFailed($session->id, $meta);
             }
 
             return response()->json(['message' => 'Stripe webhook processed successfully.']);
+
         } catch (Throwable $e) {
             report($e);
-            Log::error('Stripe webhook processing failed', [
-                'error'      => $e->getMessage(),
-                'session_id' => $session?->id ?? null,
+            Log::error('Stripe webhook processing exception', [
+                'error'   => $e->getMessage(),
+                'session' => $session?->id ?? null,
             ]);
             return response()->json(['message' => 'Unable to process Stripe webhook.'], 500);
         }
     }
 
-    private function handleCompleted(mixed $session): void
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private function handleCompleted(mixed $session, array $meta): void
     {
-        $meta           = $session->metadata ?? null;
-        $sessionId      = $session->id ?? null;
-        $orderId        = isset($meta->order_id)        ? (int) $meta->order_id        : null;
-        $registrationId = isset($meta->registration_id) ? (int) $meta->registration_id : null;
+        $sessionId      = (string) $session->id;
+        $orderId        = (int) ($meta['order_id']        ?? 0);
+        $registrationId = (int) ($meta['registration_id'] ?? 0);
+        $courseId       = (int) ($meta['course_id']       ?? 0);
+        $userId         = (int) ($meta['user_id']         ?? 0);
         $paymentStatus  = $session->payment_status ?? null;
         $sessionStatus  = $session->status ?? null;
 
@@ -90,16 +141,26 @@ class StripeWebhookController extends Controller
             'session_id'      => $sessionId,
             'order_id'        => $orderId,
             'registration_id' => $registrationId,
+            'course_id'       => $courseId,
+            'user_id'         => $userId,
             'payment_status'  => $paymentStatus,
             'status'          => $sessionStatus,
         ]);
 
-        // Guard: only process confirmed payments
+        // Guard: must be a paid/complete session
         if ($paymentStatus !== 'paid' && $sessionStatus !== 'complete') {
-            Log::warning('Stripe session not yet paid — skipping', [
+            Log::warning('Stripe webhook: session not paid — skipping', [
                 'session_id'     => $sessionId,
                 'payment_status' => $paymentStatus,
                 'status'         => $sessionStatus,
+            ]);
+            return;
+        }
+
+        if ($orderId === 0 && $registrationId === 0) {
+            Log::warning('Stripe webhook: metadata missing order_id and registration_id', [
+                'session_id' => $sessionId,
+                'meta'       => $meta,
             ]);
             return;
         }
@@ -113,14 +174,19 @@ class StripeWebhookController extends Controller
             $session, $sessionId, $orderId, $registrationId,
             &$order, &$registration, &$payment, &$shouldMail
         ) {
-            // Primary lookup via metadata (reliable).
-            // lockForUpdate prevents duplicate processing under concurrent delivery.
-            if ($orderId !== null) {
+            // ── Primary lookup: metadata IDs are the canonical source ─────────
+            if ($orderId > 0) {
                 $order = Order::lockForUpdate()->find($orderId);
             }
-            if ($registrationId !== null) {
+            if ($registrationId > 0) {
                 $registration = Registration::lockForUpdate()->find($registrationId);
             }
+
+            Log::info('Stripe order found', [
+                'order'        => $order?->id,
+                'registration' => $registration?->id,
+                'order_status' => $order?->status,
+            ]);
 
             if (! $order && ! $registration) {
                 Log::warning('Stripe webhook: order and registration not found — cannot process', [
@@ -131,27 +197,30 @@ class StripeWebhookController extends Controller
                 return;
             }
 
-            // Idempotency: order already paid means we already processed this event
+            // ── Idempotency: already paid ─────────────────────────────────────
             if ($order?->status === 'paid') {
                 Log::info('Stripe webhook: order already paid — idempotent skip', [
-                    'order_id'   => $orderId,
+                    'order_id'   => $order->id,
                     'session_id' => $sessionId,
                 ]);
                 return;
             }
 
-            // Locate payment row: try order_id → registration_id → provider_payment_id
+            // ── Locate payment: order_id → registration_id → session id ───────
             $payment = Payment::where(function ($q) use ($orderId, $registrationId, $sessionId) {
-                if ($orderId !== null) {
+                if ($orderId > 0) {
                     $q->orWhere('order_id', $orderId);
                 }
-                if ($registrationId !== null) {
+                if ($registrationId > 0) {
                     $q->orWhere('registration_id', $registrationId);
                 }
-                if ($sessionId !== null) {
-                    $q->orWhere('provider_payment_id', $sessionId);
-                }
+                $q->orWhere('provider_payment_id', $sessionId);
             })->lockForUpdate()->first();
+
+            Log::info('Stripe payment found', [
+                'payment'        => $payment?->id,
+                'payment_status' => $payment?->status,
+            ]);
 
             if (! $payment) {
                 Log::warning('Stripe webhook: no Payment row found', [
@@ -162,7 +231,7 @@ class StripeWebhookController extends Controller
                 return;
             }
 
-            // Idempotency: payment already confirmed
+            // ── Idempotency: payment already confirmed ────────────────────────
             if ($payment->status === PaymentStatuses::CONFIRMED) {
                 Log::info('Stripe webhook: payment already confirmed — idempotent skip', [
                     'payment_id' => $payment->id,
@@ -199,7 +268,7 @@ class StripeWebhookController extends Controller
                 }
             }
 
-            // ── Update order + invoice ────────────────────────────────────────
+            // ── Update order + create invoice ─────────────────────────────────
             if ($order) {
                 $order->update([
                     'status'                     => 'paid',
@@ -219,11 +288,11 @@ class StripeWebhookController extends Controller
 
             $shouldMail = true;
 
-            Log::info('Stripe webhook: payment processing complete', [
-                'session_id'      => $sessionId,
-                'payment_id'      => $payment->id,
-                'order_id'        => $order?->id,
-                'registration_id' => $registration?->id,
+            Log::info('Stripe payment processed', [
+                'order'        => $order?->id,
+                'payment'      => $payment->id,
+                'registration' => $registration?->id,
+                'session_id'   => $sessionId,
             ]);
         });
 
@@ -250,11 +319,18 @@ class StripeWebhookController extends Controller
         }
     }
 
-    private function handleFailed(string $sessionId): void
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private function handleFailed(string $sessionId, array $meta): void
     {
-        DB::transaction(function () use ($sessionId) {
-            $payment = Payment::where(function ($q) use ($sessionId) {
+        $orderId = (int) ($meta['order_id'] ?? 0);
+
+        DB::transaction(function () use ($sessionId, $orderId) {
+            $payment = Payment::where(function ($q) use ($sessionId, $orderId) {
                 $q->where('provider_payment_id', $sessionId);
+                if ($orderId > 0) {
+                    $q->orWhere('order_id', $orderId);
+                }
             })->lockForUpdate()->first();
 
             if (! $payment || $payment->status === PaymentStatuses::CONFIRMED) {
@@ -265,7 +341,7 @@ class StripeWebhookController extends Controller
 
             if ($payment->order_id) {
                 Order::where('id', $payment->order_id)
-                    ->whereNotIn('status', ['paid'])
+                    ->where('status', '!=', 'paid')
                     ->update(['status' => 'failed']);
             }
         });

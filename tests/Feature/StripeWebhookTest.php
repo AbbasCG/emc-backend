@@ -18,23 +18,36 @@ class StripeWebhookTest extends TestCase
 {
     use RefreshDatabase;
 
-    private string $webhookSecret = 'whsec_testsecret1234567890abcdef';
+    private string $webhookSecret = 'whsec_testsecret1234567890abcdef12';
 
     /**
-     * Build a Stripe-signed webhook request for the given event payload.
+     * POST a Stripe-signed webhook event.
+     *
+     * The raw JSON body must match the signed payload exactly, so we build the
+     * signature ourselves using the same bytes that will be sent as the body.
      */
     private function stripePost(array $eventData): \Illuminate\Testing\TestResponse
     {
-        $payload   = json_encode($eventData);
-        $timestamp = time();
-        $secret    = substr($this->webhookSecret, 6); // strip 'whsec_'
-        $sig       = hash_hmac('sha256', "{$timestamp}.{$payload}", $secret);
-        $header    = "t={$timestamp},v1={$sig}";
-
         config(['services.stripe.webhook_secret' => $this->webhookSecret]);
 
-        return $this->withHeaders(['Stripe-Signature' => $header])
-            ->postJson('/api/webhooks/stripe', $eventData);
+        $payload   = json_encode($eventData);
+        $timestamp = time();
+        $rawSecret = substr($this->webhookSecret, 6); // strip 'whsec_'
+        $sig       = hash_hmac('sha256', "{$timestamp}.{$payload}", $rawSecret);
+        $header    = "t={$timestamp},v1={$sig}";
+
+        return $this->call(
+            'POST',
+            '/api/webhooks/stripe',
+            [],
+            [],
+            [],
+            [
+                'CONTENT_TYPE'         => 'application/json',
+                'HTTP_STRIPE_SIGNATURE' => $header,
+            ],
+            $payload
+        );
     }
 
     private function makeSessionEvent(array $metaOverrides = [], array $sessionOverrides = []): array
@@ -64,6 +77,7 @@ class StripeWebhookTest extends TestCase
         ];
     }
 
+    /** Create User, Course, Registration, Order, Payment in pending state. */
     private function createOrderAndPayment(User $user, Course $course): array
     {
         $registration = Registration::factory()->create([
@@ -73,15 +87,15 @@ class StripeWebhookTest extends TestCase
         ]);
 
         $order = Order::create([
-            'user_id'        => $user->id,
-            'course_id'      => $course->id,
-            'order_number'   => Order::generateOrderNumber(),
-            'type'           => 'course',
-            'subtotal'       => 100,
-            'tax_amount'     => 0,
-            'total'          => 100,
-            'currency'       => 'eur',
-            'status'         => 'pending',
+            'user_id'          => $user->id,
+            'course_id'        => $course->id,
+            'order_number'     => Order::generateOrderNumber(),
+            'type'             => 'course',
+            'subtotal'         => 100,
+            'tax_amount'       => 0,
+            'total'            => 100,
+            'currency'         => 'eur',
+            'status'           => 'pending',
             'payment_provider' => 'stripe',
         ]);
 
@@ -97,7 +111,7 @@ class StripeWebhookTest extends TestCase
         return [$order, $registration, $payment];
     }
 
-    // ── TESTS ─────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
 
     public function test_checkout_completed_updates_order_payment_registration(): void
     {
@@ -155,35 +169,31 @@ class StripeWebhookTest extends TestCase
             'registration_id' => (string) $registration->id,
         ]);
 
-        // Send the same event twice
+        // Send twice — same signed payload
         $this->stripePost($eventData)->assertOk();
         $this->stripePost($eventData)->assertOk();
 
-        // Only one invoice should be created
+        // Exactly one invoice
         $this->assertSame(1, Invoice::where('order_id', $order->id)->count());
 
-        // Only one StudentProgress row
+        // Exactly one StudentProgress
         $this->assertSame(1, StudentProgress::where([
             'user_id'   => $user->id,
             'course_id' => $course->id,
         ])->count());
 
-        // Order is paid
         $this->assertSame('paid', Order::find($order->id)->status);
     }
 
-    public function test_missing_metadata_order_id_logs_warning_and_returns_200(): void
+    public function test_missing_metadata_logs_warning_and_returns_200(): void
     {
-        $eventData = $this->makeSessionEvent(['order_id' => null, 'registration_id' => null]);
-        unset($eventData['data']['object']['metadata']['order_id']);
-        unset($eventData['data']['object']['metadata']['registration_id']);
+        // No order_id / registration_id → warning logged, 200 returned (Stripe must not retry)
+        $eventData = $this->makeSessionEvent([], [
+            'metadata' => ['flow' => 'order'],  // flow present but IDs missing
+        ]);
 
         $response = $this->stripePost($eventData);
-
-        // Should still return 200 (Stripe must not retry on missing data)
         $response->assertOk();
-
-        // Nothing changed
         $this->assertDatabaseEmpty('orders');
     }
 
@@ -193,6 +203,7 @@ class StripeWebhookTest extends TestCase
 
         $response = $this->stripePost($eventData);
         $response->assertOk();
+        $this->assertStringContainsString('ignored', $response->json('message'));
         $this->assertDatabaseEmpty('orders');
     }
 
@@ -200,8 +211,15 @@ class StripeWebhookTest extends TestCase
     {
         config(['services.stripe.webhook_secret' => $this->webhookSecret]);
 
-        $response = $this->withHeaders(['Stripe-Signature' => 't=1,v1=badsig'])
-            ->postJson('/api/webhooks/stripe', $this->makeSessionEvent());
+        $response = $this->call(
+            'POST',
+            '/api/webhooks/stripe',
+            [],
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json', 'HTTP_STRIPE_SIGNATURE' => 't=1,v1=badsig'],
+            json_encode($this->makeSessionEvent())
+        );
 
         $response->assertStatus(400);
     }
@@ -213,12 +231,6 @@ class StripeWebhookTest extends TestCase
 
         [$order, $registration, $payment] = $this->createOrderAndPayment($user, $course);
 
-        $meta = [
-            'flow'            => 'order',
-            'order_id'        => (string) $order->id,
-            'registration_id' => (string) $registration->id,
-        ];
-
         $eventData = [
             'id'   => 'evt_test_' . uniqid(),
             'type' => 'checkout.session.expired',
@@ -229,7 +241,11 @@ class StripeWebhookTest extends TestCase
                     'payment_status' => 'unpaid',
                     'status'         => 'expired',
                     'payment_intent' => null,
-                    'metadata'       => $meta,
+                    'metadata'       => [
+                        'flow'            => 'order',
+                        'order_id'        => (string) $order->id,
+                        'registration_id' => (string) $registration->id,
+                    ],
                 ],
             ],
         ];
