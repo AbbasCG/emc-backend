@@ -1067,64 +1067,81 @@ Route::post('contact', function (\Illuminate\Http\Request $request) {
     ];
 
     $data = $request->validate([
-        'name'     => 'required|string|max:200',
-        'email'    => 'required|email|max:200',
-        'phone'    => 'nullable|string|max:30',
-        'subject'  => 'nullable|string|max:300',
+        'name'     => 'required|string|max:255',
+        'email'    => 'required|email|max:255',
+        'phone'    => 'nullable|string|max:50',
+        'type'     => 'nullable|string|max:100',
         'category' => 'nullable|string|max:100',
+        'subject'  => 'nullable|string|max:300',
         'message'  => 'required|string|max:5000',
     ]);
 
-    $ticket = \App\Models\SupportTicket::create([
-        'full_name'    => $data['name'],
-        'name'         => $data['name'],
-        'email'        => $data['email'],
-        'phone'        => $data['phone'] ?? null,
-        'request_type' => $data['category'] ?? 'general',
-        'type'         => $typeMap[$data['category'] ?? 'general'] ?? 'student',
-        'priority'     => 'medium',
-        'subject'      => $data['subject'] ?? ($data['name'] . ' — contact'),
-        'message'      => $data['message'],
-        'status'       => 'new',
-        'user_id'      => $request->user()?->id,
-    ]);
+    try {
+        $category = $data['category'] ?? $data['type'] ?? 'general';
 
-    $submittedAt = now()->format('Y-m-d H:i');
-    $subject     = $data['subject'] ?? ($data['name'] . ' — contact');
-    $category    = $data['category'] ?? 'general';
+        \App\Models\SupportTicket::create([
+            'full_name'    => $data['name'],
+            'name'         => $data['name'],
+            'email'        => $data['email'],
+            'phone'        => $data['phone'] ?? null,
+            'request_type' => $category,
+            'type'         => $typeMap[$category] ?? 'student',
+            'priority'     => 'medium',
+            'subject'      => $data['subject'] ?? ($data['name'] . ' — contact'),
+            'message'      => $data['message'],
+            'status'       => 'new',
+            'user_id'      => $request->user()?->id,
+        ]);
 
-    // Confirmation to visitor
-    \App\Services\EmailService::dispatch(
-        'contact_confirmation',
-        $data['email'],
-        $data['name'],
-        $request->user()?->id,
-        new \App\Mail\ContactConfirmationMail($data['name'], $subject, $data['message'], $submittedAt),
-        'تم استلام رسالتك — منصة EMC',
-    );
+        $submittedAt = now()->setTimezone('Europe/Amsterdam')->format('Y-m-d H:i');
+        $subject     = $data['subject'] ?? ($data['name'] . ' — contact');
 
-    // Notification to admin support team
-    $adminEmail = (string) config('mail.support_email', config('mail.from.address', ''));
-    if ($adminEmail) {
+        // Confirmation to visitor
         \App\Services\EmailService::dispatch(
-            'contact_admin_notification',
-            $adminEmail,
-            'فريق الدعم',
-            null,
-            new \App\Mail\ContactAdminNotificationMail(
-                $data['name'],
-                $data['email'],
-                $data['phone'] ?? null,
-                $subject,
-                $data['message'],
-                $category,
-                $submittedAt,
-            ),
-            'رسالة جديدة من نموذج التواصل — ' . $data['name'],
+            'contact_confirmation',
+            $data['email'],
+            $data['name'],
+            $request->user()?->id,
+            new \App\Mail\ContactConfirmationMail($data['name'], $subject, $data['message'], $submittedAt),
+            'تم استلام رسالتك — منصة EMC',
         );
-    }
 
-    return response()->json(['success' => true, 'message' => 'تم إرسال رسالتك بنجاح']);
+        // Notification to admin support team
+        $adminEmail = (string) config('mail.support_email', config('mail.from.address', ''));
+        if (filter_var($adminEmail, FILTER_VALIDATE_EMAIL)) {
+            \App\Services\EmailService::dispatch(
+                'contact_admin_notification',
+                $adminEmail,
+                'فريق الدعم',
+                null,
+                new \App\Mail\ContactAdminNotificationMail(
+                    $data['name'],
+                    $data['email'],
+                    $data['phone'] ?? null,
+                    $subject,
+                    $data['message'],
+                    $category,
+                    $submittedAt,
+                ),
+                'رسالة جديدة من نموذج التواصل — ' . $data['name'],
+            );
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم إرسال رسالتك بنجاح. سنقوم بالرد عليك قريباً.',
+        ]);
+    } catch (\Throwable $e) {
+        \Illuminate\Support\Facades\Log::error('Contact form error', [
+            'error' => $e->getMessage(),
+            'file'  => $e->getFile(),
+            'line'  => $e->getLine(),
+        ]);
+        return response()->json([
+            'success' => false,
+            'message' => 'تعذر إرسال الرسالة حالياً. يرجى المحاولة لاحقاً.',
+        ], 500);
+    }
 })->middleware('throttle:api');
 
 // ─── Platform scale (public stats) ───────────────────────────────────────────

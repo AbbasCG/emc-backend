@@ -19,7 +19,7 @@ class ContactAdminNotificationMail extends Mailable implements ShouldQueue
         public readonly string  $visitorName,
         public readonly string  $visitorEmail,
         public readonly ?string $visitorPhone,
-        public readonly string  $subject,
+        public readonly string  $subjectLine,
         public readonly string  $messageBody,
         public readonly string  $category,
         public readonly string  $submittedAt,
@@ -28,7 +28,7 @@ class ContactAdminNotificationMail extends Mailable implements ShouldQueue
 
     public function envelope(): Envelope
     {
-        return new Envelope(subject: 'رسالة جديدة من نموذج التواصل — ' . $this->visitorName);
+        return new Envelope(subject: 'رسالة جديدة من نموذج التواصل — ' . $this->visitorName); // envelope subject ≠ $subjectLine (visitor's topic)
     }
 
     public function content(): Content
@@ -39,7 +39,7 @@ class ContactAdminNotificationMail extends Mailable implements ShouldQueue
                 'visitorName'  => $this->visitorName,
                 'visitorEmail' => $this->visitorEmail,
                 'visitorPhone' => $this->visitorPhone,
-                'subject'      => $this->subject,
+                'subject'      => $this->subjectLine,
                 'messageBody'  => $this->messageBody,
                 'category'     => $this->category,
                 'submittedAt'  => $this->submittedAt,

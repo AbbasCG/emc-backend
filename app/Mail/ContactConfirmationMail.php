@@ -17,8 +17,8 @@ class ContactConfirmationMail extends Mailable implements ShouldQueue
 
     public function __construct(
         public readonly string  $visitorName,
-        public readonly string  $subject,
-        public readonly string  $message,
+        public readonly string  $subjectLine,
+        public readonly string  $body,
         public readonly string  $submittedAt,
     ) {}
 
@@ -33,8 +33,8 @@ class ContactConfirmationMail extends Mailable implements ShouldQueue
             view: 'emails.contact-confirmation',
             with: [
                 'visitorName' => $this->visitorName,
-                'subject'     => $this->subject,
-                'message'     => $this->message,
+                'subject'     => $this->subjectLine,
+                'message'     => $this->body,
                 'submittedAt' => $this->submittedAt,
             ],
         );

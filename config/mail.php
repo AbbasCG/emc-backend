@@ -18,6 +18,8 @@ return [
 
     'designer_email' => env('DESIGNER_EMAIL', null),
 
+    'support_email' => env('SUPPORT_EMAIL', env('MAIL_FROM_ADDRESS', null)),
+
     /*
     |--------------------------------------------------------------------------
     | Mailer Configurations
