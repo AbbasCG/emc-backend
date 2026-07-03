@@ -5,19 +5,20 @@ namespace App\Http\Controllers;
 use App\Events\WorkshopRequestSubmittedEvent;
 use App\Http\Requests\StoreWorkshopRequestRequest;
 use App\Http\Resources\WorkshopRequestResource;
+use App\Mail\WorkshopRequestAdminNotificationMail;
 use App\Mail\WorkshopRequestConfirmationMail;
 use App\Mail\WorkshopRequestSubmittedMail;
 use App\Models\User;
 use App\Models\WorkshopRequest;
 use App\Models\WorkshopRequestWorkflowStep;
 use App\Services\AuditLogService;
+use App\Services\EmailService;
 use App\Services\NotificationService;
 use App\Services\WorkshopAnnouncementService;
 use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
-use Illuminate\Support\Facades\Mail;
 use Throwable;
 
 class WorkshopRequestController extends Controller
@@ -453,20 +454,44 @@ class WorkshopRequestController extends Controller
 
     protected function sendEmails(WorkshopRequest $workshopRequest): void
     {
-        try {
-            Mail::to($workshopRequest->requester_email)
-                ->queue(new WorkshopRequestConfirmationMail($workshopRequest));
-        } catch (Throwable $e) {
-            report($e);
+        if ($workshopRequest->requester_email) {
+            EmailService::dispatch(
+                'workshop_request_confirmation',
+                $workshopRequest->requester_email,
+                $workshopRequest->requester_name ?? $workshopRequest->requester_email,
+                null,
+                new WorkshopRequestConfirmationMail($workshopRequest),
+                'تأكيد استلام طلبك — ' . config('app.name'),
+            );
         }
 
-        try {
-            $designerEmail = (string) config('mail.designer_email', '');
-            if ($designerEmail !== '' && $designerEmail !== 'null') {
-                Mail::to($designerEmail)->queue(new WorkshopRequestSubmittedMail($workshopRequest));
-            }
-        } catch (Throwable $e) {
-            report($e);
+        $designerEmail = (string) config('mail.designer_email', '');
+        if ($designerEmail !== '' && $designerEmail !== 'null') {
+            EmailService::dispatch(
+                'workshop_request_submitted',
+                $designerEmail,
+                'فريق التصميم',
+                null,
+                new WorkshopRequestSubmittedMail($workshopRequest),
+                'طلب برنامج تدريبي جديد — ' . config('app.name'),
+            );
+        }
+
+        // Admin notification (super_admin + admin)
+        $admins = User::whereIn('role', ['super_admin', 'admin'])
+            ->where('is_active', true)
+            ->whereNotNull('email')
+            ->get(['id', 'name', 'email']);
+
+        foreach ($admins as $admin) {
+            EmailService::dispatch(
+                'workshop_request_admin_notification',
+                $admin->email,
+                $admin->name,
+                $admin->id,
+                new WorkshopRequestAdminNotificationMail($workshopRequest, $admin->name),
+                'طلب برنامج تدريبي جديد — ' . ($workshopRequest->title ?? 'طلب جديد'),
+            );
         }
     }
 

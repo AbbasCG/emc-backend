@@ -48,9 +48,9 @@ class CourseSessionResource extends JsonResource
             // Aliases
             'starts_at'     => $startAt?->toISOString(),
             'ends_at'       => $endAt?->toISOString(),
-            'session_date'  => $startAt?->toDateString(),
-            'start_time'    => $startAt?->format('H:i'),
-            'end_time'      => $endAt?->format('H:i'),
+            'session_date'  => $startAt?->setTimezone('Europe/Amsterdam')->toDateString(),
+            'start_time'    => $startAt?->setTimezone('Europe/Amsterdam')->format('H:i'),
+            'end_time'      => $endAt?->setTimezone('Europe/Amsterdam')->format('H:i'),
             // Location
             'location_type' => $this->location_type,
             'location'      => $this->location,

@@ -5,8 +5,11 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\SupportTicketReplyResource;
 use App\Http\Resources\SupportTicketResource;
+use App\Models\ActivityLog;
+use App\Models\PlatformNotification;
 use App\Models\SupportTicket;
 use App\Models\SupportTicketReply;
+use App\Models\User;
 use App\Services\ActivityLogger;
 use Illuminate\Http\Request;
 
@@ -15,14 +18,41 @@ class SupportTicketController extends Controller
     public function index(Request $request): \Illuminate\Http\JsonResponse
     {
         $tickets = SupportTicket::with(['user', 'assignedTo'])
+            ->when($request->search, function ($q) use ($request) {
+                $s = '%' . $request->search . '%';
+                $q->where(fn ($q2) => $q2
+                    ->where('subject', 'like', $s)
+                    ->orWhere('ticket_number', 'like', $s)
+                    ->orWhere('full_name', 'like', $s)
+                    ->orWhere('name', 'like', $s)
+                    ->orWhere('email', 'like', $s)
+                    ->orWhere('phone', 'like', $s)
+                );
+            })
             ->when($request->status, fn ($q) => $q->where('status', $request->status))
             ->when($request->type, fn ($q) => $q->where('type', $request->type))
+            ->when($request->request_type, fn ($q) => $q->where('request_type', $request->request_type))
             ->when($request->priority, fn ($q) => $q->where('priority', $request->priority))
             ->when($request->assigned_to, fn ($q) => $q->where('assigned_to', $request->assigned_to))
+            ->when($request->unassigned, fn ($q) => $q->whereNull('assigned_to'))
+            ->when($request->unresolved, fn ($q) => $q->whereNotIn('status', ['resolved', 'closed']))
+            ->when($request->date_from, fn ($q) => $q->whereDate('created_at', '>=', $request->date_from))
+            ->when($request->date_to, fn ($q) => $q->whereDate('created_at', '<=', $request->date_to))
+            ->withCount('replies')
             ->latest()
             ->paginate(20);
 
-        return response()->json(['success' => true, 'data' => SupportTicketResource::collection($tickets)->response()->getData(true)]);
+        return response()->json([
+            'success' => true,
+            'data'    => SupportTicketResource::collection($tickets)->response()->getData(true),
+            'stats'   => [
+                'total'       => SupportTicket::count(),
+                'open'        => SupportTicket::whereNotIn('status', ['resolved', 'closed'])->count(),
+                'unassigned'  => SupportTicket::whereNull('assigned_to')->whereNotIn('status', ['resolved', 'closed'])->count(),
+                'resolved'    => SupportTicket::where('status', 'resolved')->count(),
+                'high'        => SupportTicket::whereIn('priority', ['high', 'urgent'])->whereNotIn('status', ['resolved', 'closed'])->count(),
+            ],
+        ]);
     }
 
     public function show(SupportTicket $supportTicket): \Illuminate\Http\JsonResponse
@@ -48,7 +78,9 @@ class SupportTicketController extends Controller
             'is_internal_note' => $data['is_internal_note'] ?? false,
         ]);
 
-        ActivityLogger::log('ticket.reply', $supportTicket, [], $request);
+        ActivityLogger::log('ticket.reply', $supportTicket, [
+            'is_internal_note' => $data['is_internal_note'] ?? false,
+        ], $request);
 
         return response()->json([
             'success' => true,
@@ -59,18 +91,177 @@ class SupportTicketController extends Controller
     public function updateStatus(Request $request, SupportTicket $supportTicket): \Illuminate\Http\JsonResponse
     {
         $data = $request->validate([
-            'status'      => 'required|in:new,in_progress,waiting_response,resolved,closed',
-            'assigned_to' => 'nullable|exists:users,id',
+            'status'      => 'sometimes|in:new,in_progress,waiting_response,resolved,closed',
+            'priority'    => 'sometimes|in:low,medium,high,urgent',
+            'assigned_to' => 'sometimes|nullable|exists:users,id',
         ]);
+
+        $oldValues = [
+            'status'   => $supportTicket->status,
+            'priority' => $supportTicket->priority,
+        ];
+
+        if (isset($data['status']) && $data['status'] === 'resolved' && !$supportTicket->resolved_at) {
+            $data['resolved_at'] = now();
+        }
 
         $supportTicket->update($data);
 
-        ActivityLogger::log('ticket.status_changed', $supportTicket, $data, $request);
+        ActivityLogger::log(
+            isset($data['status']) ? 'ticket.status_changed' : 'ticket.priority_changed',
+            $supportTicket,
+            [],
+            $request,
+            $oldValues,
+            $data
+        );
 
         return response()->json([
             'success' => true,
-            'message' => 'Ticket updated.',
+            'message' => 'تم تحديث التذكرة.',
             'data'    => new SupportTicketResource($supportTicket->load(['user', 'assignedTo'])),
+        ]);
+    }
+
+    public function assign(Request $request, SupportTicket $supportTicket): \Illuminate\Http\JsonResponse
+    {
+        $data = $request->validate([
+            'assigned_to' => 'required|exists:users,id',
+        ]);
+
+        $oldAssignee = $supportTicket->assigned_to;
+
+        $supportTicket->update([
+            'assigned_to' => $data['assigned_to'],
+            'status'      => $supportTicket->status === 'new' ? 'in_progress' : $supportTicket->status,
+        ]);
+
+        $assignee  = User::find($data['assigned_to']);
+        $assigner  = $request->user();
+
+        ActivityLogger::log(
+            'ticket.assigned',
+            $supportTicket,
+            [],
+            $request,
+            ['assigned_to' => $oldAssignee],
+            ['assigned_to' => $data['assigned_to'], 'assigned_name' => $assignee?->name]
+        );
+
+        // Create in-app notification for the newly assigned user
+        if ($assignee && $assignee->id !== $assigner?->id) {
+            PlatformNotification::create([
+                'user_id'     => $assignee->id,
+                'type'        => 'ticket_assigned',
+                'title'       => 'تذكرة جديدة مُعيَّنة إليك',
+                'message'     => sprintf(
+                    'تم تعيين التذكرة "%s" (%s) إليك بواسطة %s. الأولوية: %s.',
+                    $supportTicket->subject,
+                    $supportTicket->ticket_number ?? '#' . $supportTicket->id,
+                    $assigner?->name ?? 'النظام',
+                    $supportTicket->priority ?? 'medium'
+                ),
+                'entity_type' => SupportTicket::class,
+                'entity_id'   => $supportTicket->id,
+                'action_url'  => '/dashboard/admin/support-tickets/' . $supportTicket->id,
+                'icon'        => 'ticket',
+                'color'       => 'blue',
+                'created_by'  => $assigner?->id,
+            ]);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم تعيين المسؤول.',
+            'data'    => new SupportTicketResource($supportTicket->load(['user', 'assignedTo'])),
+        ]);
+    }
+
+    public function resolve(Request $request, SupportTicket $supportTicket): \Illuminate\Http\JsonResponse
+    {
+        $supportTicket->update([
+            'status'      => 'resolved',
+            'resolved_at' => now(),
+        ]);
+
+        ActivityLogger::log('ticket.resolved', $supportTicket, [], $request);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم حل التذكرة.',
+            'data'    => new SupportTicketResource($supportTicket->load(['user', 'assignedTo'])),
+        ]);
+    }
+
+    public function assignees(): \Illuminate\Http\JsonResponse
+    {
+        $allowedRoles = ['super_admin', 'admin', 'tech_admin', 'hr_manager', 'teacher', 'instructor', 'support_agent', 'volunteer'];
+
+        // Active ticket counts per user
+        $activeTicketCounts = SupportTicket::whereNotNull('assigned_to')
+            ->whereNotIn('status', ['resolved', 'closed'])
+            ->selectRaw('assigned_to, count(*) as count')
+            ->groupBy('assigned_to')
+            ->pluck('count', 'assigned_to');
+
+        $users = User::whereIn('role', $allowedRoles)
+            ->where('is_active', true)
+            ->select(['id', 'name', 'email', 'role', 'department', 'avatar'])
+            ->orderBy('department')
+            ->orderBy('name')
+            ->get()
+            ->map(fn ($u) => [
+                'id'             => $u->id,
+                'name'           => $u->name,
+                'email'          => $u->email,
+                'role'           => $u->role,
+                'department'     => $u->department,
+                'avatar'         => $u->avatar,
+                'active_tickets' => $activeTicketCounts[$u->id] ?? 0,
+            ]);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $users,
+        ]);
+    }
+
+    public function activity(SupportTicket $supportTicket): \Illuminate\Http\JsonResponse
+    {
+        $logs = ActivityLog::where('entity_type', SupportTicket::class)
+            ->where('entity_id', $supportTicket->id)
+            ->with('user:id,name,avatar,role')
+            ->latest()
+            ->limit(50)
+            ->get()
+            ->map(fn ($log) => [
+                'id'         => $log->id,
+                'action'     => $log->action,
+                'old_values' => $log->old_values,
+                'new_values' => $log->new_values ?? $log->changes,
+                'user'       => $log->user ? [
+                    'id'     => $log->user->id,
+                    'name'   => $log->user->name,
+                    'avatar' => $log->user->avatar,
+                    'role'   => $log->user->role,
+                ] : null,
+                'created_at' => optional($log->created_at)->toISOString(),
+            ]);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $logs,
+        ]);
+    }
+
+    public function destroy(SupportTicket $supportTicket, Request $request): \Illuminate\Http\JsonResponse
+    {
+        ActivityLogger::log('ticket.deleted', $supportTicket, [], $request);
+        $supportTicket->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم حذف التذكرة.',
         ]);
     }
 }

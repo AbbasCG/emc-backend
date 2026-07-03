@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
 class EmailSetting extends Model
 {
@@ -13,8 +14,47 @@ class EmailSetting extends Model
 
     public static function isEnabled(string $key): bool
     {
-        $setting = static::where('key', $key)->first();
-        return $setting === null || (bool) $setting->enabled;
+        return Cache::remember("email_setting_{$key}", 300, function () use ($key) {
+            $setting = static::where('key', $key)->first();
+            return $setting === null || (bool) $setting->enabled;
+        });
+    }
+
+    public static function clearCache(string $key): void
+    {
+        Cache::forget("email_setting_{$key}");
+    }
+
+    public static function clearAllCache(): void
+    {
+        // Forget known keys — cache tags are not available on all drivers.
+        // EmailSettingsController::LABELS lists all known keys.
+        $keys = [
+            // Account
+            'welcome', 'account_created', 'temporary_password', 'password_reset',
+            // Learning
+            'course_enrollment', 'learning_path_enrollment',
+            'course_completion', 'learning_path_completion',
+            'assignment_submitted', 'assignment_graded', 'session_reminder',
+            // Admin
+            'admin_new_registration',
+            // Payment
+            'payment_confirmed',
+            // Contact
+            'contact_confirmation', 'contact_admin_notification',
+            // Volunteer
+            'volunteer_confirmation', 'volunteer_admin_notification',
+            // Workshop
+            'workshop_request_confirmation', 'workshop_request_submitted',
+            'workshop_request_admin_notification',
+            // Certificate
+            'certificate_ready', 'certificate_rejected', 'certificate_revoked',
+            'certificate_needs_approval', 'certificate_pdf_failed',
+        ];
+        foreach ($keys as $key) {
+            Cache::forget("email_setting_{$key}");
+        }
+        Log::debug('[EmailSetting] Cache cleared');
     }
 
     public static function senderName(): string

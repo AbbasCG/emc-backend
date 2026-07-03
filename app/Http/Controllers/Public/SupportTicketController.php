@@ -11,26 +11,39 @@ class SupportTicketController extends Controller
     public function store(Request $request): \Illuminate\Http\JsonResponse
     {
         $data = $request->validate([
-            'name'     => 'nullable|string|max:255',
-            'email'    => 'nullable|email',
-            'type'     => 'required|in:student,trainer,volunteer,technical,financial,partner',
-            'priority' => 'in:low,medium,high,urgent',
-            'subject'  => 'required|string|max:255',
-            'message'  => 'required|string',
+            'full_name'    => 'required|string|max:255',
+            'email'        => 'required|email|max:255',
+            'phone'        => 'required|string|max:30',
+            'request_type' => 'required|in:general,partnership,volunteer,technical',
+            'subject'      => 'required|string|max:255',
+            'message'      => 'required|string|max:5000',
+            'priority'     => 'in:low,medium,high,urgent',
         ]);
 
-        $data['user_id'] = $request->user()?->id;
+        $typeMap = [
+            'general'     => 'student',
+            'partnership' => 'partner',
+            'volunteer'   => 'volunteer',
+            'technical'   => 'technical',
+        ];
 
-        if (empty($data['name']) && $request->user()) {
-            $data['name']  = $request->user()->name;
-            $data['email'] = $request->user()->email;
-        }
-
-        SupportTicket::create($data);
+        SupportTicket::create([
+            'user_id'      => $request->user()?->id,
+            'full_name'    => $data['full_name'],
+            'name'         => $data['full_name'],
+            'email'        => $data['email'],
+            'phone'        => $data['phone'],
+            'request_type' => $data['request_type'],
+            'type'         => $typeMap[$data['request_type']] ?? 'student',
+            'subject'      => $data['subject'],
+            'message'      => $data['message'],
+            'priority'     => $data['priority'] ?? 'medium',
+            'status'       => 'new',
+        ]);
 
         return response()->json([
             'success' => true,
-            'message' => 'Support ticket submitted. We will respond as soon as possible.',
+            'message' => 'تم استلام طلبك. سيتواصل الفريق معك قريباً.',
         ], 201);
     }
 }

@@ -35,17 +35,17 @@ class IssueCertificateJob implements ShouldQueue
     public function handle(): void
     {
         try {
-            // Generate PDF if CertificateService is available
-            if (class_exists(\App\Services\CertificateService::class)) {
-                app(\App\Services\CertificateService::class)->generate($this->certificate);
-            }
+            Log::info('[Certificate] IssueCertificateJob: generating PDF', [
+                'certificate_id' => $this->certificate->id,
+            ]);
+
+            app(\App\Services\Certificate\CertificateRenderService::class)->storePdf($this->certificate);
 
             $this->certificate->update([
                 'status'    => 'issued',
                 'issued_at' => now(),
             ]);
 
-            // Notify the recipient
             $user = $this->certificate->user;
             if ($user) {
                 SendNotificationJob::dispatch($user, 'certificate_issued', [
@@ -55,9 +55,11 @@ class IssueCertificateJob implements ShouldQueue
                 ]);
             }
 
-            Log::info('Certificate issued', ['certificate_id' => $this->certificate->id]);
+            Log::info('[Certificate] IssueCertificateJob: issued', [
+                'certificate_id' => $this->certificate->id,
+            ]);
         } catch (\Throwable $e) {
-            Log::error('IssueCertificateJob failed', [
+            Log::error('[Certificate] IssueCertificateJob: failed', [
                 'certificate_id' => $this->certificate->id,
                 'error'          => $e->getMessage(),
             ]);

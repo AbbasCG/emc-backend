@@ -6,6 +6,7 @@ use App\Http\Controllers\Admin\AdminLmsAssignmentController;
 use App\Http\Controllers\Admin\AdminPartnerPortalController;
 use App\Http\Controllers\Admin\AuditLogController;
 use App\Http\Controllers\Admin\AutomationRuleController;
+use App\Http\Controllers\Admin\CertificateAnalyticsController;
 use App\Http\Controllers\Admin\CertificateBatchController;
 use App\Http\Controllers\Admin\CertificateController;
 use App\Http\Controllers\Admin\CertificateTemplateController;
@@ -18,6 +19,7 @@ use App\Http\Controllers\Admin\KnowledgeCategoryController;
 use App\Http\Controllers\Admin\KpiController;
 use App\Http\Controllers\Admin\LessonController;
 use App\Http\Controllers\Admin\QuizController;
+use App\Http\Controllers\Admin\QualityController;
 use App\Http\Controllers\Admin\QualityReviewController;
 use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Admin\ScholarshipController;
@@ -142,7 +144,8 @@ Route::prefix('auth')->middleware('throttle:auth')->group(function () {
 });
 
 // ─── Public: Certificate verification ────────────────────────────────────────
-Route::get('/certificates/verify/{code}', [CertificateVerificationController::class, 'verify']);
+Route::get('/certificates/verify/{code}', [CertificateVerificationController::class, 'verify'])
+    ->middleware('throttle:20,1');
 
 // Legacy compat: GET /api/certificates → admin or student list (avoid 404 from old clients)
 Route::middleware('auth:sanctum')->get('/certificates', [\App\Http\Controllers\Admin\CertificateController::class, 'legacyList']);
@@ -173,7 +176,7 @@ Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(fu
     Route::get('/reviews',       [StudentEvaluationController::class, 'index']);
     Route::get('/certificates',                       [StudentCertificateController::class, 'index']);
     Route::get('/certificates/{certificate}',         [StudentCertificateController::class, 'show']);
-    Route::get('/certificates/{certificate}/download',[StudentCertificateController::class, 'download']);
+    Route::get('/certificates/{certificate}/download',[StudentCertificateController::class, 'download'])->middleware('throttle:20,1');
 
     // Enrolled courses, registration history, discovery, and completed exams
     Route::get('/registrations',    [StudentRegistrationsController::class, 'index']);
@@ -928,9 +931,14 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::post('forms',                                               [DynamicFormController::class,             'store']);
     Route::put('forms/{form}',                                         [DynamicFormController::class,             'update']);
     Route::get('support-tickets',                                      [AdminSupportTicketController::class,      'index']);
+    Route::get('support-tickets/assignees',                            [AdminSupportTicketController::class,      'assignees']);
     Route::get('support-tickets/{supportTicket}',                      [AdminSupportTicketController::class,      'show']);
+    Route::get('support-tickets/{supportTicket}/activity',             [AdminSupportTicketController::class,      'activity']);
     Route::post('support-tickets/{supportTicket}/replies',             [AdminSupportTicketController::class,      'reply']);
     Route::patch('support-tickets/{supportTicket}',                    [AdminSupportTicketController::class,      'updateStatus']);
+    Route::patch('support-tickets/{supportTicket}/assign',             [AdminSupportTicketController::class,      'assign']);
+    Route::patch('support-tickets/{supportTicket}/resolve',            [AdminSupportTicketController::class,      'resolve']);
+    Route::delete('support-tickets/{supportTicket}',                   [AdminSupportTicketController::class,      'destroy']);
     Route::get('volunteers',                                           [VolunteerController::class,               'index']);
     Route::get('volunteers/{volunteer}',                               [VolunteerController::class,               'show']);
     Route::patch('volunteers/{volunteer}',                             [VolunteerController::class,               'update']);
@@ -964,12 +972,30 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_ma
 Route::get('kpi', [KpiController::class, 'unified'])
     ->middleware(['auth:sanctum', 'role:admin,finance_manager,quality_manager,programs_manager']);
 
-// ─── Quality aliases (frontend uses /quality/*, backend uses /admin/quality-reviews/*) ─
-// quality_manager role has MANAGE_QUALITY and APPROVE_QUALITY_REVIEWS permissions
-Route::middleware(['auth:sanctum', 'role:admin,quality_manager'])->prefix('quality')->group(function () {
-    Route::get('reviews',                    [QualityReviewController::class, 'index']);
-    Route::post('reviews',                   [QualityReviewController::class, 'store']);
-    Route::patch('reviews/{qualityReview}',  [QualityReviewController::class, 'update']);
+// ─── Quality Management System ────────────────────────────────────────────────
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,quality_manager'])->prefix('quality')->group(function () {
+    Route::get('dashboard',   [QualityController::class, 'dashboard']);
+    Route::get('workshops',   [QualityController::class, 'workshops']);
+    Route::get('team',        [QualityController::class, 'team']);
+    Route::get('audit-logs',  [QualityController::class, 'auditLogs']);
+    Route::get('compliance',  [QualityController::class, 'compliance']);
+
+    // Reviews (reuse existing controller)
+    Route::get('reviews',                       [QualityReviewController::class, 'index']);
+    Route::post('reviews',                      [QualityReviewController::class, 'store']);
+    Route::get('reviews/{qualityReview}',       [QualityReviewController::class, 'show']);
+    Route::patch('reviews/{qualityReview}',     [QualityReviewController::class, 'update']);
+    Route::post('reviews/{qualityReview}/approve', [QualityReviewController::class, 'approve']);
+
+    // Incidents
+    Route::get('incidents',                          [QualityController::class, 'incidents']);
+    Route::post('incidents',                         [QualityController::class, 'storeIncident']);
+    Route::patch('incidents/{qualityIncident}',      [QualityController::class, 'updateIncident']);
+
+    // Corrective Actions
+    Route::get('corrective-actions',                                    [QualityController::class, 'correctiveActions']);
+    Route::post('corrective-actions',                                   [QualityController::class, 'storeCorrectiveAction']);
+    Route::patch('corrective-actions/{qualityCorrectiveAction}',        [QualityController::class, 'updateCorrectiveAction']);
 });
 
 // ─── Reports aliases (frontend uses /reports directly) ───────────────────────
@@ -1032,6 +1058,14 @@ Route::post('support/tickets', [PublicSupportTicketController::class, 'store'])
 
 // ─── Contact form (public) ───────────────────────────────────────────────────
 Route::post('contact', function (\Illuminate\Http\Request $request) {
+    $typeMap = [
+        'general'     => 'student',
+        'partnership' => 'partner',
+        'volunteer'   => 'volunteer',
+        'technical'   => 'technical',
+        'tech'        => 'technical',
+    ];
+
     $data = $request->validate([
         'name'     => 'required|string|max:200',
         'email'    => 'required|email|max:200',
@@ -1041,16 +1075,54 @@ Route::post('contact', function (\Illuminate\Http\Request $request) {
         'message'  => 'required|string|max:5000',
     ]);
 
-    \App\Models\SupportTicket::create([
-        'type'          => $data['category'] ?? 'general',
-        'priority'      => 'medium',
-        'subject'       => $data['subject'] ?? $data['name'] . ' — contact',
-        'message'       => $data['message'],
-        'contact_name'  => $data['name'],
-        'contact_email' => $data['email'],
-        'contact_phone' => $data['phone'] ?? null,
-        'status'        => 'open',
+    $ticket = \App\Models\SupportTicket::create([
+        'full_name'    => $data['name'],
+        'name'         => $data['name'],
+        'email'        => $data['email'],
+        'phone'        => $data['phone'] ?? null,
+        'request_type' => $data['category'] ?? 'general',
+        'type'         => $typeMap[$data['category'] ?? 'general'] ?? 'student',
+        'priority'     => 'medium',
+        'subject'      => $data['subject'] ?? ($data['name'] . ' — contact'),
+        'message'      => $data['message'],
+        'status'       => 'new',
+        'user_id'      => $request->user()?->id,
     ]);
+
+    $submittedAt = now()->format('Y-m-d H:i');
+    $subject     = $data['subject'] ?? ($data['name'] . ' — contact');
+    $category    = $data['category'] ?? 'general';
+
+    // Confirmation to visitor
+    \App\Services\EmailService::dispatch(
+        'contact_confirmation',
+        $data['email'],
+        $data['name'],
+        $request->user()?->id,
+        new \App\Mail\ContactConfirmationMail($data['name'], $subject, $data['message'], $submittedAt),
+        'تم استلام رسالتك — منصة EMC',
+    );
+
+    // Notification to admin support team
+    $adminEmail = (string) config('mail.support_email', config('mail.from.address', ''));
+    if ($adminEmail) {
+        \App\Services\EmailService::dispatch(
+            'contact_admin_notification',
+            $adminEmail,
+            'فريق الدعم',
+            null,
+            new \App\Mail\ContactAdminNotificationMail(
+                $data['name'],
+                $data['email'],
+                $data['phone'] ?? null,
+                $subject,
+                $data['message'],
+                $category,
+                $submittedAt,
+            ),
+            'رسالة جديدة من نموذج التواصل — ' . $data['name'],
+        );
+    }
 
     return response()->json(['success' => true, 'message' => 'تم إرسال رسالتك بنجاح']);
 })->middleware('throttle:api');
@@ -1113,30 +1185,58 @@ Route::middleware(['auth:sanctum', 'role:programs_manager,admin,super_admin,tech
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,programs_manager'])->prefix('admin')->group(function () {
     Route::get('certificates/stats',                          [CertificateController::class, 'stats']);
     Route::get('certificates/eligibility',                    [CertificateController::class, 'eligibility']);
-    Route::post('certificates/bulk-issue',                    [CertificateController::class, 'bulkIssue']);
+    Route::get('certificates/export',                         [CertificateController::class, 'export'])->middleware('throttle:10,1');
+
+    // Expensive write operations — rate-limited
+    Route::post('certificates/bulk-issue',                    [CertificateController::class, 'bulkIssue'])->middleware('throttle:5,1');
 
     Route::get('certificates/templates',                      [CertificateTemplateController::class, 'index']);
     Route::post('certificates/templates',                     [CertificateTemplateController::class, 'store']);
+    Route::get('certificates/templates/default',              [CertificateTemplateController::class, 'getDefault']);
     Route::get('certificates/templates/{template}',           [CertificateTemplateController::class, 'show']);
     Route::put('certificates/templates/{template}',           [CertificateTemplateController::class, 'update']);
     Route::delete('certificates/templates/{template}',        [CertificateTemplateController::class, 'destroy']);
     Route::put('certificates/templates/{template}/activate',  [CertificateTemplateController::class, 'toggleActive']);
-    Route::get('certificates/templates/{template}/preview',   [CertificateTemplateController::class, 'preview']);
+    Route::get('certificates/templates/{template}/preview',   [CertificateTemplateController::class, 'preview'])->middleware('throttle:60,1');
+    Route::post('certificates/templates/preview-designer',    [CertificateTemplateController::class, 'previewDesigner'])->middleware('throttle:60,1');
+    Route::put('certificates/templates/{template}/designer',     [CertificateTemplateController::class, 'saveDesigner']);
+    Route::put('certificates/templates/{template}/set-default',  [CertificateTemplateController::class, 'setDefault']);
+    Route::post('certificates/templates/{template}/duplicate',   [CertificateTemplateController::class, 'duplicate']);
+    Route::post('certificates/templates/{template}/upload-asset', [CertificateTemplateController::class, 'uploadAsset']);
 
     Route::get('certificates/batches',                        [CertificateBatchController::class, 'index']);
     Route::get('certificates/batches/{batch}',                [CertificateBatchController::class, 'show']);
 
+    // ── Analytics (must be registered before wildcard {certificate} routes) ──
+    Route::prefix('certificates/analytics')->middleware('throttle:30,1')->group(function () {
+        Route::get('overview',         [CertificateAnalyticsController::class, 'overview']);
+        Route::get('trends',           [CertificateAnalyticsController::class, 'trends']);
+        Route::get('status-distribution', [CertificateAnalyticsController::class, 'statusDistribution']);
+        Route::get('approval',         [CertificateAnalyticsController::class, 'approval']);
+        Route::get('pdf',              [CertificateAnalyticsController::class, 'pdf']);
+        Route::get('downloads',        [CertificateAnalyticsController::class, 'downloads']);
+        Route::get('templates',        [CertificateAnalyticsController::class, 'templates']);
+        Route::get('courses',          [CertificateAnalyticsController::class, 'courses']);
+        Route::get('workshops',        [CertificateAnalyticsController::class, 'workshops']);
+        Route::get('learning-paths',   [CertificateAnalyticsController::class, 'learningPaths']);
+        Route::get('batches',          [CertificateAnalyticsController::class, 'batches']);
+        Route::get('failures',         [CertificateAnalyticsController::class, 'failures']);
+        Route::get('export/{type}',    [CertificateAnalyticsController::class, 'export'])->middleware('throttle:5,1');
+    });
+
     Route::get('certificates',                      [CertificateController::class, 'index']);
     Route::post('certificates',                     [CertificateController::class, 'store']);
     Route::get('certificates/{certificate}',        [CertificateController::class, 'show']);
-    Route::put('certificates/{certificate}/approve',  [CertificateController::class, 'approve']);
-    Route::post('certificates/{certificate}/approve', [CertificateController::class, 'approve']);
-    Route::put('certificates/{certificate}/issue',   [CertificateController::class, 'issue']);
-    Route::post('certificates/{certificate}/issue',  [CertificateController::class, 'issue']);
-    Route::put('certificates/{certificate}/revoke',  [CertificateController::class, 'revoke']);
-    Route::post('certificates/{certificate}/revoke', [CertificateController::class, 'revoke']);
-    Route::post('certificates/{certificate}/regenerate',      [CertificateController::class, 'regenerate']);
-    Route::get('certificates/{certificate}/download',         [CertificateController::class, 'download']);
+    Route::post('certificates/{certificate}/approve', [CertificateController::class, 'approve'])->middleware('throttle:30,1');
+    Route::post('certificates/{certificate}/issue',  [CertificateController::class, 'issue'])->middleware('throttle:30,1');
+    Route::post('certificates/{certificate}/revoke', [CertificateController::class, 'revoke'])->middleware('throttle:20,1');
+    Route::post('certificates/{certificate}/regenerate',      [CertificateController::class, 'regenerate'])->middleware('throttle:10,1');
+    Route::get('certificates/{certificate}/download',         [CertificateController::class, 'download'])->middleware('throttle:30,1');
+    Route::get('certificates/{certificate}/approvals',        [CertificateController::class, 'approvals']);
+    Route::post('certificates/{certificate}/approvals',       [CertificateController::class, 'recordApproval'])->middleware('throttle:30,1');
+    Route::get('certificates/{certificate}/logs',             [CertificateController::class, 'logs']);
+    Route::post('certificates/{certificate}/generate-designer', [CertificateController::class, 'generateDesigner'])->middleware('throttle:10,1');
+    Route::post('certificates/{certificate}/retry-pdf',          [CertificateController::class, 'retryPdf'])->middleware('throttle:10,1');
 });
 
 // ─── Material file/download: authenticated streams (replaces raw /storage/ links) ─

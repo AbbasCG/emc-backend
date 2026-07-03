@@ -68,6 +68,21 @@ return Application::configure(basePath: dirname(__DIR__))
             ], 401);
         });
 
+        // 401 — RouteNotFoundException thrown when Sanctum tries route('login') for
+        // browser requests (no Accept: application/json). Only relevant for api/* routes
+        // since web routes legitimately use named login redirects.
+        $exceptions->render(function (
+            \Symfony\Component\Routing\Exception\RouteNotFoundException $e,
+            \Illuminate\Http\Request $request,
+        ) {
+            if ($request->is('api/*')) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthenticated. Please provide a valid Bearer token.',
+                ], 401);
+            }
+        });
+
         // 403 — Unauthorized action (policy / gate failure)
         $exceptions->render(function (
             \Illuminate\Auth\Access\AuthorizationException $e,

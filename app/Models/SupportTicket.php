@@ -9,9 +9,26 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class SupportTicket extends Model
 {
     protected $fillable = [
-        'user_id', 'name', 'email', 'type', 'priority',
-        'status', 'subject', 'message', 'assigned_to',
+        'user_id', 'ticket_number', 'name', 'full_name', 'email', 'phone',
+        'type', 'request_type', 'priority', 'status', 'subject', 'message',
+        'assigned_to', 'resolved_at',
     ];
+
+    protected $casts = [
+        'resolved_at' => 'datetime',
+    ];
+
+    protected static function booted(): void
+    {
+        static::creating(function (self $ticket) {
+            if (empty($ticket->ticket_number)) {
+                $ticket->ticket_number = 'TK-' . date('Ym') . '-' . str_pad(
+                    self::whereYear('created_at', date('Y'))->whereMonth('created_at', date('m'))->count() + 1,
+                    4, '0', STR_PAD_LEFT
+                );
+            }
+        });
+    }
 
     public function user(): BelongsTo
     {

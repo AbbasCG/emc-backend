@@ -38,3 +38,6 @@ Thumbs.db
 /..gitattributes
 
 docs/
+
+database/schema/mysql-schema.sql.bak
+database/schema/mysql-schema.sql

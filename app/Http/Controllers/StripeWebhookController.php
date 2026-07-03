@@ -3,7 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Enums\RegistrationStatus;
-use App\Mail\CourseRegistrationConfirmation;
+use App\Mail\PaymentConfirmedMail;
 use App\Models\Invoice;
 use App\Models\Order;
 use App\Models\Payment;
@@ -309,12 +309,12 @@ class StripeWebhookController extends Controller
             AuditLogService::log('student_enrolled_after_payment', 'Registration', $registration->id);
 
             EmailService::dispatch(
-                'payment_confirmation',
+                'payment_confirmed',
                 $registration->email,
                 $registration->full_name ?? '',
                 $registration->user_id,
-                new CourseRegistrationConfirmation($registration),
-                'تأكيد تسجيلك في الدورة'
+                PaymentConfirmedMail::fromRegistration($registration),
+                'تأكيد الدفع وإتمام التسجيل — ' . ($registration->course?->title ?? ''),
             );
         }
     }

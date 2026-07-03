@@ -5,7 +5,7 @@ namespace App\Http\Controllers;
 use App\Enums\RegistrationStatus;
 use App\Http\Resources\PaymentResource;
 use App\Http\Resources\RegistrationResource;
-use App\Mail\CourseRegistrationConfirmation;
+use App\Mail\PaymentConfirmedMail;
 use App\Models\Payment;
 use App\Services\AuditLogService;
 use App\Services\EmailService;
@@ -258,12 +258,12 @@ class PaymentController extends Controller
 
         if ($registration) {
             EmailService::dispatch(
-                'payment_confirmation',
+                'payment_confirmed',
                 $registration->email,
                 $registration->full_name ?? '',
                 $registration->user_id,
-                new CourseRegistrationConfirmation($registration),
-                'تأكيد تسجيلك في الدورة'
+                PaymentConfirmedMail::fromRegistration($registration),
+                'تأكيد الدفع وإتمام التسجيل — ' . ($registration->course?->title ?? ''),
             );
         }
     }

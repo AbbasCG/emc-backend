@@ -696,6 +696,17 @@ class InstructorCourseContentController extends Controller
         }
         unset($data['visible'], $data['required']);
 
+        // Convert Amsterdam local time → UTC before storing (see validateSession() above).
+        if (!empty($data['deadline'])) {
+            try {
+                $data['deadline'] = \Carbon\Carbon::parse($data['deadline'], 'Europe/Amsterdam')
+                    ->utc()
+                    ->toDateTimeString();
+            } catch (\Throwable) {
+                // leave original value; database cast will handle it
+            }
+        }
+
         return $data;
     }
 }

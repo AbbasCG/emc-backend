@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Public;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\VolunteerRequestResource;
+use App\Mail\VolunteerApplicationConfirmationMail;
 use App\Models\VolunteerRequest;
+use App\Services\EmailService;
 use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -57,10 +59,26 @@ class VolunteerRequestController extends Controller
             'status'              => 'pending',
         ]);
 
+        // Confirmation to applicant
+        EmailService::dispatch(
+            'volunteer_confirmation',
+            $volunteerRequest->email,
+            $volunteerRequest->full_name,
+            null,
+            new VolunteerApplicationConfirmationMail(
+                $volunteerRequest->full_name,
+                $volunteerRequest->desired_department,
+                now()->format('Y-m-d H:i'),
+            ),
+            'تم استلام طلب التطوع — منصة EMC',
+        );
+
+        // In-app + email notification to admins/HR
         NotificationService::volunteerRequestSubmitted(
             $volunteerRequest->id,
             $volunteerRequest->full_name,
             $volunteerRequest->desired_department,
+            $volunteerRequest,
         );
 
         return response()->json([

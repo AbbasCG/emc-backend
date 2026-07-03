@@ -3,15 +3,17 @@
 namespace App\Services;
 
 use App\Enums\RegistrationStatus;
+use App\Mail\AccountCreatedMail;
 use App\Mail\AdminNewRegistrationMail;
 use App\Mail\AssignmentGradedMail;
 use App\Mail\AssignmentSubmittedMail;
-use App\Mail\CertificateMail;
 use App\Mail\CourseCompletionMail;
 use App\Mail\CourseEnrollmentMail;
 use App\Mail\LearningPathCompletionMail;
 use App\Mail\LearningPathEnrollmentMail;
+use App\Mail\VolunteerApplicationAdminMail;
 use App\Mail\WelcomeMail;
+use App\Models\VolunteerRequest;
 use App\Models\Department;
 use App\Models\PlatformNotification;
 use App\Models\Registration;
@@ -412,20 +414,33 @@ class NotificationService
 
         $user = User::find($userId);
         if ($user?->email) {
-            EmailService::dispatch(
-                'welcome',
-                $user->email,
-                $user->name,
-                $userId,
-                new WelcomeMail($user->name, $user->email, $tempPassword),
-                'مرحباً بك في منصة EMC'
-            );
+            if ($tempPassword) {
+                // Admin-created account with temporary password
+                EmailService::dispatch(
+                    'account_created',
+                    $user->email,
+                    $user->name,
+                    $userId,
+                    new AccountCreatedMail($user->name, $user->email, $tempPassword),
+                    'مرحباً بك في منصة EMC',
+                );
+            } else {
+                // Self-registered or no temp password
+                EmailService::dispatch(
+                    'welcome',
+                    $user->email,
+                    $user->name,
+                    $userId,
+                    new WelcomeMail($user->name, $user->email, null),
+                    'مرحباً بك في منصة EMC',
+                );
+            }
         }
     }
 
     // ── Volunteer request ────────────────────────────────────────────────────
 
-    public static function volunteerRequestSubmitted(int $requestId, string $fullName, string $desiredDepartment): void
+    public static function volunteerRequestSubmitted(int $requestId, string $fullName, string $desiredDepartment, ?VolunteerRequest $volunteerRequest = null): void
     {
         // Base: super_admin + admin + executive_admin + hr_manager always notified
         $baseIds = User::whereIn('role', ['super_admin', 'admin', 'executive_admin', 'hr_manager'])
@@ -456,6 +471,21 @@ class NotificationService
                 'color'       => 'green',
             ]
         );
+
+        // Email notification to all admin recipients who have an email address
+        if ($volunteerRequest) {
+            $adminUsers = User::whereIn('id', $recipients)->whereNotNull('email')->get(['id', 'name', 'email']);
+            foreach ($adminUsers as $admin) {
+                EmailService::dispatch(
+                    'volunteer_admin_notification',
+                    $admin->email,
+                    $admin->name,
+                    $admin->id,
+                    VolunteerApplicationAdminMail::fromRequest($volunteerRequest, $admin->name, $requestId),
+                    "طلب تطوع جديد — {$fullName}",
+                );
+            }
+        }
     }
 
     // ── Volunteer → member conversion ────────────────────────────────────────
@@ -667,9 +697,11 @@ class NotificationService
         string $courseTitle,
         string $verificationCode
     ): void {
+        // In-app notification only — the email is sent separately via EmailService
+        // when the PDF is confirmed ready (CertificatePublishService or SendCertificateReadyNotification).
         self::send($studentUserId, 'certificate_issued',
             'تم إصدار شهادتك',
-            "تهانينا! تم إصدار شهادة إتمام الدورة: {$courseTitle}. رمز التحقق: {$verificationCode}",
+            "تهانينا! تم إصدار شهادة إتمام الدورة: {$courseTitle}.",
             [
                 'entity_type' => 'certificate',
                 'entity_id'   => $certificateId,
@@ -678,18 +710,6 @@ class NotificationService
                 'color'       => 'yellow',
             ]
         );
-
-        $student = User::find($studentUserId);
-        if ($student?->email) {
-            EmailService::dispatch(
-                'certificate_issued',
-                $student->email,
-                $student->name,
-                $studentUserId,
-                new CertificateMail($student->name, $courseTitle, null, $verificationCode),
-                "شهادتك جاهزة: {$courseTitle}"
-            );
-        }
     }
 
     /**

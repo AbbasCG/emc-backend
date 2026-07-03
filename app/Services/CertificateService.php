@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Events\Certificate\CertificateIssued;
+use App\Events\Certificate\CertificateRevoked;
 use App\Jobs\GenerateCertificatePdfJob;
 use App\Models\Certificate;
 use App\Models\CertificateGenerationBatch;
@@ -20,6 +22,7 @@ class CertificateService
         ]);
 
         ActivityLogger::log('certificate.issued', $certificate, [], request());
+        event(new CertificateIssued($certificate->fresh()));
 
         // Notify the student.
         $certificate->loadMissing('user', 'course');
@@ -53,6 +56,7 @@ class CertificateService
         $certificate->update(['status' => 'revoked']);
 
         ActivityLogger::log('certificate.revoked', $certificate, [], request());
+        event(new CertificateRevoked($certificate->fresh(), $certificate->revoke_reason));
 
         return $certificate->fresh();
     }
@@ -67,14 +71,20 @@ class CertificateService
     }
 
     /**
-     * Generate certificate HTML and return certificate_code.
+     * @throws \LogicException always — synchronous PDF generation is disabled.
+     *
+     * Use GenerateCertificatePdfJob::dispatch($certificate) to queue PDF generation.
+     * Synchronous generation blocks the HTTP thread, bypasses retry logic, and
+     * circumvents the ShouldBeUnique deduplication guard on the job.
+     *
+     * @deprecated
      */
-    public function generate(Certificate $certificate): string
+    public function generate(Certificate $certificate): never
     {
-        $pdfService = app(CertificatePdfService::class);
-        $pdfService->generate($certificate);
-
-        return $certificate->certificate_code ?? $certificate->verification_code ?? '';
+        throw new \LogicException(
+            'CertificateService::generate() is disabled. '
+            . 'Use GenerateCertificatePdfJob::dispatch($certificate) to queue PDF generation.'
+        );
     }
 
     /**
@@ -142,24 +152,53 @@ class CertificateService
         $issuedById  = $params['issued_by_id'] ?? null;
         $type        = $params['type'] ?? $params['certificate_type'] ?? 'course_completion';
         $templateId  = $params['template_id'] ?? null;
+
+        // Auto-assign the default designer template if none provided
+        if (! $templateId) {
+            $defaultTemplate = \App\Models\CertificateTemplate::where('is_default', true)
+                ->where('is_active', true)
+                ->first()
+                ?? \App\Models\CertificateTemplate::where('designer_mode', true)
+                    ->where('is_active', true)
+                    ->orderBy('id')
+                    ->first();
+            $templateId = $defaultTemplate?->id;
+        }
         $relatedType = $params['related_type'] ?? null;
         $relatedId   = $params['related_id'] ?? null;
         $override    = (bool) ($params['override'] ?? false);
 
         [$courseId, $workshopId, $trackId] = $this->resolveRelatedIds($relatedType, $relatedId);
 
+        // Load all users in one query to avoid N+1 inside the loop.
+        $userMap = User::whereIn('id', $userIds)
+            ->get(['id', 'name', 'email'])
+            ->keyBy('id');
+
+        // Load existing non-revoked certificates for these users in one query so the
+        // duplicate check below doesn't fire an individual query per user.
+        $existingUserIds = ! $override
+            ? Certificate::where('certificate_type', $type)
+                ->whereIn('user_id', $userIds)
+                ->where('status', '!=', 'revoked')
+                ->when($relatedType, fn ($q) => $q->where('related_type', $relatedType))
+                ->when($relatedId,   fn ($q) => $q->where('related_id',   $relatedId))
+                ->pluck('user_id')
+                ->flip()   // O(1) lookup
+            : collect();
+
         $created      = 0;
         $skipped      = 0;
         $certificates = [];
 
         foreach ($userIds as $userId) {
-            $user = User::find($userId);
+            $user = $userMap->get($userId);
             if (! $user) {
                 $skipped++;
                 continue;
             }
 
-            if (! $override && $this->hasActiveDuplicate($userId, $type, $relatedType, $relatedId)) {
+            if (! $override && $existingUserIds->has($userId)) {
                 $skipped++;
                 continue;
             }

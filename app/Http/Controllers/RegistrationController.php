@@ -8,7 +8,6 @@ use App\Http\Requests\StoreRegistrationRequest;
 use App\Http\Resources\CourseResource;
 use App\Http\Resources\PaymentResource;
 use App\Http\Resources\RegistrationResource;
-use App\Mail\CourseRegistrationConfirmation;
 use App\Models\Course;
 use App\Models\Payment;
 use App\Models\Registration;
@@ -21,7 +20,6 @@ use App\Support\PaymentStatuses;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 use Stripe\Exception\ApiErrorException as StripeApiException;
 use Throwable;
 
@@ -244,10 +242,6 @@ class RegistrationController extends Controller
                 ['status' => $freeRegistration->status, 'course_id' => $course->id, 'user_id' => $authUser?->id],
                 null, $request
             );
-
-            // Confirmation email (always — guest and authenticated)
-            Mail::to($freeRegistration->email)
-                ->queue(new CourseRegistrationConfirmation($freeRegistration));
 
             if ($authUser) {
                 // Authenticated: fire event — listener handles both student + admin notifications

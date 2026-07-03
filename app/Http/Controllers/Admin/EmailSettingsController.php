@@ -12,18 +12,39 @@ use Illuminate\Http\Request;
 class EmailSettingsController extends Controller
 {
     private const LABELS = [
-        'welcome'                  => ['label' => 'بريد الترحيب', 'description' => 'يُرسل للمستخدم عند إنشاء حسابه لأول مرة'],
-        'course_enrollment'        => ['label' => 'تسجيل في دورة', 'description' => 'يُرسل للطالب عند تسجيله في دورة تدريبية'],
-        'learning_path_enrollment' => ['label' => 'تسجيل في مسار', 'description' => 'يُرسل للطالب عند انضمامه لمسار تعليمي'],
-        'course_completion'        => ['label' => 'إتمام دورة', 'description' => 'يُرسل للطالب عند اجتيازه دورة بالكامل'],
-        'learning_path_completion' => ['label' => 'إتمام مسار', 'description' => 'يُرسل للطالب عند إكماله المسار التعليمي كاملاً'],
-        'assignment_submitted'     => ['label' => 'تسليم واجب (للمدرب)', 'description' => 'يُرسل للمدرب عندما يسلّم طالب واجبه'],
-        'assignment_graded'        => ['label' => 'تقييم واجب (للطالب)', 'description' => 'يُرسل للطالب بعد تقييم المدرب لواجبه'],
-        'session_reminder'         => ['label' => 'تذكير بالجلسة', 'description' => 'يُرسل قبل 24 ساعة وساعة واحدة من موعد الجلسة'],
-        'certificate_issued'       => ['label' => 'إصدار شهادة', 'description' => 'يُرسل للطالب عند إصدار شهادة إتمامه'],
-        'admin_new_registration'   => ['label' => 'تسجيل جديد (للإدارة)', 'description' => 'يُرسل للمشرفين عند كل تسجيل طالب جديد'],
-        'certificate_issued'       => ['label' => 'إصدار شهادة', 'description' => 'يُرسل للطالب عند إصدار شهادة إتمامه'],
-        'payment_confirmation'     => ['label' => 'تأكيد الدفع', 'description' => 'يُرسل للطالب عند تأكيد الدفع وإتمام التسجيل في الدورة'],
+        // ── Account ────────────────────────────────────────────────────────────
+        'welcome'                            => ['label' => 'بريد الترحيب (تسجيل ذاتي)',      'description' => 'يُرسل للمستخدم عند إنشاء حسابه بنفسه لأول مرة'],
+        'account_created'                    => ['label' => 'حساب جديد (إنشاء إداري)',        'description' => 'يُرسل للمستخدم عند إنشاء حسابه من قِبل مشرف مع كلمة مرور مؤقتة'],
+        'temporary_password'                 => ['label' => 'كلمة المرور المؤقتة',            'description' => 'يُرسل عند إرسال كلمة مرور مؤقتة للمستخدم'],
+        'password_reset'                     => ['label' => 'إعادة تعيين كلمة المرور',        'description' => 'يُرسل للمستخدم عند طلب إعادة تعيين كلمة المرور'],
+        // ── Learning ──────────────────────────────────────────────────────────
+        'course_enrollment'                  => ['label' => 'تسجيل في دورة',                  'description' => 'يُرسل للطالب عند تسجيله في دورة تدريبية'],
+        'learning_path_enrollment'           => ['label' => 'تسجيل في مسار',                  'description' => 'يُرسل للطالب عند انضمامه لمسار تعليمي'],
+        'course_completion'                  => ['label' => 'إتمام دورة',                     'description' => 'يُرسل للطالب عند اجتيازه دورة بالكامل'],
+        'learning_path_completion'           => ['label' => 'إتمام مسار',                     'description' => 'يُرسل للطالب عند إكماله المسار التعليمي كاملاً'],
+        'assignment_submitted'               => ['label' => 'تسليم واجب (للمدرب)',            'description' => 'يُرسل للمدرب عندما يسلّم طالب واجبه'],
+        'assignment_graded'                  => ['label' => 'تقييم واجب (للطالب)',            'description' => 'يُرسل للطالب بعد تقييم المدرب لواجبه'],
+        'session_reminder'                   => ['label' => 'تذكير بالجلسة',                  'description' => 'يُرسل قبل 24 ساعة وساعة واحدة من موعد الجلسة'],
+        // ── Admin ─────────────────────────────────────────────────────────────
+        'admin_new_registration'             => ['label' => 'تسجيل جديد (للإدارة)',           'description' => 'يُرسل للمشرفين عند كل تسجيل طالب جديد'],
+        // ── Payment ───────────────────────────────────────────────────────────
+        'payment_confirmed'                  => ['label' => 'تأكيد الدفع',                    'description' => 'يُرسل للطالب عند تأكيد الدفع وإتمام التسجيل في الدورة'],
+        // ── Contact ───────────────────────────────────────────────────────────
+        'contact_confirmation'               => ['label' => 'تأكيد استلام رسالة التواصل',     'description' => 'يُرسل لمرسل نموذج التواصل تأكيداً باستلام رسالته'],
+        'contact_admin_notification'         => ['label' => 'رسالة تواصل للإدارة',            'description' => 'يُرسل للفريق الإداري عند ورود رسالة جديدة من نموذج التواصل'],
+        // ── Volunteer ─────────────────────────────────────────────────────────
+        'volunteer_confirmation'             => ['label' => 'تأكيد طلب التطوع (للمتقدم)',     'description' => 'يُرسل لمقدم طلب التطوع تأكيداً باستلام طلبه'],
+        'volunteer_admin_notification'       => ['label' => 'طلب تطوع جديد (للإدارة)',        'description' => 'يُرسل للمشرفين وفريق الموارد البشرية عند ورود طلب تطوع جديد'],
+        // ── Workshop ──────────────────────────────────────────────────────────
+        'workshop_request_confirmation'      => ['label' => 'تأكيد استلام طلب البرنامج',      'description' => 'يُرسل لمقدم الطلب عند استلام طلب البرنامج التدريبي'],
+        'workshop_request_submitted'         => ['label' => 'طلب برنامج لفريق التصميم',       'description' => 'يُرسل لفريق التصميم عند ورود طلب برنامج تدريبي جديد'],
+        'workshop_request_admin_notification'=> ['label' => 'طلب برنامج للإدارة',             'description' => 'يُرسل للمشرفين الإداريين عند ورود طلب برنامج تدريبي جديد'],
+        // ── Certificate ───────────────────────────────────────────────────────
+        'certificate_ready'                  => ['label' => 'شهادة جاهزة للتحميل',            'description' => 'يُرسل للطالب عند اكتمال إصدار الشهادة وتوفر ملف PDF'],
+        'certificate_rejected'               => ['label' => 'رفض الشهادة',                    'description' => 'يُرسل للطالب عند رفض طلب اعتماد شهادته'],
+        'certificate_revoked'                => ['label' => 'إلغاء الشهادة',                  'description' => 'يُرسل للطالب عند إلغاء شهادة سبق إصدارها'],
+        'certificate_needs_approval'         => ['label' => 'شهادة تنتظر الاعتماد',           'description' => 'يُرسل للمشرفين ومديري البرامج عند إنشاء شهادة جديدة'],
+        'certificate_pdf_failed'             => ['label' => 'فشل إنشاء PDF للشهادة',          'description' => 'يُرسل للمشرفين التقنيين عند فشل توليد ملف الشهادة بعد كل المحاولات'],
     ];
 
     public function index(): JsonResponse
@@ -80,6 +101,8 @@ class EmailSettingsController extends Controller
         if (array_key_exists('sender_email', $data)) {
             EmailSetting::updateOrCreate(['key' => 'global_sender_email'], ['sender_email' => $data['sender_email']]);
         }
+
+        EmailSetting::clearAllCache();
 
         return response()->json(['message' => 'تم حفظ الإعدادات بنجاح.']);
     }

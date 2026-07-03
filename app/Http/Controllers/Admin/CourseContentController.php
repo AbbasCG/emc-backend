@@ -94,8 +94,10 @@ class CourseContentController extends Controller
 
     // ─── Modules — flat (PUT /admin/modules/{module}) ─────────────────────────
 
-    public function updateModule(Request $request, CourseModule $module): JsonResponse
+    public function updateModule(Request $request, Course $course, CourseModule $module): JsonResponse
     {
+        $this->enforceCourseScope($course, $module->course_id);
+
         $data = $request->validate([
             'title'       => 'sometimes|string|max:255',
             'description' => 'nullable|string',
@@ -116,8 +118,10 @@ class CourseContentController extends Controller
         ]);
     }
 
-    public function destroyModule(Request $request, CourseModule $module): JsonResponse
+    public function destroyModule(Request $request, Course $course, CourseModule $module): JsonResponse
     {
+        $this->enforceCourseScope($course, $module->course_id);
+
         AuditLogService::logModel('deleted', $module, null, null, ['course_id' => $module->course_id], $request);
         $module->delete();
 
@@ -147,8 +151,10 @@ class CourseContentController extends Controller
 
     // ─── Sessions — flat (PUT /admin/sessions/{session}) ─────────────────────
 
-    public function updateCourseSession(Request $request, CourseSession $courseSession): JsonResponse
+    public function updateCourseSession(Request $request, Course $course, CourseSession $courseSession): JsonResponse
     {
+        $this->enforceCourseScope($course, $courseSession->course_id);
+
         $data = $this->validateSession($request, required: false);
 
         $old = $courseSession->only(['title', 'description', 'status', 'start_at', 'end_at', 'location']);
@@ -163,8 +169,10 @@ class CourseContentController extends Controller
         ]);
     }
 
-    public function destroyCourseSession(Request $request, CourseSession $courseSession): JsonResponse
+    public function destroyCourseSession(Request $request, Course $course, CourseSession $courseSession): JsonResponse
     {
+        $this->enforceCourseScope($course, $courseSession->course_id);
+
         AuditLogService::logModel('deleted', $courseSession, null, null, ['course_id' => $courseSession->course_id], $request);
         $courseSession->delete();
 
@@ -201,8 +209,10 @@ class CourseContentController extends Controller
 
     // ─── Materials — flat (PUT /admin/materials/{material}) ───────────────────
 
-    public function updateMaterial(Request $request, CourseMaterial $material): JsonResponse
+    public function updateMaterial(Request $request, Course $course, CourseMaterial $material): JsonResponse
     {
+        $this->enforceCourseScope($course, $material->course_id);
+
         $data = $this->validateMaterial($request, required: false);
 
         if ($request->hasFile('file')) {
@@ -227,8 +237,10 @@ class CourseContentController extends Controller
         ]);
     }
 
-    public function destroyMaterial(Request $request, CourseMaterial $material): JsonResponse
+    public function destroyMaterial(Request $request, Course $course, CourseMaterial $material): JsonResponse
     {
+        $this->enforceCourseScope($course, $material->course_id);
+
         if ($material->file_path) {
             $this->deleteFile($material->file_path);
         }
@@ -263,8 +275,10 @@ class CourseContentController extends Controller
 
     // ─── Assignments — flat (PUT /admin/assignments/{assignment}) ─────────────
 
-    public function updateAssignment(Request $request, CourseAssignment $courseAssignment): JsonResponse
+    public function updateAssignment(Request $request, Course $course, CourseAssignment $courseAssignment): JsonResponse
     {
+        $this->enforceCourseScope($course, $courseAssignment->course_id);
+
         $data = $this->validateAssignment($request, required: false);
 
         $old = $courseAssignment->only(['title', 'description', 'deadline', 'max_points', 'status', 'is_visible']);
@@ -280,8 +294,10 @@ class CourseContentController extends Controller
         ]);
     }
 
-    public function destroyAssignment(Request $request, CourseAssignment $courseAssignment): JsonResponse
+    public function destroyAssignment(Request $request, Course $course, CourseAssignment $courseAssignment): JsonResponse
     {
+        $this->enforceCourseScope($course, $courseAssignment->course_id);
+
         AuditLogService::logModel('deleted', $courseAssignment, null, null, ['course_id' => $courseAssignment->course_id], $request);
         $courseAssignment->delete();
 
@@ -315,8 +331,10 @@ class CourseContentController extends Controller
         ], 201);
     }
 
-    public function updateLesson(Request $request, Lesson $lesson): JsonResponse
+    public function updateLesson(Request $request, Course $course, Lesson $lesson): JsonResponse
     {
+        $this->enforceCourseScope($course, $lesson->module?->course_id);
+
         $data = $this->validateLesson($request, required: false);
         unset($data['module_id']);
 
@@ -331,8 +349,10 @@ class CourseContentController extends Controller
         ]);
     }
 
-    public function destroyLesson(Request $request, Lesson $lesson): JsonResponse
+    public function destroyLesson(Request $request, Course $course, Lesson $lesson): JsonResponse
     {
+        $this->enforceCourseScope($course, $lesson->module?->course_id);
+
         AuditLogService::logModel('deleted', $lesson, null, null, ['module_id' => $lesson->module_id], $request);
         $lesson->delete();
 
@@ -360,6 +380,17 @@ class CourseContentController extends Controller
         return response()->json(['success' => true, 'message' => 'تم حفظ الترتيب']);
     }
 
+    // ─── Nested-route ownership guard ─────────────────────────────────────────
+
+    /**
+     * For nested routes (admin/courses/{course}/…/{id}), verify the resolved
+     * resource actually belongs to the {course} in the URL.
+     */
+    private function enforceCourseScope(Course $course, ?int $actualCourseId): void
+    {
+        abort_if((int) $actualCourseId !== $course->id, 404, 'Resource not found in this course.');
+    }
+
     // ─── Shared validation helpers ────────────────────────────────────────────
 
     private function validateSession(Request $request, bool $required = true): array
@@ -384,7 +415,31 @@ class CourseContentController extends Controller
         }
         unset($data['meeting_url']);
 
+        $this->convertAmsterdamFieldsToUtc($data, ['start_at', 'end_at']);
+
         return $data;
+    }
+
+    /**
+     * Convert Amsterdam local time → UTC before storing.
+     * The frontend datetime-local input sends bare "YYYY-MM-DDTHH:mm" which
+     * represents Europe/Amsterdam local time. Carbon without a TZ hint would
+     * treat it as UTC (wrong). Parsing with the Amsterdam context gives the
+     * correct UTC value (e.g. Amsterdam 23:00 CEST → UTC 21:00).
+     */
+    private function convertAmsterdamFieldsToUtc(array &$data, array $fields): void
+    {
+        foreach ($fields as $field) {
+            if (!empty($data[$field])) {
+                try {
+                    $data[$field] = \Carbon\Carbon::parse($data[$field], 'Europe/Amsterdam')
+                        ->utc()
+                        ->toDateTimeString();
+                } catch (\Throwable) {
+                    // leave original value; database cast will handle it
+                }
+            }
+        }
     }
 
     private function validateMaterial(Request $request, bool $required = true): array
@@ -436,7 +491,7 @@ class CourseContentController extends Controller
 
     private function validateAssignment(Request $request, bool $required = true): array
     {
-        return $request->validate([
+        $data = $request->validate([
             'module_id'         => 'nullable|exists:course_modules,id',
             'course_session_id' => 'nullable|exists:course_sessions,id',
             'title'             => ($required ? 'required' : 'sometimes') . '|string|max:255',
@@ -450,6 +505,10 @@ class CourseContentController extends Controller
             'status'            => 'nullable|in:draft,published',
             'sort_order'        => 'nullable|integer|min:0',
         ]);
+
+        $this->convertAmsterdamFieldsToUtc($data, ['deadline']);
+
+        return $data;
     }
 
     // Try local disk first, fall back to public (for pre-migration files)

@@ -11,13 +11,16 @@ class SupportTicketReplyResource extends JsonResource
     {
         return [
             'id'               => $this->id,
+            'body'             => $this->message,
             'message'          => $this->message,
+            'author_name'      => $this->whenLoaded('user', fn () => $this->user?->name ?? 'فريق الدعم', 'فريق الدعم'),
             'is_internal_note' => $this->is_internal_note,
+            'internal'         => $this->is_internal_note,
             'user'             => $this->whenLoaded('user', fn () => [
                 'id'   => $this->user?->id,
                 'name' => $this->user?->name,
             ]),
-            'created_at'       => $this->created_at,
+            'created_at'       => optional($this->created_at)->toISOString(),
         ];
     }
 }

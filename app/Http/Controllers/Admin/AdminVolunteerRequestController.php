@@ -58,7 +58,6 @@ class AdminVolunteerRequestController extends Controller
     {
         $query = VolunteerRequest::with(['reviewer', 'acceptedBy'])
             ->where('status', 'accepted')
-            ->whereNull('converted_to_member_at')  // not yet converted
             ->when($request->filled('search'), function ($q) use ($request) {
                 $term = $request->search;
                 $q->where(function ($sub) use ($term) {
@@ -96,14 +95,13 @@ class AdminVolunteerRequestController extends Controller
             'success' => true,
             'data'    => VolunteerRequestResource::collection($items)->response()->getData(true),
             'meta'    => [
-                'total_accepted'   => VolunteerRequest::where('status', 'accepted')->whereNull('converted_to_member_at')->count(),
-                'total_converted'  => VolunteerRequest::where('status', 'converted_to_member')->count(),
+                'total_accepted'      => VolunteerRequest::where('status', 'accepted')->count(),
+                'total_converted'     => VolunteerRequest::where('status', 'converted_to_member')->count(),
                 'accepted_this_month' => VolunteerRequest::where('status', 'accepted')
                     ->whereMonth('accepted_at', now()->month)
                     ->whereYear('accepted_at',  now()->year)
                     ->count(),
                 'top_department' => VolunteerRequest::where('status', 'accepted')
-                    ->whereNull('converted_to_member_at')
                     ->select('desired_department', \Illuminate\Support\Facades\DB::raw('count(*) as cnt'))
                     ->groupBy('desired_department')
                     ->orderByDesc('cnt')
