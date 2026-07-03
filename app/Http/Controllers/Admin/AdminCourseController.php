@@ -773,17 +773,20 @@ class AdminCourseController extends Controller
         $attendancePresent = (clone $attendanceBase)->where('status', 'present')->count();
         $attendancePct     = $attendanceTotal > 0 ? round(($attendancePresent / $attendanceTotal) * 100, 1) : 0;
 
-        $sessions = LmsSession::where('course_id', $course->id)
-            ->orderByDesc('session_date')
-            ->limit(12)
+        $sessions = CourseSession::where('course_id', $course->id)
+            ->orderByDesc('start_at')
+            ->limit(20)
             ->get()
-            ->map(fn (LmsSession $s) => [
+            ->map(fn (CourseSession $s) => [
                 'id'           => $s->id,
                 'title'        => $s->title,
-                'session_date' => $this->dateStr($s->session_date),
-                'start_time'   => $s->start_time,
-                'status'       => $s->status,
-                'meeting_url'  => $s->meeting_url,
+                'session_date' => $s->start_at?->setTimezone('Europe/Amsterdam')->toDateString(),
+                'start_time'   => $s->start_at?->setTimezone('Europe/Amsterdam')->format('H:i'),
+                'end_time'     => $s->end_at?->setTimezone('Europe/Amsterdam')->format('H:i'),
+                'status'       => $s->status ?? 'scheduled',
+                'meeting_url'  => $s->meeting_url ?? $s->meeting_link ?? null,
+                'location_type'=> $s->location_type ?? null,
+                'module_id'    => $s->module_id ?? null,
             ]);
 
         $assignments = Assignment::where('course_id', $course->id)
@@ -824,7 +827,7 @@ class AdminCourseController extends Controller
 
         return [
             'students_count'       => $studentsCount,
-            'sessions_count'       => $course->sessions_count ?? $sessions->count(),
+            'sessions_count'       => $sessions->count(),
             'assignments_count'    => $course->assignments_count ?? $assignments->count(),
             'materials_count'      => $course->materials_count ?? $materials->count(),
             'average_progress'     => $progressAvg,
