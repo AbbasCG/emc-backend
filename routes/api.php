@@ -1057,7 +1057,7 @@ Route::post('support/tickets', [PublicSupportTicketController::class, 'store'])
     ->middleware('throttle:workshop');
 
 // ─── Contact form (public) ───────────────────────────────────────────────────
-Route::post('contact', function (\Illuminate\Http\Request $request) {
+Route::post('contact', function (\App\Http\Requests\ContactFormRequest $request) {
     $typeMap = [
         'general'     => 'student',
         'partnership' => 'partner',
@@ -1066,20 +1066,16 @@ Route::post('contact', function (\Illuminate\Http\Request $request) {
         'tech'        => 'technical',
     ];
 
-    $data = $request->validate([
-        'name'     => 'required|string|max:255',
-        'email'    => 'required|email|max:255',
-        'phone'    => 'nullable|string|max:50',
-        'type'     => 'nullable|string|max:100',
-        'category' => 'nullable|string|max:100',
-        'subject'  => 'nullable|string|max:300',
-        'message'  => 'required|string|max:5000',
-    ]);
+    $data = $request->validated();
 
     try {
         $category = $data['category'] ?? $data['type'] ?? 'general';
+        $subject  = $data['subject'];
 
-        \App\Models\SupportTicket::create([
+        // Look up existing user by email (optional link)
+        $existingUser = \App\Models\User::where('email', $data['email'])->first();
+
+        $ticket = \App\Models\SupportTicket::create([
             'full_name'    => $data['name'],
             'name'         => $data['name'],
             'email'        => $data['email'],
@@ -1087,32 +1083,33 @@ Route::post('contact', function (\Illuminate\Http\Request $request) {
             'request_type' => $category,
             'type'         => $typeMap[$category] ?? 'student',
             'priority'     => 'medium',
-            'subject'      => $data['subject'] ?? ($data['name'] . ' — contact'),
+            'subject'      => $subject,
             'message'      => $data['message'],
             'status'       => 'new',
-            'user_id'      => $request->user()?->id,
+            'source'       => 'contact_form',
+            'user_id'      => $existingUser?->id ?? $request->user()?->id,
         ]);
 
-        $submittedAt = now()->setTimezone('Europe/Amsterdam')->format('Y-m-d H:i');
-        $subject     = $data['subject'] ?? ($data['name'] . ' — contact');
+        $ticketNumber = $ticket->ticket_number ?? ('TK-' . $ticket->id);
+        $submittedAt  = now()->setTimezone('Europe/Amsterdam')->format('Y-m-d H:i');
 
-        // Confirmation to visitor
+        // Confirmation to visitor (from: noreply, reply-to: support)
         \App\Services\EmailService::dispatch(
             'contact_confirmation',
             $data['email'],
             $data['name'],
-            $request->user()?->id,
-            new \App\Mail\ContactConfirmationMail($data['name'], $subject, $data['message'], $submittedAt),
+            $ticket->user_id,
+            new \App\Mail\ContactConfirmationMail($data['name'], $subject, $data['message'], $submittedAt, $ticketNumber),
             'تم استلام رسالتك — منصة EMC',
         );
 
-        // Notification to admin support team
-        $adminEmail = (string) config('mail.support_email', config('mail.from.address', ''));
+        // Notification to support team (to: support@, reply-to: visitor)
+        $adminEmail = (string) config('mail.support_email', '');
         if (filter_var($adminEmail, FILTER_VALIDATE_EMAIL)) {
             \App\Services\EmailService::dispatch(
                 'contact_admin_notification',
                 $adminEmail,
-                'فريق الدعم',
+                (string) config('mail.support_name', 'EMC Support'),
                 null,
                 new \App\Mail\ContactAdminNotificationMail(
                     $data['name'],
@@ -1122,6 +1119,8 @@ Route::post('contact', function (\Illuminate\Http\Request $request) {
                     $data['message'],
                     $category,
                     $submittedAt,
+                    null,
+                    $ticketNumber,
                 ),
                 'رسالة جديدة من نموذج التواصل — ' . $data['name'],
             );
@@ -1129,7 +1128,11 @@ Route::post('contact', function (\Illuminate\Http\Request $request) {
 
         return response()->json([
             'success' => true,
-            'message' => 'تم إرسال رسالتك بنجاح. سنقوم بالرد عليك قريباً.',
+            'message' => 'تم إرسال رسالتك بنجاح. تم إنشاء تذكرة دعم وسنقوم بالرد عليك قريباً.',
+            'data'    => [
+                'ticket_id'     => $ticket->id,
+                'ticket_number' => $ticketNumber,
+            ],
         ]);
     } catch (\Throwable $e) {
         \Illuminate\Support\Facades\Log::error('Contact form error', [
@@ -1142,7 +1145,7 @@ Route::post('contact', function (\Illuminate\Http\Request $request) {
             'message' => 'تعذر إرسال الرسالة حالياً. يرجى المحاولة لاحقاً.',
         ], 500);
     }
-})->middleware('throttle:api');
+})->middleware('throttle:5,1');
 
 // ─── Platform scale (public stats) ───────────────────────────────────────────
 Route::get('platform/scale', function () {
@@ -1428,6 +1431,24 @@ Route::middleware(['auth:sanctum'])->prefix('admin')->group(function () {
 // ─── Workshop Requests: department-scoped list (any authenticated user) ───────
 Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('admin/workshop-requests-queue',            [WorkshopRequestController::class, 'index']);
+});
+
+// ─── Financial Requests ───────────────────────────────────────────────────────
+// Auth-only: controller enforces fine-grained role checks internally
+Route::middleware(['auth:sanctum'])->group(function () {
+    Route::get('financial-requests/my-context',                                            [\App\Http\Controllers\FinancialRequestController::class, 'myContext']);
+    Route::get('financial-requests',                                                       [\App\Http\Controllers\FinancialRequestController::class, 'index']);
+    Route::post('financial-requests',                                                      [\App\Http\Controllers\FinancialRequestController::class, 'store']);
+    Route::get('financial-requests/{financialRequest}',                                    [\App\Http\Controllers\FinancialRequestController::class, 'show']);
+    Route::put('financial-requests/{financialRequest}',                                    [\App\Http\Controllers\FinancialRequestController::class, 'update']);
+    Route::post('financial-requests/{financialRequest}/submit',                            [\App\Http\Controllers\FinancialRequestController::class, 'submit']);
+    Route::post('financial-requests/{financialRequest}/finance-approve',                   [\App\Http\Controllers\FinancialRequestController::class, 'financeApprove']);
+    Route::post('financial-requests/{financialRequest}/finance-reject',                    [\App\Http\Controllers\FinancialRequestController::class, 'financeReject']);
+    Route::post('financial-requests/{financialRequest}/return',                            [\App\Http\Controllers\FinancialRequestController::class, 'returnRequest']);
+    Route::post('financial-requests/{financialRequest}/executive-approve',                 [\App\Http\Controllers\FinancialRequestController::class, 'executiveApprove']);
+    Route::post('financial-requests/{financialRequest}/executive-reject',                  [\App\Http\Controllers\FinancialRequestController::class, 'executiveReject']);
+    Route::post('financial-requests/{financialRequest}/attachments',                       [\App\Http\Controllers\FinancialRequestController::class, 'storeAttachment']);
+    Route::get('financial-requests/{financialRequest}/attachments/{attachment}/download',  [\App\Http\Controllers\FinancialRequestController::class, 'downloadAttachment']);
 });
 
 // ─── Audit Logs (super_admin + admin + tech_admin) ───────────────────────────

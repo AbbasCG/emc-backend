@@ -40,8 +40,8 @@ class EmailSetting extends Model
             'admin_new_registration',
             // Payment
             'payment_confirmed',
-            // Contact
-            'contact_confirmation', 'contact_admin_notification',
+            // Contact / Support
+            'contact_confirmation', 'contact_admin_notification', 'support_ticket_reply',
             // Volunteer
             'volunteer_confirmation', 'volunteer_admin_notification',
             // Workshop

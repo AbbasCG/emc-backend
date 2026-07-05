@@ -8,6 +8,9 @@
   </div>
   <h2 style="color:#78350F;margin:0;font-size:21px;font-weight:800;">رسالة جديدة من نموذج التواصل</h2>
   <p style="color:#64748B;font-size:13px;margin:6px 0 0;">{{ $submittedAt }}</p>
+  @if(!empty($ticketNumber))
+  <p style="margin:6px 0 0;background:#FEF3C7;display:inline-block;padding:2px 12px;border-radius:20px;color:#92400E;font-size:12px;font-weight:700;">{{ $ticketNumber }}</p>
+  @endif
 </div>
 
 {{-- Visitor info --}}

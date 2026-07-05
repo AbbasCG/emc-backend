@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\LearningPathResource;
+use App\Models\Course;
 use App\Models\LearningPath;
 use App\Models\LearningPathEnrollment;
 use App\Models\LearningPathItem;
@@ -239,10 +240,17 @@ class AdminLearningPathController extends Controller
         $courseIds = $data['course_ids'] ?? null;
         unset($data['course_ids']);
 
-        DB::transaction(function () use ($learningPath, $data, $courseIds) {
+        $oldInstructorId = $learningPath->instructor_id;
+
+        DB::transaction(function () use ($learningPath, $data, $courseIds, $oldInstructorId) {
             $learningPath->update($data);
             if ($courseIds !== null) {
                 $this->syncCourses($learningPath, $courseIds);
+            }
+            // Sync instructor to linked courses when it changes
+            $newInstructorId = $learningPath->instructor_id;
+            if (array_key_exists('instructor_id', $data) && $newInstructorId !== $oldInstructorId) {
+                $this->syncInstructorToLinkedCourses($learningPath, $oldInstructorId);
             }
         });
 
@@ -439,6 +447,43 @@ class AdminLearningPathController extends Controller
             $sync[(int) $id] = ['sort_order' => $i];
         }
         $path->courses()->sync($sync);
+
+        // Push LP instructor to newly-linked courses that have no instructor
+        if ($path->instructor_id && ! empty($courseIds)) {
+            Course::whereIn('id', array_map('intval', $courseIds))
+                ->whereNull('instructor_id')
+                ->update(['instructor_id' => $path->instructor_id]);
+        }
+    }
+
+    /**
+     * When the LP instructor changes, cascade to linked courses.
+     * - Courses with no instructor get the new LP instructor.
+     * - Courses that still have the OLD LP instructor get the new one.
+     * - Courses with a DIFFERENT custom instructor are left untouched.
+     */
+    private function syncInstructorToLinkedCourses(LearningPath $path, ?int $oldInstructorId): void
+    {
+        $newInstructorId = $path->instructor_id;
+        $linkedCourseIds = $path->items()->pluck('course_id')->all();
+
+        if (empty($linkedCourseIds)) {
+            return;
+        }
+
+        // Set on courses with no instructor
+        if ($newInstructorId) {
+            Course::whereIn('id', $linkedCourseIds)
+                ->whereNull('instructor_id')
+                ->update(['instructor_id' => $newInstructorId]);
+        }
+
+        // Update courses that had the old LP instructor (were inherited, not custom)
+        if ($oldInstructorId) {
+            Course::whereIn('id', $linkedCourseIds)
+                ->where('instructor_id', $oldInstructorId)
+                ->update(['instructor_id' => $newInstructorId]);
+        }
     }
 
     private function validate(Request $request, ?LearningPath $path = null): array

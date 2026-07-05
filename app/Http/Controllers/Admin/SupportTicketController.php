@@ -72,15 +72,40 @@ class SupportTicketController extends Controller
             'is_internal_note' => 'boolean',
         ]);
 
+        $isInternal = (bool) ($data['is_internal_note'] ?? false);
+
         $reply = $supportTicket->replies()->create([
             'user_id'          => $request->user()->id,
             'message'          => $data['message'],
-            'is_internal_note' => $data['is_internal_note'] ?? false,
+            'is_internal_note' => $isInternal,
         ]);
 
         ActivityLogger::log('ticket.reply', $supportTicket, [
-            'is_internal_note' => $data['is_internal_note'] ?? false,
+            'is_internal_note' => $isInternal,
         ], $request);
+
+        // Send email to requester on public replies only
+        if (!$isInternal) {
+            $recipientEmail = $supportTicket->email;
+            $recipientName  = $supportTicket->full_name ?? $supportTicket->name ?? 'المستخدم';
+            $ticketNumber   = $supportTicket->ticket_number ?? ('#' . $supportTicket->id);
+
+            if ($recipientEmail && filter_var($recipientEmail, FILTER_VALIDATE_EMAIL)) {
+                \App\Services\EmailService::dispatch(
+                    'support_ticket_reply',
+                    $recipientEmail,
+                    $recipientName,
+                    $supportTicket->user_id,
+                    new \App\Mail\SupportTicketReplyMail(
+                        $recipientName,
+                        $ticketNumber,
+                        $supportTicket->subject,
+                        $data['message'],
+                    ),
+                    'رد على تذكرتك — منصة EMC',
+                );
+            }
+        }
 
         return response()->json([
             'success' => true,

@@ -70,6 +70,12 @@ class FileUploadService
             'mimes'   => ['png', 'jpg', 'jpeg', 'webp'],
             'path'    => 'avatars',
         ],
+        'financial_requests' => [
+            'disk'    => 'private',
+            'max_kb'  => 20_480, // 20 MB
+            'mimes'   => ['pdf', 'png', 'jpg', 'jpeg', 'doc', 'docx', 'xls', 'xlsx'],
+            'path'    => 'financial-requests/attachments',
+        ],
     ];
 
     /**

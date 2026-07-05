@@ -10,7 +10,7 @@ class SupportTicket extends Model
 {
     protected $fillable = [
         'user_id', 'ticket_number', 'name', 'full_name', 'email', 'phone',
-        'type', 'request_type', 'priority', 'status', 'subject', 'message',
+        'type', 'request_type', 'priority', 'status', 'source', 'subject', 'message',
         'assigned_to', 'resolved_at',
     ];
 

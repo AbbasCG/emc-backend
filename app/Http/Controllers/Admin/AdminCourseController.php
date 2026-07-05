@@ -68,15 +68,55 @@ class AdminCourseController extends Controller
                 ->where('title', 'like', "%{$q}%")
                 ->orWhere('slug', 'like', "%{$q}%")
                 ->orWhere('description', 'like', "%{$q}%")
+                ->orWhereHas('instructor.user', fn ($u) => $u->where('name', 'like', "%{$q}%"))
             );
         }
 
-        $perPage  = min((int) $request->query('per_page', 20), 100);
-        $courses  = $query->latest()->paginate($perPage);
+        // Filter by specific course IDs (multi-chip search)
+        if ($request->has('selected')) {
+            $ids = array_filter(array_map('intval', (array) $request->query('selected')));
+            if (! empty($ids)) {
+                $query->whereIn('id', $ids);
+            }
+        }
 
-        // Batch-load learning path membership for all courses in this page
+        // Program type (course / workshop / program / track)
+        if ($request->filled('program_type')) {
+            $query->where('program_type', $request->query('program_type'));
+        }
+
+        // Delivery mode
+        if ($request->filled('location_type')) {
+            $query->where('location_type', $request->query('location_type'));
+        }
+
+        // Learning path membership
+        if ($request->filled('learning_path_id')) {
+            $lpId = (int) $request->query('learning_path_id');
+            $query->whereHas('learningPathItem', fn ($q) => $q->where('learning_path_id', $lpId));
+        }
+
+        // Ended courses (published + end_date in the past)
+        if ($request->boolean('ended')) {
+            $query->where('status', 'published')->where('end_date', '<', now()->toDateString());
+        }
+
+        // Sort
+        match ((string) $request->query('sort', 'latest')) {
+            'title_asc'  => $query->orderBy('title', 'asc'),
+            'title_desc' => $query->orderBy('title', 'desc'),
+            'price_asc'  => $query->orderBy('price', 'asc'),
+            'price_desc' => $query->orderBy('price', 'desc'),
+            'oldest'     => $query->orderBy('created_at', 'asc'),
+            default      => $query->latest(),
+        };
+
+        $perPage = min((int) $request->query('per_page', 24), 100);
+        $courses = $query->paginate($perPage);
+
+        // Batch-load learning path membership (with instructor) for all courses in this page
         $courseIds = $courses->pluck('id')->all();
-        $lpItemMap = LearningPathItem::with('learningPath')
+        $lpItemMap = LearningPathItem::with(['learningPath.instructor.user'])
             ->whereIn('course_id', $courseIds)
             ->get()
             ->keyBy('course_id');
@@ -92,6 +132,20 @@ class AdminCourseController extends Controller
                 ->pluck('cnt', 'learning_path_id');
         }
 
+        // Global summary counts — single aggregation query, always unfiltered
+        $summaryRow = DB::table('courses')
+            ->selectRaw("
+                COUNT(*) as total,
+                SUM(CASE WHEN status='published' THEN 1 ELSE 0 END) as published_count,
+                SUM(CASE WHEN status='draft' THEN 1 ELSE 0 END) as draft_count,
+                SUM(CASE WHEN status='archived' THEN 1 ELSE 0 END) as archived_count,
+                SUM(CASE WHEN start_date IS NULL THEN 1 ELSE 0 END) as no_date_count,
+                SUM(CASE WHEN instructor_id IS NULL THEN 1 ELSE 0 END) as no_instructor_count,
+                SUM(CASE WHEN end_date < CURDATE() AND status='published' THEN 1 ELSE 0 END) as ended_count,
+                SUM(CASE WHEN start_date IS NOT NULL THEN 1 ELSE 0 END) as scheduled_count
+            ")
+            ->first();
+
         return response()->json([
             'success' => true,
             'data'    => $courses->map(function ($c) use ($lpItemMap, $lpEnrollMap) {
@@ -104,6 +158,16 @@ class AdminCourseController extends Controller
                 'current_page' => $courses->currentPage(),
                 'last_page'    => $courses->lastPage(),
                 'per_page'     => $courses->perPage(),
+            ],
+            'summary' => [
+                'total'         => (int) ($summaryRow->total ?? 0),
+                'published'     => (int) ($summaryRow->published_count ?? 0),
+                'draft'         => (int) ($summaryRow->draft_count ?? 0),
+                'archived'      => (int) ($summaryRow->archived_count ?? 0),
+                'no_date'       => (int) ($summaryRow->no_date_count ?? 0),
+                'no_instructor' => (int) ($summaryRow->no_instructor_count ?? 0),
+                'ended'         => (int) ($summaryRow->ended_count ?? 0),
+                'scheduled'     => (int) ($summaryRow->scheduled_count ?? 0),
             ],
         ]);
     }
@@ -249,7 +313,12 @@ class AdminCourseController extends Controller
                 ->first();
             if ($activeLpItem) {
                 $lp = $activeLpItem->learningPath;
+                AuditLogService::log('ACTION_BLOCKED', 'Course', $course->id, $course->title,
+                    ['action' => 'status_change', 'attempted_status' => $newStatus, 'reason' => 'belongs_to_active_learning_path', 'learning_path_id' => $lp->id, 'learning_path_title' => $lp->title],
+                    null, null, $request
+                );
                 return response()->json([
+                    'success'       => false,
                     'message'       => 'Cannot archive/deactivate course because it belongs to an active learning path.',
                     'message_ar'    => 'لا يمكن أرشفة أو تعطيل هذه الدورة لأنها مرتبطة بمسار تعليمي نشط. أزل الدورة من المسار أولاً.',
                     'learning_path' => [
@@ -258,7 +327,7 @@ class AdminCourseController extends Controller
                         'slug'   => $lp->slug,
                         'status' => $lp->status,
                     ],
-                ], 422);
+                ], 409);
             }
         }
 
@@ -340,7 +409,12 @@ class AdminCourseController extends Controller
 
         if ($activeLpItem) {
             $lp = $activeLpItem->learningPath;
+            AuditLogService::log('ACTION_BLOCKED', 'Course', $course->id, $course->title,
+                ['action' => 'delete', 'reason' => 'belongs_to_active_learning_path', 'learning_path_id' => $lp->id, 'learning_path_title' => $lp->title],
+                null, null, $request
+            );
             return response()->json([
+                'success'       => false,
                 'message'       => 'Cannot delete course because it belongs to an active learning path.',
                 'message_ar'    => 'لا يمكن حذف هذه الدورة لأنها مرتبطة بمسار تعليمي نشط. أزل الدورة من المسار أولاً أو أرشف المسار.',
                 'learning_path' => [
@@ -349,7 +423,7 @@ class AdminCourseController extends Controller
                     'slug'   => $lp->slug,
                     'status' => $lp->status,
                 ],
-            ], 422);
+            ], 409);
         }
 
         $snap  = ['title' => $course->title, 'status' => $course->status];
@@ -486,7 +560,7 @@ class AdminCourseController extends Controller
             'is_online'             => 'nullable|boolean',
             'start_date'            => 'nullable|date',
             'start_time'            => 'nullable|date_format:H:i',
-            'end_date'              => 'nullable|date',
+            'end_date'              => 'required|date',
             'end_time'              => 'nullable|date_format:H:i',
             'capacity'              => 'nullable|integer|min:1',
             'seats_count'           => 'nullable|integer|min:1',   // alias for capacity
@@ -706,6 +780,18 @@ class AdminCourseController extends Controller
                     $course->instructor->user?->avatar ?? $course->instructor->image
                 ),
             ] : null,
+            // Effective instructor: course's own instructor, or LP instructor as fallback
+            'instructor_source'     => $course->instructor ? 'course' : ($lp?->instructor ? 'learning_path' : null),
+            'effective_instructor'  => $course->instructor ? null : ($lp?->instructor ? [
+                'id'               => $lp->instructor->id,
+                'user_id'          => $lp->instructor->user_id,
+                'name'             => $lp->instructor->user?->name ?? $lp->instructor->name,
+                'email'            => $lp->instructor->user?->email,
+                'title'            => $lp->instructor->title,
+                'profile_photo_url' => $this->storageUrl(
+                    $lp->instructor->user?->avatar ?? $lp->instructor->image
+                ),
+            ] : null),
             'track'               => $course->track ? [
                 'id'    => $course->track->id,
                 'title' => $course->track->title,
@@ -859,6 +945,14 @@ class AdminCourseController extends Controller
                 ['learning_path_id' => $learningPathId, 'course_id' => $courseId],
                 ['sort_order'       => $maxOrder + 1],
             );
+
+            // If course has no instructor and LP has one, inherit it
+            $lpInstructorId = \App\Models\LearningPath::where('id', $learningPathId)->value('instructor_id');
+            if ($lpInstructorId) {
+                Course::where('id', $courseId)
+                    ->whereNull('instructor_id')
+                    ->update(['instructor_id' => $lpInstructorId]);
+            }
         });
     }
 

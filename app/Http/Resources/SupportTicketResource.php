@@ -20,6 +20,7 @@ class SupportTicketResource extends JsonResource
             'phone'                => $this->phone,
             'type'                 => $this->type,
             'request_type'         => $this->request_type,
+            'source'               => $this->source,
             'priority'             => $this->priority,
             'status'               => $this->status,
             'assigned_to'          => $this->whenLoaded('assignedTo', fn () => $this->assignedTo ? [

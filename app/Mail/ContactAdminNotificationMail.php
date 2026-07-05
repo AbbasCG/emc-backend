@@ -5,6 +5,7 @@ namespace App\Mail;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Mail\Mailable;
+use Illuminate\Mail\Mailables\Address;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
@@ -24,11 +25,15 @@ class ContactAdminNotificationMail extends Mailable implements ShouldQueue
         public readonly string  $category,
         public readonly string  $submittedAt,
         public readonly ?string $adminUrl = null,
+        public readonly string  $ticketNumber = '',
     ) {}
 
     public function envelope(): Envelope
     {
-        return new Envelope(subject: 'رسالة جديدة من نموذج التواصل — ' . $this->visitorName); // envelope subject ≠ $subjectLine (visitor's topic)
+        return new Envelope(
+            replyTo: [new Address($this->visitorEmail, $this->visitorName)],
+            subject: 'رسالة جديدة من نموذج التواصل — ' . $this->visitorName,
+        );
     }
 
     public function content(): Content
@@ -43,7 +48,8 @@ class ContactAdminNotificationMail extends Mailable implements ShouldQueue
                 'messageBody'  => $this->messageBody,
                 'category'     => $this->category,
                 'submittedAt'  => $this->submittedAt,
-                'adminUrl'     => $this->adminUrl ?? rtrim(config('app.frontend_url', config('app.url')), '/') . '/dashboard/admin/support',
+                'ticketNumber' => $this->ticketNumber,
+                'adminUrl'     => $this->adminUrl ?? rtrim(config('app.frontend_url', config('app.url')), '/') . '/dashboard/admin/support-tickets',
             ],
         );
     }

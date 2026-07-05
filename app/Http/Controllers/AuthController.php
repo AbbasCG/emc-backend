@@ -112,11 +112,17 @@ class AuthController extends Controller
         $user            = $request->user();
         $isImpersonating = (bool) $request->attributes->get('is_impersonating', false);
 
+        $isDepartmentLeader = \App\Models\TeamProfile::where('user_id', $user->id)
+            ->where('is_active', true)
+            ->where('is_leader', true)
+            ->exists();
+
         $data = [
-            'user'             => new UserResource($user),
-            'role'             => $user->role,
-            'permissions'      => $user->allPermissions(),
-            'is_impersonating' => $isImpersonating,
+            'user'                 => new UserResource($user),
+            'role'                 => $user->role,
+            'permissions'          => $user->allPermissions(),
+            'is_department_leader' => $isDepartmentLeader,
+            'is_impersonating'     => $isImpersonating,
         ];
 
         if ($isImpersonating) {
