@@ -42,6 +42,7 @@ class SupportTicketController extends Controller
             'message'      => $data['message'],
             'priority'     => $data['priority'] ?? 'medium',
             'status'       => 'new',
+            'source'       => 'contact_form',
         ]);
 
         $ticketNumber = $ticket->ticket_number ?? ('#' . $ticket->id);

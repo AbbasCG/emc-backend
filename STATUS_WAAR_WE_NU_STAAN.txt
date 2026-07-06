@@ -89,7 +89,7 @@ quality@emc.test      (quality_manager)
 hr@emc.test           (hr_manager)
 partner@emc.test      (partner)
 marketing@emc.test    (marketing_manager)
-support@emc.test      (support_agent)
+support@edumc.nl      (support_agent)
 volunteer@emc.test    (volunteer)
 deptmanager@emc.test  (department_manager)
 

@@ -175,16 +175,14 @@ class SupportTicketController extends Controller
 
         // Create in-app notification for the newly assigned user
         if ($assignee && $assignee->id !== $assigner?->id) {
+            $ticketNumber = $supportTicket->ticket_number ?? ('#' . $supportTicket->id);
             PlatformNotification::create([
                 'user_id'     => $assignee->id,
                 'type'        => 'ticket_assigned',
-                'title'       => 'تذكرة جديدة مُعيَّنة إليك',
+                'title'       => 'تم تعيين تذكرة دعم جديدة إليك',
                 'message'     => sprintf(
-                    'تم تعيين التذكرة "%s" (%s) إليك بواسطة %s. الأولوية: %s.',
-                    $supportTicket->subject,
-                    $supportTicket->ticket_number ?? '#' . $supportTicket->id,
-                    $assigner?->name ?? 'النظام',
-                    $supportTicket->priority ?? 'medium'
+                    "تم تعيين التذكرة %s إليك.\nيرجى مراجعتها والرد على العميل.",
+                    $ticketNumber
                 ),
                 'entity_type' => SupportTicket::class,
                 'entity_id'   => $supportTicket->id,

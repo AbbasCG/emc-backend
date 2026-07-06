@@ -57,6 +57,6 @@
 
 <p style="color:#94A3B8;font-size:12px;text-align:center;margin-top:16px;">
   احتفظ بهذا البريد مرجعاً للدفع. للمساعدة:
-  <a href="mailto:support@emc.test" style="color:#059669;text-decoration:none;">support@emc.test</a>
+  <a href="mailto:support@edumc.nl" style="color:#059669;text-decoration:none;">support@edumc.nl</a>
 </p>
 @endsection

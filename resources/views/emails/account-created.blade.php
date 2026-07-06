@@ -53,7 +53,7 @@
 <div style="background:#F8FAFC;border-radius:10px;padding:16px 20px;margin-top:8px;text-align:center;">
   <p style="margin:0;color:#64748B;font-size:13px;line-height:1.7;">
     تحتاج مساعدة؟ تواصل معنا على
-    <a href="mailto:support@emc.test" style="color:#1D4ED8;text-decoration:none;font-weight:600;">support@emc.test</a>
+    <a href="mailto:support@edumc.nl" style="color:#1D4ED8;text-decoration:none;font-weight:600;">support@edumc.nl</a>
   </p>
 </div>
 @endsection

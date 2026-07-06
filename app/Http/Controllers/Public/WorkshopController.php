@@ -61,7 +61,7 @@ class WorkshopController extends Controller
             $query->where('registration_open', true);
         }
 
-        $perPage   = min((int) $request->query('per_page', 12), 50);
+        $perPage   = min((int) $request->query('per_page', 24), 100);
         $workshops = $query->orderBy('start_date')->paginate($perPage);
 
         // Batch-fetch enrolled counts for the returned workshops.

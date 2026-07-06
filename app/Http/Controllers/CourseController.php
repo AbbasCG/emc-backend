@@ -13,7 +13,7 @@ class CourseController extends Controller
 {
     public function index(Request $request): AnonymousResourceCollection
     {
-        $perPage = min((int) $request->query('per_page', 15), 100);
+        $perPage = min((int) $request->query('per_page', 100), 200);
 
         $query = Course::with(['instructor.user', 'features', 'track'])
             ->withCount('registrations')

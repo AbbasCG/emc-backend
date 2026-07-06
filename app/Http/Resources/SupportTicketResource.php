@@ -29,6 +29,7 @@ class SupportTicketResource extends JsonResource
                 'email'      => $this->assignedTo->email,
                 'role'       => $this->assignedTo->role,
                 'department' => $this->assignedTo->department,
+                'avatar'     => $this->assignedTo->avatar,
             ] : null),
             'replies'              => SupportTicketReplyResource::collection($this->whenLoaded('replies')),
             'replies_count'        => $this->replies_count ?? $this->whenLoaded('replies', fn () => $this->replies->count(), 0),

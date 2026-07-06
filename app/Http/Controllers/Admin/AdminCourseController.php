@@ -560,7 +560,7 @@ class AdminCourseController extends Controller
             'is_online'             => 'nullable|boolean',
             'start_date'            => 'nullable|date',
             'start_time'            => 'nullable|date_format:H:i',
-            'end_date'              => 'required|date',
+            'end_date'              => $isUpdate ? 'sometimes|nullable|date' : 'nullable|date',
             'end_time'              => 'nullable|date_format:H:i',
             'capacity'              => 'nullable|integer|min:1',
             'seats_count'           => 'nullable|integer|min:1',   // alias for capacity

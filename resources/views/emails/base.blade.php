@@ -34,7 +34,7 @@
               </p>
               <p style="color:#94A3B8;font-size:12px;margin:8px 0 0;line-height:1.6;">
                 © {{ date('Y') }} EMC Platform &nbsp;|&nbsp;
-                <a href="mailto:support@emc.test" style="color:#2691C2;text-decoration:none;">support@emc.test</a>
+                <a href="mailto:support@edumc.nl" style="color:#2691C2;text-decoration:none;">support@edumc.nl</a>
               </p>
             </td>
           </tr>

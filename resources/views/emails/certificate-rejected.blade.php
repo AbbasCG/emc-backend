@@ -27,7 +27,7 @@
 </p>
 
 <div style="text-align:center;margin:32px 0;">
-  <a href="mailto:support@emc.test"
+  <a href="mailto:support@edumc.nl"
      style="background:#718096;color:#ffffff;text-decoration:none;padding:14px 36px;border-radius:10px;font-weight:700;font-size:15px;display:inline-block;">
     التواصل مع الدعم ←
   </a>

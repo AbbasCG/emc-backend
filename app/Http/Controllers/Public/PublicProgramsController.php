@@ -32,7 +32,7 @@ class PublicProgramsController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        $perPage = min((int) $request->query('per_page', 12), 50);
+        $perPage = min((int) $request->query('per_page', 24), 100);
         $search  = $request->filled('search') ? (string) $request->query('search') : null;
         $type    = $request->filled('type')   ? (string) $request->query('type')   : null; // course|workshop|learning_path
 
@@ -130,7 +130,8 @@ class PublicProgramsController extends Controller
             );
         }
 
-        $courses = (clone $courseQuery)->latest()->take($perPage)->get();
+        $coursesPaginated = (clone $courseQuery)->latest()->paginate($perPage);
+        $courses = $coursesPaginated->getCollection();
 
         // ── Workshops (published / active / scheduled) ─────────────────────────
 
@@ -147,11 +148,13 @@ class PublicProgramsController extends Controller
             );
         }
 
-        $workshops = (clone $wQuery)->latest()->take($perPage)->get();
+        $workshopsPaginated = (clone $wQuery)->latest()->paginate($perPage);
+        $workshops = $workshopsPaginated->getCollection();
 
         // ── All Learning Paths (paginated) ────────────────────────────────────
 
-        $allLPs = (clone $lpQuery)->latest()->take($perPage)->get();
+        $lpPaginated = (clone $lpQuery)->latest()->paginate($perPage);
+        $allLPs = $lpPaginated->getCollection();
         $this->attachLPStudentCounts($allLPs);
 
         // ── Latest Programs (mixed: courses + workshops as courses, ordered by created_at) ─
@@ -197,6 +200,26 @@ class PublicProgramsController extends Controller
                 'learning_paths' => LearningPathResource::collection($allLPs)->resolve(),
 
                 'latest_programs' => CourseResource::collection($latestCourses)->resolve(),
+            ],
+            'meta' => [
+                'courses' => [
+                    'total'        => $coursesPaginated->total(),
+                    'current_page' => $coursesPaginated->currentPage(),
+                    'last_page'    => $coursesPaginated->lastPage(),
+                    'per_page'     => $coursesPaginated->perPage(),
+                ],
+                'workshops' => [
+                    'total'        => $workshopsPaginated->total(),
+                    'current_page' => $workshopsPaginated->currentPage(),
+                    'last_page'    => $workshopsPaginated->lastPage(),
+                    'per_page'     => $workshopsPaginated->perPage(),
+                ],
+                'learning_paths' => [
+                    'total'        => $lpPaginated->total(),
+                    'current_page' => $lpPaginated->currentPage(),
+                    'last_page'    => $lpPaginated->lastPage(),
+                    'per_page'     => $lpPaginated->perPage(),
+                ],
             ],
         ]);
     }

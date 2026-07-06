@@ -46,6 +46,6 @@
 
 <p style="color:#94A3B8;font-size:13px;text-align:center;margin-top:24px;">
   للاستفسار تواصل معنا على
-  <a href="mailto:support@emc.test" style="color:#7C3AED;text-decoration:none;font-weight:600;">support@emc.test</a>
+  <a href="mailto:support@edumc.nl" style="color:#7C3AED;text-decoration:none;font-weight:600;">support@edumc.nl</a>
 </p>
 @endsection
