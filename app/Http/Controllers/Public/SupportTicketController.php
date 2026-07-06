@@ -3,7 +3,10 @@
 namespace App\Http\Controllers\Public;
 
 use App\Http\Controllers\Controller;
+use App\Mail\ContactAdminNotificationMail;
+use App\Mail\ContactConfirmationMail;
 use App\Models\SupportTicket;
+use App\Services\EmailService;
 use Illuminate\Http\Request;
 
 class SupportTicketController extends Controller
@@ -27,7 +30,7 @@ class SupportTicketController extends Controller
             'technical'   => 'technical',
         ];
 
-        SupportTicket::create([
+        $ticket = SupportTicket::create([
             'user_id'      => $request->user()?->id,
             'full_name'    => $data['full_name'],
             'name'         => $data['full_name'],
@@ -40,6 +43,55 @@ class SupportTicketController extends Controller
             'priority'     => $data['priority'] ?? 'medium',
             'status'       => 'new',
         ]);
+
+        $ticketNumber = $ticket->ticket_number ?? ('#' . $ticket->id);
+        $submittedAt  = now()->format('Y-m-d H:i');
+
+        // Confirmation email to requester — queued, never blocks ticket creation.
+        try {
+            EmailService::dispatch(
+                'contact_confirmation',
+                $data['email'],
+                $data['full_name'],
+                $request->user()?->id,
+                new ContactConfirmationMail(
+                    visitorName:  $data['full_name'],
+                    subjectLine:  $data['subject'],
+                    body:         $data['message'],
+                    submittedAt:  $submittedAt,
+                    ticketNumber: $ticketNumber,
+                ),
+                'تم استلام رسالتك — منصة EMC',
+            );
+        } catch (\Throwable) {
+            // Email failure must never prevent the ticket from being created.
+        }
+
+        // Notification email to support team — queued, never blocks ticket creation.
+        $supportEmail = (string) config('mail.support_email', 'support@edumc.nl');
+        $supportName  = (string) config('mail.support_name', 'EMC Support');
+
+        try {
+            EmailService::dispatch(
+                'contact_admin_notification',
+                $supportEmail,
+                $supportName,
+                null,
+                new ContactAdminNotificationMail(
+                    visitorName:  $data['full_name'],
+                    visitorEmail: $data['email'],
+                    visitorPhone: $data['phone'],
+                    subjectLine:  $data['subject'],
+                    messageBody:  $data['message'],
+                    category:     $typeMap[$data['request_type']] ?? 'student',
+                    submittedAt:  $submittedAt,
+                    ticketNumber: $ticketNumber,
+                ),
+                'رسالة جديدة من نموذج التواصل — ' . $data['full_name'],
+            );
+        } catch (\Throwable) {
+            // Email failure must never prevent the ticket from being created.
+        }
 
         return response()->json([
             'success' => true,

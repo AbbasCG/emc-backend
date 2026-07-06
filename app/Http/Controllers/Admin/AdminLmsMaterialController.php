@@ -43,16 +43,27 @@ class AdminLmsMaterialController extends Controller
             'session_id'   => ['nullable', 'exists:lms_sessions,id'],
             'title'        => ['required', 'string', 'max:255'],
             'description'  => ['nullable', 'string'],
-            'file_path'    => ['nullable', 'string', 'max:2000'],
-            'external_url' => ['nullable', 'string', 'max:2000'],
-            'type'         => ['nullable', 'in:pdf,video,link,slide,document,other'],
+            'external_url' => ['nullable', 'url', 'max:2000'],
+            'type'         => ['nullable', 'in:pdf,video,link,slide,document,image,other'],
             'sort_order'   => ['nullable', 'integer', 'min:0'],
+            'is_visible'   => ['nullable', 'boolean'],
+            'file'         => [
+                'nullable', 'file', 'max:51200',
+                'mimes:pdf,doc,docx,xls,xlsx,ppt,pptx,mp4,mov,avi,mp3,wav,jpg,jpeg,png,webp,gif,zip',
+                'mimetypes:application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,video/mp4,video/quicktime,video/x-msvideo,audio/mpeg,audio/wav,image/jpeg,image/png,image/webp,image/gif,application/zip',
+            ],
         ]);
+
+        if ($request->hasFile('file')) {
+            $validated['file_path'] = $request->file('file')->store('course-materials', 'local');
+            $validated['file_url']  = null;
+        }
+        unset($validated['file']);
 
         $material = CourseMaterial::query()->create($validated);
 
-        return (new LmsCourseMaterialResource($material))
-            ->additional(['success' => true, 'message' => 'Material created successfully'])
+        return (new LmsCourseMaterialResource($material->load('course')))
+            ->additional(['success' => true, 'message' => 'تمت إضافة المادة بنجاح'])
             ->response()
             ->setStatusCode(201);
     }
@@ -72,24 +83,50 @@ class AdminLmsMaterialController extends Controller
             'session_id'   => ['sometimes', 'nullable', 'exists:lms_sessions,id'],
             'title'        => ['sometimes', 'string', 'max:255'],
             'description'  => ['nullable', 'string'],
-            'file_path'    => ['nullable', 'string', 'max:2000'],
-            'external_url' => ['nullable', 'string', 'max:2000'],
-            'type'         => ['nullable', 'in:pdf,video,link,slide,document,other'],
+            'external_url' => ['nullable', 'url', 'max:2000'],
+            'type'         => ['nullable', 'in:pdf,video,link,slide,document,image,other'],
             'sort_order'   => ['nullable', 'integer', 'min:0'],
+            'is_visible'   => ['nullable', 'boolean'],
+            'file'         => [
+                'nullable', 'file', 'max:51200',
+                'mimes:pdf,doc,docx,xls,xlsx,ppt,pptx,mp4,mov,avi,mp3,wav,jpg,jpeg,png,webp,gif,zip',
+                'mimetypes:application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,video/mp4,video/quicktime,video/x-msvideo,audio/mpeg,audio/wav,image/jpeg,image/png,image/webp,image/gif,application/zip',
+            ],
         ]);
+
+        if ($request->hasFile('file')) {
+            if ($material->file_path) {
+                $this->deleteFile($material->file_path);
+            }
+            $validated['file_path'] = $request->file('file')->store('course-materials', 'local');
+            $validated['file_url']  = null;
+        }
+        unset($validated['file']);
 
         $material->update($validated);
 
-        return (new LmsCourseMaterialResource($material->fresh()))
-            ->additional(['success' => true, 'message' => 'Material updated successfully'])
+        return (new LmsCourseMaterialResource($material->fresh()->load('course')))
+            ->additional(['success' => true, 'message' => 'تم تحديث المادة بنجاح'])
             ->response();
     }
 
     public function destroy(CourseMaterial $material): JsonResponse
     {
+        if ($material->file_path) {
+            $this->deleteFile($material->file_path);
+        }
         $material->delete();
 
-        return response()->json(['success' => true, 'message' => 'Material deleted successfully']);
+        return response()->json(['success' => true, 'message' => 'تم حذف المادة بنجاح']);
+    }
+
+    private function deleteFile(string $path): void
+    {
+        if (Storage::disk('local')->exists($path)) {
+            Storage::disk('local')->delete($path);
+        } elseif (Storage::disk('public')->exists($path)) {
+            Storage::disk('public')->delete($path);
+        }
     }
 
     /**
