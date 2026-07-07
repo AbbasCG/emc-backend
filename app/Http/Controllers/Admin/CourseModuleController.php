@@ -11,7 +11,8 @@ class CourseModuleController extends Controller
 {
     public function index(Request $request): \Illuminate\Http\JsonResponse
     {
-        $modules = CourseModule::with('lessons')
+        $modules = CourseModule::with(['course:id,title,slug', 'lessons', 'sessions', 'materials', 'courseAssignments'])
+            ->withCount(['lessons', 'sessions', 'materials', 'courseAssignments'])
             ->when($request->course_id, fn ($q) => $q->where('course_id', $request->course_id))
             ->orderBy('sort_order')
             ->get();
@@ -36,7 +37,10 @@ class CourseModuleController extends Controller
 
     public function show(CourseModule $module): \Illuminate\Http\JsonResponse
     {
-        return response()->json(['success' => true, 'data' => new CourseModuleResource($module->load('lessons'))]);
+        $module->load(['course:id,title,slug', 'lessons', 'sessions', 'materials', 'courseAssignments'])
+               ->loadCount(['lessons', 'sessions', 'materials', 'courseAssignments']);
+
+        return response()->json(['success' => true, 'data' => new CourseModuleResource($module)]);
     }
 
     public function update(Request $request, CourseModule $module): \Illuminate\Http\JsonResponse

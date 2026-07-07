@@ -81,8 +81,18 @@ class AdminCourseController extends Controller
         }
 
         // Program type (course / workshop / program / track)
+        // For 'workshop': include both courses where program_type='workshop' AND
+        // courses that have a linked Workshop entity (parent courses of Workshop records).
         if ($request->filled('program_type')) {
-            $query->where('program_type', $request->query('program_type'));
+            $pt = (string) $request->query('program_type');
+            if ($pt === 'workshop') {
+                $query->where(fn ($q) => $q
+                    ->where('program_type', 'workshop')
+                    ->orWhereHas('workshops')
+                );
+            } else {
+                $query->where('program_type', $pt);
+            }
         }
 
         // Delivery mode

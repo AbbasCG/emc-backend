@@ -31,6 +31,8 @@ class CourseController extends Controller
             // Exclude courses that belong to an active/published learning path —
             // those are only accessible via the learning path page, not as standalone courses.
             ->publiclyVisible()
+            // Exclude workshop-type courses — those are listed on /workshops, not /programs.
+            ->where(fn ($q) => $q->whereNull('program_type')->orWhere('program_type', '!=', 'workshop'))
             ->latest();
 
         if ($request->filled('track_id')) {

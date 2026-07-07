@@ -3,8 +3,8 @@
 namespace App\Http\Controllers\Public;
 
 use App\Http\Controllers\Controller;
+use App\Models\Course;
 use App\Models\Registration;
-use App\Models\Workshop;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -12,73 +12,70 @@ use Illuminate\Support\Facades\Auth;
 /**
  * Public workshop listing and detail endpoints.
  *
- * Workshops in EMC are sub-entities of a Course; price, certificate, image
- * and capacity data are pulled from the parent Course record.
- *
- * Enrollment = a Registration on the parent Course.
+ * Source of truth: courses with program_type = 'workshop' and status = 'published'.
+ * The separate Workshop scheduling model is not the public catalog — it tracks
+ * specific sessions/occurrences. The course record is what users browse and register for.
  */
 class WorkshopController extends Controller
 {
-    /** Statuses visible on the public website. */
-    private const PUBLIC_STATUSES = ['published', 'active', 'scheduled'];
-
     // ─── GET /api/workshops ───────────────────────────────────────────────────
 
     public function index(Request $request): JsonResponse
     {
-        $query = Workshop::with([
-            'course:id,title,slug,short_description,course_image,price,is_free,certificate,capacity,certificate_available,level,language',
-            'instructor.user:id,name,avatar',
-        ])
-            ->whereIn('status', self::PUBLIC_STATUSES);
+        $query = Course::with(['instructor.user'])
+            ->withCount('registrations')
+            ->where('program_type', 'workshop')
+            ->where('status', 'published');
 
-        // Filters
+        // Search across title, short_description, description
         if ($request->filled('search')) {
             $q = (string) $request->query('search');
             $query->where(fn ($sub) => $sub
                 ->where('title', 'like', "%{$q}%")
+                ->orWhere('short_description', 'like', "%{$q}%")
                 ->orWhere('description', 'like', "%{$q}%")
-                ->orWhereHas('course', fn ($c) => $c->where('title', 'like', "%{$q}%"))
+                ->orWhereHas('instructor.user', fn ($u) => $u->where('name', 'like', "%{$q}%"))
             );
         }
 
-        if ($request->filled('status')) {
-            $status = $request->query('status');
-            if (in_array($status, self::PUBLIC_STATUSES, true)) {
-                $query->where('status', $status);
+        // Delivery mode
+        if ($request->filled('location_type') && $request->query('location_type') !== 'all') {
+            $query->where('location_type', $request->query('location_type'));
+        }
+
+        // Price type
+        if ($request->filled('price_type')) {
+            if ($request->query('price_type') === 'free') {
+                $query->where(fn ($q) => $q->where('is_free', true)->orWhere('price', 0)->orWhereNull('price'));
+            } elseif ($request->query('price_type') === 'paid') {
+                $query->where('is_free', false)->where('price', '>', 0);
             }
         }
 
-        if ($request->filled('language')) {
-            $query->whereHas('course', fn ($c) => $c->where('language', $request->query('language')));
+        // Instructor
+        if ($request->filled('instructor_id')) {
+            $query->where('instructor_id', (int) $request->query('instructor_id'));
         }
 
-        if ($request->filled('level')) {
-            $query->whereHas('course', fn ($c) => $c->where('level', $request->query('level')));
+        // Department
+        if ($request->filled('department_id')) {
+            $query->where('department_id', (int) $request->query('department_id'));
         }
 
-        if ($request->boolean('registration_open')) {
-            $query->where('registration_open', true);
+        // Date range (start_date)
+        if ($request->filled('date_from')) {
+            $query->whereDate('start_date', '>=', $request->query('date_from'));
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('start_date', '<=', $request->query('date_to'));
         }
 
-        $perPage   = min((int) $request->query('per_page', 24), 100);
+        $perPage   = min((int) $request->query('per_page', 24), 200);
         $workshops = $query->orderBy('start_date')->paginate($perPage);
-
-        // Batch-fetch enrolled counts for the returned workshops.
-        $courseIds    = $workshops->pluck('course_id')->filter()->unique()->all();
-        $enrollCounts = [];
-        if (! empty($courseIds)) {
-            $enrollCounts = Registration::whereIn('course_id', $courseIds)
-                ->whereNotIn('status', ['cancelled', 'Cancelled'])
-                ->selectRaw('course_id, count(*) as cnt')
-                ->groupBy('course_id')
-                ->pluck('cnt', 'course_id')
-                ->all();
-        }
 
         return response()->json([
             'success' => true,
-            'data'    => $workshops->map(fn ($w) => $this->formatWorkshop($w, $enrollCounts)),
+            'data'    => $workshops->map(fn ($c) => $this->formatCourse($c)),
             'meta'    => [
                 'total'        => $workshops->total(),
                 'current_page' => $workshops->currentPage(),
@@ -92,26 +89,21 @@ class WorkshopController extends Controller
 
     public function show(Request $request, string $slug): JsonResponse
     {
-        $workshop = Workshop::with([
-            'course:id,title,slug,short_description,description,course_image,price,is_free,certificate,capacity,certificate_available,level,language,learning_outcomes,requirements',
-            'course.features',
-            'instructor.user:id,name,avatar',
-            'sessions' => fn ($q) => $q->whereIn('status', ['scheduled', 'live'])->orderBy('session_date'),
-        ])
+        $course = Course::with(['instructor.user', 'features'])
+            ->withCount('registrations')
             ->where('slug', $slug)
-            ->whereIn('status', self::PUBLIC_STATUSES)
+            ->where('program_type', 'workshop')
+            ->where('status', 'published')
             ->firstOrFail();
 
-        $enrollCount = Registration::where('course_id', $workshop->course_id)
-            ->whereNotIn('status', ['cancelled', 'Cancelled'])
-            ->count();
+        $enrollCount = $course->registrations_count ?? 0;
 
-        // Enrollment status for authenticated users.
+        // Enrollment status for authenticated users
         $enrollmentStatus = null;
-        $userId           = Auth::id();
-        if ($userId && $workshop->course_id) {
+        $userId = Auth::id();
+        if ($userId) {
             $reg = Registration::where('user_id', $userId)
-                ->where('course_id', $workshop->course_id)
+                ->where('course_id', $course->id)
                 ->whereNotIn('status', ['cancelled', 'Cancelled'])
                 ->latest()
                 ->first();
@@ -127,22 +119,13 @@ class WorkshopController extends Controller
         return response()->json([
             'success' => true,
             'data'    => array_merge(
-                $this->formatWorkshop($workshop, [$workshop->course_id => $enrollCount]),
+                $this->formatCourse($course),
                 [
-                    // Extra detail fields
-                    'full_description' => $workshop->description
-                        ?? $workshop->course?->description,
-                    'learning_outcomes' => $this->ensureArray($workshop->course?->learning_outcomes),
-                    'requirements'      => $this->ensureArray($workshop->course?->requirements),
-                    'sessions'          => $workshop->sessions->map(fn ($s) => [
-                        'id'           => $s->id,
-                        'title'        => $s->title,
-                        'session_date' => $s->session_date?->toDateString(),
-                        'start_time'   => $s->start_time,
-                        'end_time'     => $s->end_time,
-                        'meeting_url'  => $s->meeting_url,
-                        'status'       => $s->status,
-                    ])->values(),
+                    'full_description'  => $course->description,
+                    'learning_outcomes' => $this->ensureArray($course->learning_outcomes),
+                    'requirements'      => $this->ensureArray($course->requirements),
+                    'features'          => $course->features?->pluck('title')->all() ?? [],
+                    'enrolled_count'    => $enrollCount,
                     'enrollment_status' => $enrollmentStatus,
                 ]
             ),
@@ -151,73 +134,97 @@ class WorkshopController extends Controller
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
-    private function formatWorkshop(Workshop $w, array $enrollCounts): array
+    private function formatCourse(Course $c): array
     {
-        $course       = $w->course;
-        $instructor   = $w->instructor;
-        $instructorUser = $instructor?->user;
+        $instructor = $c->instructor;
+        $user       = $instructor?->user;
+        $isOnline   = in_array(strtolower((string) $c->location_type), ['online', ''], true)
+                      || $c->location_type === null;
+
+        $capacity        = (int) ($c->capacity ?? 0);
+        $enrolledCount   = (int) ($c->registrations_count ?? 0);
+        $spotsRemaining  = max(0, $capacity - $enrolledCount);
 
         return [
-            'id'               => $w->id,
-            'title'            => $w->title,
-            'slug'             => $w->slug,
-            'short_description'=> $course?->short_description,
-            'description'      => $w->description ?? $course?->description,
-            'image_url'        => $this->imageUrl($course?->course_image),
-            'status'           => $w->status,
-            'start_date'       => $w->start_date?->toDateString(),
-            'end_date'         => $w->end_date?->toDateString(),
-            'start_time'       => $w->start_time ?? null,
-            'end_time'         => $w->end_time ?? null,
-            'location_type'    => $w->location_type,
-            'meeting_link'     => $w->meeting_link,
-            'registration_open'=> (bool) $w->registration_open,
-            'enrollment_open'  => (bool) $w->registration_open,  // alias
-            'course_id'        => $w->course_id,
-            'course_slug'      => $course?->slug,
+            'id'               => $c->id,
+            'title'            => $c->title,
+            'slug'             => $c->slug,
+            'short_description'=> $c->short_description,
+            'description'      => $c->short_description ?? $c->description,
+            'image_url'        => $this->imageUrl($c->course_image),
+            'status'           => $c->status,
+            'program_type'     => $c->program_type,
+
+            // Dates
+            'start_date'       => $this->dateStr($c->start_date),
+            'end_date'         => $this->dateStr($c->end_date),
+            'start_time'       => $c->start_time,
+            'end_time'         => $c->end_time,
+            // Legacy aliases for fetchUpcomingWorkshops() mapping
+            'date'             => $this->dateStr($c->start_date) ?? '',
+            'time'             => $c->start_time ?? '',
+
+            // Delivery
+            'location_type'    => $c->location_type ?? 'online',
+            'meeting_link'     => $c->meeting_link,
+            'is_online'        => $isOnline,
+
+            // Registration
+            'registration_open' => (bool) ($c->registration_open ?? true),
+            'enrollment_open'   => (bool) ($c->registration_open ?? true),
 
             // Price / access
-            'price'            => $course?->price !== null ? (float) $course->price : null,
-            'is_free'          => (bool) ($course?->is_free ?? false),
+            'price'    => $c->price !== null ? (float) $c->price : null,
+            'is_free'  => (bool) ($c->is_free ?? ($c->price == 0)),
 
             // Certificate
-            'certificate'      => $course?->certificate,
-            'certificate_available' => (bool) ($course?->certificate_available ?? false),
+            'certificate'           => $c->certificate,
+            'certificate_available' => (bool) ($c->certificate_available ?? false),
 
-            // Capacity / enrollment
-            'seats'            => $course?->capacity,
-            'enrolled_count'   => (int) ($enrollCounts[$w->course_id] ?? 0),
+            // Capacity / enrollment — aliases for both normalizeWorkshopRow and fetchUpcomingWorkshops
+            'seats'           => $capacity ?: null,
+            'total_spots'     => $capacity ?: 0,
+            'enrolled_count'  => $enrolledCount,
+            'spots_remaining' => $spotsRemaining,
 
             // Level / language
-            'level'            => $course?->level,
-            'language'         => $course?->language,
+            'level'    => $c->level,
+            'language' => $c->language,
 
-            // Instructor
-            'instructor'       => $instructor ? [
+            // Duration — alias for fetchUpcomingWorkshops
+            'training_hours' => $c->training_hours,
+            'duration_hours' => $c->training_hours ?? 0,
+
+            // Instructor — both nested object and flat alias
+            'instructor' => $instructor ? [
                 'id'         => $instructor->id,
-                'name'       => $instructorUser?->name ?? $instructor->name ?? null,
-                'avatar_url' => $this->imageUrl($instructorUser?->avatar ?? $instructor->image ?? null),
+                'name'       => $user?->name ?? $instructor->name ?? null,
+                'avatar_url' => $this->imageUrl($user?->avatar ?? $instructor->image ?? null),
                 'title'      => $instructor->title ?? null,
             ] : null,
+            // Flat alias for fetchUpcomingWorkshops
+            'trainer_name' => $instructor ? ($user?->name ?? $instructor->name ?? 'فريق EMC') : 'فريق EMC',
+
+            'course_slug' => $c->slug,
         ];
     }
 
     private function imageUrl(?string $path): ?string
     {
-        if (! $path) {
-            return null;
-        }
-        if (str_starts_with($path, 'http')) {
-            return $path;
-        }
+        if (! $path) return null;
+        if (str_starts_with($path, 'http')) return $path;
         return asset('storage/' . ltrim($path, '/'));
+    }
+
+    private function dateStr(mixed $value): ?string
+    {
+        if (! $value) return null;
+        return \Carbon\Carbon::parse($value)->format('Y-m-d');
     }
 
     private function ensureArray(mixed $value): array
     {
-        if (is_array($value)) {
-            return $value;
-        }
+        if (is_array($value)) return $value;
         if (is_string($value) && $value !== '') {
             $decoded = json_decode($value, true);
             return is_array($decoded) ? $decoded : [];

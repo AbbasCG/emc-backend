@@ -12,6 +12,11 @@ class CourseModuleResource extends JsonResource
         return [
             'id'                => $this->id,
             'course_id'         => $this->course_id,
+            'course'            => $this->whenLoaded('course', fn () => [
+                'id'    => $this->course->id,
+                'title' => $this->course->title,
+                'slug'  => $this->course->slug,
+            ]),
             'title'             => $this->title,
             'description'       => $this->description,
             'sort_order'        => $this->sort_order,

@@ -28,9 +28,14 @@ class OrderResource extends JsonResource
                 'slug'  => $this->course?->slug,
             ]),
             'user' => $this->whenLoaded('user', fn () => [
-                'id'    => $this->user?->id,
-                'name'  => $this->user?->name,
-                'email' => $this->user?->email,
+                'id'                 => $this->user?->id,
+                'name'               => $this->user?->name,
+                'email'              => $this->user?->email,
+                'phone'              => $this->user?->phone,
+                'phone_country_code' => $this->user?->phone_country_code,
+                'city'               => $this->user?->city,
+                'country'            => $this->user?->country,
+                'avatar_url'         => $this->user?->avatar_url,
             ]),
             'invoice' => $this->whenLoaded('invoice', fn () => $this->invoice ? [
                 'id'             => $this->invoice->id,
