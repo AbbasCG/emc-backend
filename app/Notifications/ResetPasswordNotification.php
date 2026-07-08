@@ -9,23 +9,22 @@ class ResetPasswordNotification extends BaseResetPassword
 {
     public function toMail($notifiable): MailMessage
     {
-        $url = url(route('password.reset', [
-            'token' => $this->token,
-            'email' => $notifiable->getEmailForPasswordReset(),
-        ], false));
+        // Build the frontend SPA reset URL directly — no named web route exists in this API project.
+        $frontend = rtrim(config('app.frontend_url', config('app.url', 'http://localhost')), '/');
+        $url = $frontend . '/reset-password?token=' . urlencode($this->token)
+            . '&email=' . urlencode($notifiable->getEmailForPasswordReset());
 
-        // Use frontend URL if configured so the link lands on the SPA
-        $frontend = rtrim(config('app.frontend_url', ''), '/');
-        if ($frontend) {
-            $url = $frontend . '/reset-password?token=' . urlencode($this->token)
-                . '&email=' . urlencode($notifiable->getEmailForPasswordReset());
-        }
+        $fromAddress = config('mail.from.address', 'noreply@edumc.nl');
+        $fromName    = config('mail.from.name', 'منصة EMC');
+        $replyTo     = config('mail.support_email', 'support@edumc.nl');
 
         return (new MailMessage)
+            ->from($fromAddress, $fromName)
+            ->replyTo($replyTo)
             ->subject('إعادة تعيين كلمة المرور — منصة EMC')
             ->view('emails.password-reset', [
-                'userName'   => $notifiable->name ?? $notifiable->email,
-                'resetUrl'   => $url,
+                'userName'    => $notifiable->name ?? $notifiable->email,
+                'resetUrl'    => $url,
                 'expiresMins' => config('auth.passwords.' . config('auth.defaults.passwords') . '.expire', 60),
             ]);
     }

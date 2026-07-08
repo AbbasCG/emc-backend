@@ -42,6 +42,6 @@ class SupportTicket extends Model
 
     public function replies(): HasMany
     {
-        return $this->hasMany(SupportTicketReply::class, 'ticket_id')->latest();
+        return $this->hasMany(SupportTicketReply::class, 'ticket_id')->oldest();
     }
 }

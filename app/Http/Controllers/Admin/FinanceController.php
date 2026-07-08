@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\FinancialTransactionResource;
+use App\Models\FinanceAccount;
 use App\Models\FinancialTransaction;
 use App\Models\Payment;
 use App\Support\PaymentStatuses;
@@ -137,23 +138,33 @@ class FinanceController extends Controller
                 $s = $request->search;
                 $q->whereHas('order', fn ($oq) => $oq->where('order_number', 'like', "%{$s}%")
                     ->orWhereHas('user', fn ($uq) => $uq->where('name', 'like', "%{$s}%")
-                        ->orWhere('email', 'like', "%{$s}%")))
+                        ->orWhere('email', 'like', "%{$s}%")
+                        ->orWhere('phone', 'like', "%{$s}%")))
                   ->orWhereHas('registration', fn ($rq) => $rq->where('full_name', 'like', "%{$s}%")
                         ->orWhere('email', 'like', "%{$s}%"));
             })
             ->latest()
-            ->paginate(30);
+            ->paginate(50);
 
         return response()->json([
             'success' => true,
             'data'    => $payments->through(function ($p) {
-                // Resolve student name/email from order.user (Stripe flow) or registration (legacy)
-                $studentName  = $p->order?->user?->name  ?? $p->registration?->full_name  ?? null;
-                $studentEmail = $p->order?->user?->email ?? $p->registration?->email       ?? null;
-                $courseTitle  = $p->order?->course?->title ?? $p->registration?->course?->title ?? null;
-                $currency     = strtoupper($p->order?->currency ?? $p->registration?->course?->currency ?? 'eur');
-                $orderNumber  = $p->order?->order_number ?? null;
-                $invoiceNum   = $p->order?->invoice?->invoice_number ?? null;
+                $user         = $p->order?->user;
+                $reg          = $p->registration;
+                $studentName  = $user?->name  ?? $reg?->full_name  ?? null;
+                $studentEmail = $user?->email ?? $reg?->email       ?? null;
+                $studentPhone = $user?->phone ?? null;
+                $studentAvatar = $user?->avatar_url ?? null;
+
+                // Item resolution: order.course → registration.course
+                $course = $p->order?->course ?? $reg?->course;
+                $itemTitle = $course?->title ?? null;
+                $itemType  = $course ? 'course' : null;
+                // Workshop / learning path can be added here when those relations exist on Order
+
+                $currency    = strtoupper($p->order?->currency ?? $course?->currency ?? 'EUR');
+                $orderNumber = $p->order?->order_number ?? null;
+                $invoiceNum  = $p->order?->invoice?->invoice_number ?? null;
 
                 return [
                     'id'              => $p->id,
@@ -167,13 +178,45 @@ class FinanceController extends Controller
                     'created_at'      => $p->created_at,
                     'student_name'    => $studentName,
                     'student_email'   => $studentEmail,
-                    'course'          => $courseTitle,
+                    'student_phone'   => $studentPhone,
+                    'student_avatar'  => $studentAvatar,
+                    'item_title'      => $itemTitle,
+                    'item_type'       => $itemType,
+                    // legacy field kept for backward compat
+                    'course'          => $itemTitle,
+                    'payer_email'     => $studentEmail,
+                    'course_name'     => $itemTitle,
                     'order_number'    => $orderNumber,
                     'invoice_number'  => $invoiceNum,
                     'order_id'        => $p->order_id,
                     'registration_id' => $p->registration_id,
                 ];
             }),
+        ]);
+    }
+
+    public function accountsSummary(): \Illuminate\Http\JsonResponse
+    {
+        $accounts = FinanceAccount::where('is_active', true)
+            ->orderBy('name')
+            ->get()
+            ->map(fn ($a) => [
+                'id'              => $a->id,
+                'name'            => $a->name,
+                'type'            => $a->type,
+                'currency'        => $a->currency,
+                'opening_balance' => (float) $a->opening_balance,
+                'current_balance' => (float) $a->current_balance,
+            ]);
+
+        $totalCash = $accounts->where('currency', 'EUR')->sum('current_balance');
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'accounts'   => $accounts,
+                'total_cash' => $totalCash,
+            ],
         ]);
     }
 

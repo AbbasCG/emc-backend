@@ -13,6 +13,7 @@ use App\Http\Controllers\Admin\CertificateTemplateController;
 use App\Http\Controllers\Admin\CouponController;
 use App\Http\Controllers\Admin\CourseModuleController;
 use App\Http\Controllers\Admin\DocumentFolderController;
+use App\Http\Controllers\Admin\FinanceAccountController;
 use App\Http\Controllers\Admin\FinanceController;
 use App\Http\Controllers\Admin\KnowledgeArticleController;
 use App\Http\Controllers\Admin\KnowledgeCategoryController;
@@ -913,6 +914,19 @@ Route::middleware(['auth:sanctum', 'role:admin,department_manager,programs_manag
     Route::get('departments/{department}', [DepartmentController::class, 'show']);
 });
 
+// ─── Operations: support tickets — extended roles (support_agent, hr_manager can view/reply) ─
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,support_agent,hr_manager'])->prefix('operations')->group(function () {
+    Route::get('support-tickets',                                      [AdminSupportTicketController::class,      'index']);
+    Route::get('support-tickets/assignees',                            [AdminSupportTicketController::class,      'assignees']);
+    Route::get('support-tickets/{supportTicket}',                      [AdminSupportTicketController::class,      'show']);
+    Route::get('support-tickets/{supportTicket}/activity',             [AdminSupportTicketController::class,      'activity']);
+    Route::post('support-tickets/{supportTicket}/replies',             [AdminSupportTicketController::class,      'reply']);
+    Route::patch('support-tickets/{supportTicket}',                    [AdminSupportTicketController::class,      'updateStatus']);
+    Route::patch('support-tickets/{supportTicket}/assign',             [AdminSupportTicketController::class,      'assign']);
+    Route::patch('support-tickets/{supportTicket}/resolve',            [AdminSupportTicketController::class,      'resolve']);
+    Route::delete('support-tickets/{supportTicket}',                   [AdminSupportTicketController::class,      'destroy']);
+});
+
 // ─── Operations aliases (frontend uses /operations/*, backend uses /admin/*) ─
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('operations')->group(function () {
     Route::get('dashboard',                                            [AdminController::class,                   'dashboard']);
@@ -930,15 +944,6 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::get('forms/{form}/submissions',                             [DynamicFormController::class,             'submissions']);
     Route::post('forms',                                               [DynamicFormController::class,             'store']);
     Route::put('forms/{form}',                                         [DynamicFormController::class,             'update']);
-    Route::get('support-tickets',                                      [AdminSupportTicketController::class,      'index']);
-    Route::get('support-tickets/assignees',                            [AdminSupportTicketController::class,      'assignees']);
-    Route::get('support-tickets/{supportTicket}',                      [AdminSupportTicketController::class,      'show']);
-    Route::get('support-tickets/{supportTicket}/activity',             [AdminSupportTicketController::class,      'activity']);
-    Route::post('support-tickets/{supportTicket}/replies',             [AdminSupportTicketController::class,      'reply']);
-    Route::patch('support-tickets/{supportTicket}',                    [AdminSupportTicketController::class,      'updateStatus']);
-    Route::patch('support-tickets/{supportTicket}/assign',             [AdminSupportTicketController::class,      'assign']);
-    Route::patch('support-tickets/{supportTicket}/resolve',            [AdminSupportTicketController::class,      'resolve']);
-    Route::delete('support-tickets/{supportTicket}',                   [AdminSupportTicketController::class,      'destroy']);
     Route::get('volunteers',                                           [VolunteerController::class,               'index']);
     Route::get('volunteers/{volunteer}',                               [VolunteerController::class,               'show']);
     Route::patch('volunteers/{volunteer}',                             [VolunteerController::class,               'update']);
@@ -965,6 +970,14 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_ma
     Route::get('coupons',                 [CouponController::class,     'index']);
     Route::post('coupons',                [CouponController::class,     'store']);
     Route::patch('coupons/{coupon}',      [CouponController::class,     'update']);
+
+    // Finance accounts & manual transactions
+    Route::get('accounts',                                           [FinanceAccountController::class, 'index']);
+    Route::post('accounts',                                          [FinanceAccountController::class, 'store']);
+    Route::patch('accounts/{account}',                               [FinanceAccountController::class, 'update']);
+    Route::get('accounts/{account}/transactions',                    [FinanceAccountController::class, 'transactions']);
+    Route::post('accounts/{account}/transactions',                   [FinanceAccountController::class, 'addTransaction']);
+    Route::get('accounts-summary',                                   [FinanceController::class,        'accountsSummary']);
 });
 
 // ─── KPI unified endpoint (?tab=overview|education|finance|…) ────────────────

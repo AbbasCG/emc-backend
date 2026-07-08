@@ -31,6 +31,7 @@ class SupportTicketReplyMail extends Mailable implements ShouldQueue
         return new Envelope(
             from:    new Address($supportEmail, $supportName),
             replyTo: [new Address($supportEmail, $supportName)],
+            bcc:     [new Address($supportEmail, $supportName)],
             subject: 'رد على تذكرتك — منصة EMC',
         );
     }

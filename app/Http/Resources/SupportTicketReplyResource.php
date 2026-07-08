@@ -17,8 +17,9 @@ class SupportTicketReplyResource extends JsonResource
             'is_internal_note' => $this->is_internal_note,
             'internal'         => $this->is_internal_note,
             'user'             => $this->whenLoaded('user', fn () => [
-                'id'   => $this->user?->id,
-                'name' => $this->user?->name,
+                'id'     => $this->user?->id,
+                'name'   => $this->user?->name,
+                'avatar' => $this->user?->avatar ?? $this->user?->avatar_url ?? null,
             ]),
             'created_at'       => optional($this->created_at)->toISOString(),
         ];

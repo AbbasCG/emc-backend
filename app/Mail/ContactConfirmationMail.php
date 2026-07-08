@@ -30,6 +30,7 @@ class ContactConfirmationMail extends Mailable implements ShouldQueue
         $supportName  = (string) config('mail.support_name', 'EMC Support');
 
         return new Envelope(
+            from:    new Address((string) config('mail.from.address', 'noreply@edumc.nl'), (string) config('mail.from.name', 'EMC Platform')),
             replyTo: [new Address($supportEmail, $supportName)],
             subject: 'تم استلام رسالتك — منصة EMC',
         );
