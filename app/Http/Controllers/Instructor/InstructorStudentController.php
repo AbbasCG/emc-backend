@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Instructor;
 
+use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Models\Course;
 use App\Models\Instructor;
@@ -45,7 +46,7 @@ class InstructorStudentController extends Controller
 
         $query = Registration::with('user')
             ->whereIn('course_id', $courseIds)
-            ->whereNotIn('status', ['Rejected', 'Cancelled'])
+            ->whereIn('status', RegistrationStatus::activeEnrollment())
             ->orderBy('course_id')
             ->orderByDesc('created_at');
 

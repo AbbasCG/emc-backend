@@ -231,12 +231,23 @@ class StudentDashboardController extends Controller
         $upcomingSessions = $allEnrolledSessions->where('status', 'upcoming')->values();
         $endedSessions    = $allEnrolledSessions->where('status', 'ended')->values();
 
-        // ── Assignments (active, not submitted = pending) ─────────────────────
+        // ── Assignments (active, visible, non-orphaned) ───────────────────────
         $allAssignments = Assignment::query()
             ->where('status', 'active')
+            ->where('is_visible', true)
             ->where(function ($q) use ($courseIds) {
                 $q->whereIn('course_id', $courseIds)
                     ->orWhereHas('workshop', fn ($w) => $w->whereIn('course_id', $courseIds));
+            })
+            // Exclude orphaned rows: linked CourseAssignment was soft-deleted
+            ->where(function ($q) {
+                $q->whereNull('course_assignment_id')
+                  ->orWhereExists(function ($sub) {
+                      $sub->select(\DB::raw(1))
+                          ->from('course_assignments')
+                          ->whereColumn('course_assignments.id', 'assignments.course_assignment_id')
+                          ->whereNull('course_assignments.deleted_at');
+                  });
             })
             ->with(['course:id,title,slug', 'submissions' => fn ($q) => $q->where('user_id', $user->id)])
             ->orderBy('due_date')

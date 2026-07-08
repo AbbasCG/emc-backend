@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\AdminLmsAssignmentDetailResource;
 use App\Http\Resources\LmsAssignmentResource;
 use App\Models\Assignment;
+use App\Models\CourseAssignment;
+use App\Services\CourseAssignmentBridgeService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -45,7 +47,7 @@ class AdminLmsAssignmentController extends Controller
             ->additional(['success' => true, 'message' => 'Assignments retrieved successfully']);
     }
 
-    public function store(Request $request): JsonResponse
+    public function store(Request $request, CourseAssignmentBridgeService $bridge): JsonResponse
     {
         $validated = $request->validate([
             'course_id'   => ['nullable', 'exists:courses,id'],
@@ -55,13 +57,38 @@ class AdminLmsAssignmentController extends Controller
             'due_date'    => ['nullable', 'date'],
             'max_score'   => ['nullable', 'numeric', 'min:0'],
             'status'      => ['nullable', 'in:active,archived'],
+            'is_visible'  => ['nullable', 'boolean'],
         ]);
 
-        $validated['status'] = $validated['status'] ?? 'active';
+        $validated['status']     = $validated['status'] ?? 'active';
+        $validated['is_visible'] = $validated['is_visible'] ?? true;
+
+        // If this assignment belongs to a specific course (not a workshop), also create
+        // a CourseAssignment so it appears in the course content page.
+        if (! empty($validated['course_id']) && empty($validated['workshop_id'])) {
+            $courseAssignment = CourseAssignment::create([
+                'course_id'       => $validated['course_id'],
+                'title'           => $validated['title'],
+                'description'     => $validated['description'] ?? null,
+                'deadline'        => $validated['due_date'] ?? null,
+                'max_points'      => $validated['max_score'] ?? null,
+                'is_visible'      => $validated['is_visible'],
+                'status'          => $validated['status'] === 'active' ? 'published' : 'draft',
+                'submission_type' => 'any',
+                'sort_order'      => (int) CourseAssignment::where('course_id', $validated['course_id'])->max('sort_order') + 1,
+            ]);
+
+            $validated['course_assignment_id'] = $courseAssignment->id;
+        }
 
         $assignment = Assignment::query()->create($validated);
 
-        return (new LmsAssignmentResource($assignment))
+        // Link the CourseAssignment back to the new Assignment.
+        if (isset($courseAssignment)) {
+            // The bridge foreign key goes on the Assignment side; CourseAssignment is already linked.
+        }
+
+        return (new LmsAssignmentResource($assignment->load('course.instructor.user')))
             ->additional(['success' => true, 'message' => 'Assignment created successfully'])
             ->response()
             ->setStatusCode(201);
@@ -92,17 +119,45 @@ class AdminLmsAssignmentController extends Controller
             'due_date'    => ['nullable', 'date'],
             'max_score'   => ['nullable', 'numeric', 'min:0'],
             'status'      => ['sometimes', 'in:active,archived'],
+            'is_visible'  => ['sometimes', 'boolean'],
         ]);
 
         $assignment->update($validated);
 
-        return (new LmsAssignmentResource($assignment->fresh()))
+        // Mirror changes to the linked CourseAssignment (if any).
+        if ($assignment->course_assignment_id) {
+            $courseAssignment = CourseAssignment::withTrashed()->find($assignment->course_assignment_id);
+            if ($courseAssignment) {
+                $caUpdate = [];
+                if (array_key_exists('title', $validated))       $caUpdate['title']       = $validated['title'];
+                if (array_key_exists('description', $validated)) $caUpdate['description'] = $validated['description'];
+                if (array_key_exists('due_date', $validated))    $caUpdate['deadline']    = $validated['due_date'];
+                if (array_key_exists('max_score', $validated))   $caUpdate['max_points']  = $validated['max_score'];
+                if (array_key_exists('is_visible', $validated))  $caUpdate['is_visible']  = $validated['is_visible'];
+                if (array_key_exists('status', $validated)) {
+                    $caUpdate['status'] = $validated['status'] === 'active' ? 'published' : 'draft';
+                }
+                if (! empty($caUpdate)) {
+                    $courseAssignment->restore();  // restore if soft-deleted
+                    $courseAssignment->update($caUpdate);
+                }
+            }
+        }
+
+        return (new LmsAssignmentResource($assignment->fresh()->load('course.instructor.user')))
             ->additional(['success' => true, 'message' => 'Assignment updated successfully'])
             ->response();
     }
 
     public function destroy(Assignment $assignment): JsonResponse
     {
+        // Also soft-delete the linked CourseAssignment so it disappears from course content page.
+        if ($assignment->course_assignment_id) {
+            CourseAssignment::withTrashed()
+                ->where('id', $assignment->course_assignment_id)
+                ->delete();
+        }
+
         $assignment->delete();
 
         return response()->json(['success' => true, 'message' => 'Assignment deleted successfully']);

@@ -71,13 +71,14 @@ class CourseAssignmentBridgeService
     protected function mapCourseAssignmentAttributes(CourseAssignment $courseAssignment): array
     {
         return [
-            'course_id'              => $courseAssignment->course_id,
-            'title'                  => $courseAssignment->title,
-            'description'            => $courseAssignment->description,
-            'due_date'               => $courseAssignment->deadline,
-            'max_score'              => $courseAssignment->max_points,
-            'status'                 => in_array($courseAssignment->status, ['published', 'active'], true) ? 'active' : 'inactive',
-            'resubmission_allowed'   => (bool) $courseAssignment->resubmission_allowed,
+            'course_id'            => $courseAssignment->course_id,
+            'title'                => $courseAssignment->title,
+            'description'          => $courseAssignment->description,
+            'due_date'             => $courseAssignment->deadline,
+            'max_score'            => $courseAssignment->max_points,
+            'status'               => in_array($courseAssignment->status, ['published', 'active'], true) ? 'active' : 'archived',
+            'is_visible'           => (bool) $courseAssignment->is_visible,
+            'resubmission_allowed' => (bool) $courseAssignment->resubmission_allowed,
         ];
     }
 }

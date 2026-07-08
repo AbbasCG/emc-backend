@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Instructor;
 
+use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\OralAssessmentBookingResource;
 use App\Models\Course;
@@ -44,10 +45,10 @@ class InstructorPlacementController extends Controller
             ], 422);
         }
 
-        // Load registrations (includes those without a linked user account)
+        // Only show students with an active paid enrollment — not pending_payment.
         $registrations = Registration::with('user')
             ->where('course_id', $course->id)
-            ->whereNotIn('status', ['Rejected', 'Cancelled'])
+            ->whereIn('status', RegistrationStatus::activeEnrollment())
             ->get();
 
         // Collect user IDs that can have placement attempts (API-based test requires auth)

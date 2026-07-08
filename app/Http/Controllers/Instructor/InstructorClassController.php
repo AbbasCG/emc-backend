@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Instructor;
 
+use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Models\ClassGroup;
 use App\Models\ClassGroupStudent;
@@ -154,7 +155,7 @@ class InstructorClassController extends Controller
 
         $registrations = Registration::with('user:id,name,email,avatar')
             ->where('course_id', $course->id)
-            ->whereNotIn('status', ['Rejected', 'Cancelled', 'rejected', 'cancelled'])
+            ->whereIn('status', RegistrationStatus::activeEnrollment())
             ->whereNotNull('user_id')
             ->get();
 
@@ -226,7 +227,7 @@ class InstructorClassController extends Controller
 
         $registrations = Registration::with('user')
             ->where('course_id', $course->id)
-            ->whereNotIn('status', ['Rejected', 'Cancelled'])
+            ->whereIn('status', RegistrationStatus::activeEnrollment())
             ->get();
 
         $userIds = $registrations->pluck('user_id')->filter()->unique()->values()->all();

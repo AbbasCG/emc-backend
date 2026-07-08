@@ -260,6 +260,7 @@ class CourseContentController extends Controller
         $data['course_id']  = $course->id;
         $data['sort_order'] = $data['sort_order']
             ?? (int) CourseAssignment::where('course_id', $course->id)->max('sort_order') + 1;
+        $data['status']     = $data['status'] ?? 'published';
 
         $assignment = CourseAssignment::create($data);
         app(CourseAssignmentBridgeService::class)->ensureLmsAssignment($assignment);
@@ -299,6 +300,10 @@ class CourseContentController extends Controller
         $this->enforceCourseScope($course, $courseAssignment->course_id);
 
         AuditLogService::logModel('deleted', $courseAssignment, null, null, ['course_id' => $courseAssignment->course_id], $request);
+
+        // Also delete the linked LMS Assignment row so it no longer appears in global admin.
+        \App\Models\Assignment::where('course_assignment_id', $courseAssignment->id)->delete();
+
         $courseAssignment->delete();
 
         return response()->json(['success' => true, 'message' => 'تم الحذف بنجاح']);

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Instructor;
 
+use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\LmsSessionResource;
 use App\Http\Resources\UserResource;
@@ -57,29 +58,52 @@ class InstructorDashboardController extends Controller
               ->orWhere('instructor_id', $profile->id);
         })->count();
 
-        // Sessions that are past/completed but have no attendance records saved yet
+        // Sessions that have ended (by real time) but have no attendance records saved yet
+        $now         = now();
+        $todayDate   = $now->toDateString();
+        $currentTime = $now->format('H:i:s');
+
         $pendingAttendanceCount = LmsSession::where(function ($q) use ($courseIds, $profile) {
             $q->whereIn('course_id', $courseIds)
               ->orWhere('instructor_id', $profile->id);
-        })->whereIn('status', ['completed', 'live', 'scheduled'])
-          ->whereDoesntHave('attendances')
+        })->where(function ($q) use ($todayDate, $currentTime) {
+            // Past sessions: date before today OR (today AND end_time has passed)
+            $q->whereDate('session_date', '<', $todayDate)
+              ->orWhere(function ($inner) use ($todayDate, $currentTime) {
+                  $inner->whereDate('session_date', $todayDate)
+                        ->whereNotNull('end_time')
+                        ->whereTime('end_time', '<', $currentTime);
+              });
+        })->whereDoesntHave('attendances')
           ->count();
 
         $studentsCount = Registration::whereIn('course_id', $courseIds)
-            ->where('status', 'Registered')
+            ->whereIn('status', RegistrationStatus::activeEnrollment())
             ->distinct('email')
             ->count('email');
 
         $upcomingSessions = LmsSession::query()
-            ->with(['workshop', 'instructor'])
+            ->with(['workshop', 'instructor', 'course'])
             ->where(function ($q) use ($courseIds, $profile) {
                 $q->where('instructor_id', $profile->id)
                   ->orWhereIn('course_id', $courseIds)
                   ->orWhereHas('workshop', fn ($w) => $w->whereIn('course_id', $courseIds));
             })
-            ->whereIn('status', ['scheduled', 'live'])
+            ->where(function ($q) use ($todayDate, $currentTime) {
+                // Include any session that has not ended yet (real-time, not DB status)
+                $q->whereDate('session_date', '>', $todayDate)
+                  ->orWhere(function ($inner) use ($todayDate, $currentTime) {
+                      $inner->whereDate('session_date', $todayDate)
+                            ->where(function ($t) use ($currentTime) {
+                                // No end_time recorded → always include today's sessions
+                                $t->whereNull('end_time')
+                                  ->orWhereTime('end_time', '>=', $currentTime);
+                            });
+                  });
+            })
             ->orderBy('session_date')
-            ->take(10)
+            ->orderBy('start_time')
+            ->take(15)
             ->get();
 
         $pendingReviews = \App\Models\AssignmentSubmission::query()

@@ -36,14 +36,28 @@ class StudentAssignmentController extends Controller
         $bridge->syncForCourses($courseIds);
 
         $query = Assignment::query()
-            ->with(['course:id,title'])
+            ->with(['course:id,title,slug'])
             ->where('status', 'active')
+            ->where('is_visible', true)
             ->where(function ($q) use ($courseIds) {
                 $q->whereIn('course_id', $courseIds)
                     ->orWhereHas('workshop', fn ($w) => $w->whereIn('course_id', $courseIds));
             })
+            // Exclude orphaned rows: linked CourseAssignment was soft-deleted but
+            // this Assignment row was never cleaned up (pre-cascade-fix data).
+            ->where(function ($q) {
+                $q->whereNull('course_assignment_id')
+                  ->orWhereExists(function ($sub) {
+                      $sub->select(DB::raw(1))
+                          ->from('course_assignments')
+                          ->whereColumn('course_assignments.id', 'assignments.course_assignment_id')
+                          ->whereNull('course_assignments.deleted_at');
+                  });
+            })
+            // Only assignments this student has actually submitted.
+            ->whereHas('submissions', fn ($q) => $q->where('user_id', $user->id)->whereNotNull('submitted_at'))
             ->with(['submissions' => fn ($q) => $q->where('user_id', $user->id)])
-            ->orderBy('due_date');
+            ->orderByDesc('due_date');
 
         $perPage = min((int) $request->query('per_page', 20), 100);
 

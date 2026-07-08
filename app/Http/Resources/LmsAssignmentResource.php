@@ -68,6 +68,7 @@ class LmsAssignmentResource extends JsonResource
             'max_points'      => $this->max_score,
             'submission_type' => $this->submission_type ?? 'any',
             'status'          => $request->is('api/admin/*') ? ($this->status ?? 'active') : $studentStatus,
+            'is_visible'      => $this->is_visible ?? true,
             'resubmission_allowed' => (bool) $this->resubmission_allowed,
 
             'score'           => $submissionModel?->score,

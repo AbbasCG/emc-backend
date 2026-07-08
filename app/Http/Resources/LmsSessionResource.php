@@ -38,6 +38,7 @@ class LmsSessionResource extends JsonResource
             'workshop'      => WorkshopResource::make($this->whenLoaded('workshop')),
             'instructor_name' => $this->whenLoaded('instructor', fn () => $this->instructor?->name),
             'course_title'  => $this->whenLoaded('course', fn () => $this->course?->title),
+            'course_name'   => $this->whenLoaded('course', fn () => $this->course?->title),
             'instructor'    => InstructorResource::make($this->whenLoaded('instructor')),
             'attendances'      => AttendanceResource::collection($this->whenLoaded('attendances')),
             'attendance_count' => $this->when(isset($this->attendances_count), fn () => (int) $this->attendances_count),

@@ -18,12 +18,14 @@ class Assignment extends Model
         'max_score',
         'status',
         'resubmission_allowed',
+        'is_visible',
     ];
 
     protected $casts = [
         'due_date' => 'datetime',
         'max_score' => 'decimal:2',
         'resubmission_allowed' => 'boolean',
+        'is_visible' => 'boolean',
     ];
 
     public function courseAssignment(): BelongsTo
