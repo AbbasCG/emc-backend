@@ -749,6 +749,9 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::post('email-settings/test',      [EmailSettingsController::class, 'test']);
     Route::get('email-logs',                [EmailLogsController::class, 'index']);
     Route::get('email-logs/stats',          [EmailLogsController::class, 'stats']);
+    Route::get('email-logs/chart',          [EmailLogsController::class, 'chart']);
+    Route::get('email-logs/queue',          [EmailLogsController::class, 'queue']);
+    Route::get('email-logs/{id}',           [EmailLogsController::class, 'show']);
     Route::post('email-logs/{id}/retry',    [EmailLogsController::class, 'retry']);
 
     // ── Phase 7: Notification templates & logs ────────────────────────────────

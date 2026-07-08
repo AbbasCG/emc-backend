@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Lms;
 
+use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\AttendanceResource;
 use App\Models\Attendance;
@@ -105,11 +106,11 @@ class SessionAttendanceController extends Controller
             }
         })->get()->keyBy('user_id');
 
-        // All enrolled students for this course
+        // All enrolled students for this course (paid/active registrations only)
         $enrolledStudents = $courseId
             ? Registration::with('user:id,name,email,avatar')
                 ->where('course_id', $courseId)
-                ->whereNotIn('status', ['Rejected', 'Cancelled', 'rejected', 'cancelled'])
+                ->whereIn('status', RegistrationStatus::activeEnrollment())
                 ->whereNotNull('user_id')
                 ->get()
             : collect();

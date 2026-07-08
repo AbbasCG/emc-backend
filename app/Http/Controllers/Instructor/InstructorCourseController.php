@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Instructor;
 
+use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\CourseResource;
 use App\Models\Course;
@@ -34,7 +35,7 @@ class InstructorCourseController extends Controller
         $courseIds = $courses->pluck('id')->all();
 
         $enrolledCounts = Registration::whereIn('course_id', $courseIds)
-            ->whereNotIn('status', ['Rejected', 'Cancelled'])
+            ->whereIn('status', RegistrationStatus::activeEnrollment())
             ->groupBy('course_id')
             ->selectRaw('course_id, count(*) as cnt')
             ->pluck('cnt', 'course_id');

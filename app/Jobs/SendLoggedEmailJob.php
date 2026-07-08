@@ -9,6 +9,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Mail\Mailable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Throwable;
 
@@ -30,11 +31,18 @@ class SendLoggedEmailJob implements ShouldQueue
 
     public function handle(): void
     {
+        $startMs = (int) (microtime(true) * 1000);
+
         Mail::to($this->toEmail, $this->toName)->send($this->mailable);
 
+        $executionMs = (int) (microtime(true) * 1000) - $startMs;
+
         NotificationLog::where('id', $this->logId)->update([
-            'status'  => 'sent',
-            'sent_at' => now(),
+            'status'            => 'sent',
+            'sent_at'           => now(),
+            'execution_time_ms' => max(0, $executionMs),
+            'job_id'            => $this->job?->getJobId(),
+            'mail_driver'       => config('mail.default'),
         ]);
     }
 
@@ -43,7 +51,9 @@ class SendLoggedEmailJob implements ShouldQueue
         NotificationLog::where('id', $this->logId)->update([
             'status'        => 'failed',
             'failed_at'     => now(),
-            'error_message' => mb_substr($e->getMessage(), 0, 500),
+            'error_message' => mb_substr($e->getMessage(), 0, 1000),
+            'smtp_response' => mb_substr($e->getMessage(), 0, 500),
+            'retry_count'   => DB::raw('retry_count + 1'),
         ]);
     }
 }
