@@ -2,9 +2,9 @@
 
 namespace App\Http\Resources;
 
-use App\Models\Assignment;
 use App\Models\AssignmentSubmission;
 use App\Models\Course;
+use App\Models\CourseAssignment;
 use App\Models\Registration;
 use App\Models\StudentProgress;
 use App\Support\AssignmentSubmissionStatus;
@@ -14,15 +14,15 @@ use Illuminate\Http\Resources\Json\JsonResource;
 /**
  * Structured admin assignment detail: assignment, course, instructor, stats, submissions, students.
  *
- * @mixin Assignment
+ * @mixin CourseAssignment
  */
 class AdminLmsAssignmentDetailResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
-        /** @var Assignment $assignment */
-        $assignment = $this->resource;
-        $course       = $this->resolveCourse($assignment);
+        /** @var CourseAssignment $assignment */
+        $assignment   = $this->resource;
+        $course       = $assignment->relationLoaded('course') ? $assignment->course : null;
         $instructor   = $course?->instructor;
         $instructorUser = $instructor?->user;
 
@@ -32,16 +32,23 @@ class AdminLmsAssignmentDetailResource extends JsonResource
 
         $submissionByUser = $submissions->keyBy('user_id');
 
-        $stats = $this->buildStats($assignment, $submissions);
+        $stats = $this->buildStats($submissions);
 
         $submissionsList = $submissions
             ->filter(fn (AssignmentSubmission $s) => $s->submitted_at !== null)
             ->sortByDesc('submitted_at')
             ->values()
-            ->map(fn (AssignmentSubmission $s) => $this->formatSubmission($s, $assignment))
+            ->map(fn (AssignmentSubmission $s) => $this->formatSubmission($s))
             ->all();
 
         $students = $this->buildStudentsList($course, $assignment, $submissionByUser);
+
+        $rawStatus = $assignment->status ?? 'published';
+        $adminStatus = match ($rawStatus) {
+            'published' => 'active',
+            'draft'     => 'archived',
+            default     => $rawStatus,
+        };
 
         return [
             'assignment' => [
@@ -49,13 +56,15 @@ class AdminLmsAssignmentDetailResource extends JsonResource
                 'title'                => $assignment->title,
                 'description'          => $assignment->description,
                 'instructions'         => $assignment->instructions ?? null,
-                'due_date'             => $assignment->due_date?->toIso8601String(),
-                'max_score'            => $assignment->max_score,
-                'status'               => $assignment->status ?? 'active',
+                'due_date'             => $assignment->deadline?->toIso8601String(),
+                'deadline'             => $assignment->deadline?->toIso8601String(),
+                'max_score'            => $assignment->max_points,
+                'max_points'           => $assignment->max_points,
+                'status'               => $adminStatus,
                 'submission_type'      => $assignment->submission_type ?? 'any',
                 'resubmission_allowed' => (bool) $assignment->resubmission_allowed,
                 'course_id'            => $course?->id ?? $assignment->course_id,
-                'workshop_id'          => $assignment->workshop_id,
+                'workshop_id'          => null,
                 'created_at'           => $assignment->created_at?->toIso8601String(),
             ],
             'course' => $course ? [
@@ -74,23 +83,8 @@ class AdminLmsAssignmentDetailResource extends JsonResource
         ];
     }
 
-    private function resolveCourse(Assignment $assignment): ?Course
-    {
-        if ($assignment->relationLoaded('course') && $assignment->course) {
-            return $assignment->course;
-        }
-        if ($assignment->relationLoaded('workshop') && $assignment->workshop?->relationLoaded('course')) {
-            return $assignment->workshop->course;
-        }
-        if ($assignment->course_id) {
-            return $assignment->course;
-        }
-
-        return $assignment->workshop?->course;
-    }
-
     /** @param \Illuminate\Support\Collection<int, AssignmentSubmission> $submissions */
-    private function buildStats(Assignment $assignment, $submissions): array
+    private function buildStats($submissions): array
     {
         $pending = 0;
         $graded  = 0;
@@ -101,7 +95,7 @@ class AdminLmsAssignmentDetailResource extends JsonResource
             if (! $sub->submitted_at) {
                 continue;
             }
-            $instStatus = AssignmentSubmissionStatus::forInstructor($sub, $assignment);
+            $instStatus = AssignmentSubmissionStatus::forInstructor($sub);
             if ($instStatus === 'reviewed') {
                 $graded++;
             } elseif ($instStatus === 'needs_revision') {
@@ -109,7 +103,7 @@ class AdminLmsAssignmentDetailResource extends JsonResource
             } elseif (in_array($instStatus, ['pending_review', 'resubmitted'], true)) {
                 $pending++;
             }
-            if ($instStatus === 'late' || $sub->status === 'late') {
+            if ($sub->status === 'late') {
                 $late++;
             }
         }
@@ -123,9 +117,9 @@ class AdminLmsAssignmentDetailResource extends JsonResource
         ];
     }
 
-    private function formatSubmission(AssignmentSubmission $s, Assignment $assignment): array
+    private function formatSubmission(AssignmentSubmission $s): array
     {
-        $instStatus = AssignmentSubmissionStatus::forInstructor($s, $assignment);
+        $instStatus = AssignmentSubmissionStatus::forInstructor($s);
 
         return [
             'id'            => $s->id,
@@ -148,7 +142,7 @@ class AdminLmsAssignmentDetailResource extends JsonResource
     /**
      * @param \Illuminate\Support\Collection<int, AssignmentSubmission> $submissionByUser
      */
-    private function buildStudentsList(?Course $course, Assignment $assignment, $submissionByUser): array
+    private function buildStudentsList(?Course $course, CourseAssignment $assignment, $submissionByUser): array
     {
         if (! $course) {
             return [];
@@ -168,14 +162,14 @@ class AdminLmsAssignmentDetailResource extends JsonResource
             ->get()
             ->keyBy('user_id');
 
-        $duePast = $assignment->due_date && $assignment->due_date->isPast();
+        $duePast = $assignment->deadline && $assignment->deadline->isPast();
 
-        return $registrations->map(function (Registration $reg) use ($submissionByUser, $assignment, $progressMap, $duePast) {
+        return $registrations->map(function (Registration $reg) use ($submissionByUser, $progressMap, $duePast) {
             $user = $reg->user;
             $uid  = $user?->id ?? $reg->user_id;
             $sub  = $uid ? $submissionByUser->get($uid) : null;
             $hasSubmitted = $sub && $sub->submitted_at;
-            $instStatus   = $sub ? AssignmentSubmissionStatus::forInstructor($sub, $assignment) : 'not_submitted';
+            $instStatus   = $sub ? AssignmentSubmissionStatus::forInstructor($sub) : 'not_submitted';
             $isLate       = ! $hasSubmitted && $duePast;
 
             return [

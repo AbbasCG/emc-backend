@@ -94,8 +94,9 @@ final class Permissions
     const VIEW_PARTNER_REPORTS = 'view_partner_reports';
 
     // ── Marketing ────────────────────────────────────────────────────────────
-    const VIEW_MARKETING   = 'view_marketing';
-    const MANAGE_MARKETING = 'manage_marketing';
+    const VIEW_MARKETING          = 'view_marketing';
+    const MANAGE_MARKETING        = 'manage_marketing';
+    const MANAGE_PRODUCT_UPDATES  = 'manage_product_updates';
 
     // ── Quality ──────────────────────────────────────────────────────────────
     const VIEW_QUALITY            = 'view_quality';
@@ -210,7 +211,7 @@ final class Permissions
             // Partnerships
             self::VIEW_PARTNERS, self::MANAGE_PARTNERS, self::VIEW_PARTNER_REPORTS,
             // Marketing
-            self::VIEW_MARKETING, self::MANAGE_MARKETING,
+            self::VIEW_MARKETING, self::MANAGE_MARKETING, self::MANAGE_PRODUCT_UPDATES,
             // Quality
             self::VIEW_QUALITY, self::MANAGE_QUALITY, self::APPROVE_QUALITY_REVIEWS,
             // Support
@@ -286,7 +287,7 @@ final class Permissions
                 self::VIEW_KPI, self::VIEW_REPORTS, self::GENERATE_REPORTS,
                 self::VIEW_KNOWLEDGE, self::MANAGE_KNOWLEDGE,
                 self::USE_AI_ASSISTANT, self::VIEW_AI_USAGE,
-                self::VIEW_AUDIT_LOGS,
+                self::VIEW_AUDIT_LOGS, self::MANAGE_PRODUCT_UPDATES,
                 // Granular workshop requests
                 self::WR_VIEW_ALL, self::WR_MANAGE, self::WR_ASSIGN, self::WR_EXPORT, self::WR_DELETE,
                 // Granular members / departments / courses / attendance / assignments
@@ -389,7 +390,7 @@ final class Permissions
             ],
 
             'marketing_manager' => [
-                self::VIEW_MARKETING, self::MANAGE_MARKETING, self::VIEW_PROGRAMS, self::VIEW_COURSES,
+                self::VIEW_MARKETING, self::MANAGE_MARKETING, self::MANAGE_PRODUCT_UPDATES, self::VIEW_PROGRAMS, self::VIEW_COURSES,
                 self::VIEW_WORKSHOPS, self::VIEW_TRACKS, self::VIEW_REGISTRATIONS, self::VIEW_REPORTS,
                 // Granular
                 self::WR_VIEW_DEPARTMENT, self::WR_REVIEW, self::WR_APPROVE, self::WR_REJECT,

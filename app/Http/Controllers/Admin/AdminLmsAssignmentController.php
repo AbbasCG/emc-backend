@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\AdminLmsAssignmentDetailResource;
 use App\Http\Resources\LmsAssignmentResource;
-use App\Models\Assignment;
 use App\Models\CourseAssignment;
 use App\Services\CourseAssignmentBridgeService;
 use Illuminate\Http\JsonResponse;
@@ -16,29 +15,34 @@ class AdminLmsAssignmentController extends Controller
 {
     public function index(Request $request): AnonymousResourceCollection
     {
-        $query = Assignment::query()
-            ->with(['course.instructor.user', 'workshop.course.instructor.user'])
+        $query = CourseAssignment::query()
+            ->with(['course.instructor.user'])
             ->withCount([
                 'submissions as submissions_count',
+                // HasManyThrough JOINs assignments onto assignment_submissions;
+                // both tables have a `status` column, so every condition must be
+                // fully qualified to avoid SQLSTATE 1052 (ambiguous column).
                 'submissions as pending_submissions_count' => fn ($q) => $q
-                    ->whereNotNull('submitted_at')
-                    ->whereNotIn('status', ['reviewed', 'graded', 'needs_revision']),
+                    ->whereNotNull('assignment_submissions.submitted_at')
+                    ->whereNotIn('assignment_submissions.status', ['reviewed', 'graded', 'needs_revision']),
                 'submissions as graded_submissions_count' => fn ($q) => $q
-                    ->whereIn('status', ['reviewed', 'graded']),
+                    ->whereIn('assignment_submissions.status', ['reviewed', 'graded']),
                 'submissions as needs_resubmission_count' => fn ($q) => $q
-                    ->where('status', 'needs_revision'),
+                    ->where('assignment_submissions.status', 'needs_revision'),
             ])
-            ->latest();
+            ->latest('course_assignments.created_at');
 
         if ($request->filled('course_id')) {
-            $query->where(function ($q) use ($request) {
-                $cid = $request->query('course_id');
-                $q->where('course_id', $cid)->orWhereHas('workshop', fn ($w) => $w->where('course_id', $cid));
-            });
+            $query->where('course_assignments.course_id', $request->query('course_id'));
         }
 
         if ($request->filled('status')) {
-            $query->where('status', $request->query('status'));
+            $status = match ($request->query('status')) {
+                'active'   => 'published',
+                'archived' => 'draft',
+                default    => $request->query('status'),
+            };
+            $query->where('course_assignments.status', $status);
         }
 
         $perPage = min((int) $request->query('per_page', 20), 100);
@@ -50,115 +54,115 @@ class AdminLmsAssignmentController extends Controller
     public function store(Request $request, CourseAssignmentBridgeService $bridge): JsonResponse
     {
         $validated = $request->validate([
-            'course_id'   => ['nullable', 'exists:courses,id'],
-            'workshop_id' => ['nullable', 'exists:workshops,id'],
-            'title'       => ['required', 'string', 'max:255'],
-            'description' => ['nullable', 'string'],
-            'due_date'    => ['nullable', 'date'],
-            'max_score'   => ['nullable', 'numeric', 'min:0'],
-            'status'      => ['nullable', 'in:active,archived'],
-            'is_visible'  => ['nullable', 'boolean'],
+            'course_id'       => ['required', 'exists:courses,id'],
+            'module_id'       => ['nullable', 'exists:course_modules,id'],
+            'title'           => ['required', 'string', 'max:255'],
+            'description'     => ['nullable', 'string'],
+            'instructions'    => ['nullable', 'string'],
+            'due_date'        => ['nullable', 'date'],
+            'deadline'        => ['nullable', 'date'],
+            'max_score'       => ['nullable', 'numeric', 'min:0'],
+            'max_points'      => ['nullable', 'numeric', 'min:0'],
+            'status'          => ['nullable', 'in:active,archived,published,draft'],
+            'is_visible'      => ['nullable', 'boolean'],
+            'submission_type' => ['nullable', 'in:file,text,url,any'],
+            'sort_order'      => ['nullable', 'integer'],
         ]);
 
-        $validated['status']     = $validated['status'] ?? 'active';
-        $validated['is_visible'] = $validated['is_visible'] ?? true;
+        $rawStatus = $validated['status'] ?? 'active';
+        $status = match ($rawStatus) {
+            'active'   => 'published',
+            'archived' => 'draft',
+            default    => $rawStatus,
+        };
 
-        // If this assignment belongs to a specific course (not a workshop), also create
-        // a CourseAssignment so it appears in the course content page.
-        if (! empty($validated['course_id']) && empty($validated['workshop_id'])) {
-            $courseAssignment = CourseAssignment::create([
-                'course_id'       => $validated['course_id'],
-                'title'           => $validated['title'],
-                'description'     => $validated['description'] ?? null,
-                'deadline'        => $validated['due_date'] ?? null,
-                'max_points'      => $validated['max_score'] ?? null,
-                'is_visible'      => $validated['is_visible'],
-                'status'          => $validated['status'] === 'active' ? 'published' : 'draft',
-                'submission_type' => 'any',
-                'sort_order'      => (int) CourseAssignment::where('course_id', $validated['course_id'])->max('sort_order') + 1,
-            ]);
+        $courseAssignment = CourseAssignment::create([
+            'course_id'       => $validated['course_id'],
+            'module_id'       => $validated['module_id'] ?? null,
+            'title'           => $validated['title'],
+            'description'     => $validated['description'] ?? null,
+            'instructions'    => $validated['instructions'] ?? null,
+            'deadline'        => $validated['due_date'] ?? $validated['deadline'] ?? null,
+            'max_points'      => (int) ($validated['max_score'] ?? $validated['max_points'] ?? 100),
+            'is_visible'      => $validated['is_visible'] ?? true,
+            'status'          => $status,
+            'submission_type' => $validated['submission_type'] ?? 'any',
+            'sort_order'      => $validated['sort_order'] ?? (int) CourseAssignment::where('course_id', $validated['course_id'])->max('sort_order') + 1,
+        ]);
 
-            $validated['course_assignment_id'] = $courseAssignment->id;
-        }
+        // Ensure a bridge Assignment row exists so students can submit via the FK path.
+        $bridge->ensureLmsAssignment($courseAssignment);
 
-        $assignment = Assignment::query()->create($validated);
-
-        // Link the CourseAssignment back to the new Assignment.
-        if (isset($courseAssignment)) {
-            // The bridge foreign key goes on the Assignment side; CourseAssignment is already linked.
-        }
-
-        return (new LmsAssignmentResource($assignment->load('course.instructor.user')))
+        return (new LmsAssignmentResource($courseAssignment->load('course.instructor.user')))
             ->additional(['success' => true, 'message' => 'Assignment created successfully'])
             ->response()
             ->setStatusCode(201);
     }
 
-    public function show(Assignment $assignment): JsonResponse
+    public function show(CourseAssignment $courseAssignment): JsonResponse
     {
-        $assignment->load([
+        $courseAssignment->load([
             'course.instructor.user',
-            'workshop.course.instructor.user',
             'submissions.user',
         ]);
 
         return response()->json([
             'success' => true,
             'message' => 'Assignment detail retrieved successfully',
-            'data'    => (new AdminLmsAssignmentDetailResource($assignment))->resolve(),
+            'data'    => (new AdminLmsAssignmentDetailResource($courseAssignment))->resolve(),
         ]);
     }
 
-    public function update(Request $request, Assignment $assignment): JsonResponse
+    public function update(Request $request, CourseAssignment $courseAssignment, CourseAssignmentBridgeService $bridge): JsonResponse
     {
         $validated = $request->validate([
-            'course_id'   => ['sometimes', 'nullable', 'exists:courses,id'],
-            'workshop_id' => ['sometimes', 'nullable', 'exists:workshops,id'],
-            'title'       => ['sometimes', 'string', 'max:255'],
-            'description' => ['nullable', 'string'],
-            'due_date'    => ['nullable', 'date'],
-            'max_score'   => ['nullable', 'numeric', 'min:0'],
-            'status'      => ['sometimes', 'in:active,archived'],
-            'is_visible'  => ['sometimes', 'boolean'],
+            'course_id'       => ['sometimes', 'nullable', 'exists:courses,id'],
+            'title'           => ['sometimes', 'string', 'max:255'],
+            'description'     => ['nullable', 'string'],
+            'instructions'    => ['nullable', 'string'],
+            'due_date'        => ['nullable', 'date'],
+            'deadline'        => ['nullable', 'date'],
+            'max_score'       => ['nullable', 'numeric', 'min:0'],
+            'max_points'      => ['nullable', 'numeric', 'min:0'],
+            'status'          => ['sometimes', 'in:active,archived,published,draft'],
+            'is_visible'      => ['sometimes', 'boolean'],
+            'submission_type' => ['sometimes', 'in:file,text,url,any'],
         ]);
 
-        $assignment->update($validated);
+        $update = [];
+        if (array_key_exists('title', $validated))           $update['title']           = $validated['title'];
+        if (array_key_exists('description', $validated))     $update['description']     = $validated['description'];
+        if (array_key_exists('instructions', $validated))    $update['instructions']    = $validated['instructions'];
+        if (array_key_exists('is_visible', $validated))      $update['is_visible']      = $validated['is_visible'];
+        if (array_key_exists('submission_type', $validated)) $update['submission_type'] = $validated['submission_type'];
 
-        // Mirror changes to the linked CourseAssignment (if any).
-        if ($assignment->course_assignment_id) {
-            $courseAssignment = CourseAssignment::withTrashed()->find($assignment->course_assignment_id);
-            if ($courseAssignment) {
-                $caUpdate = [];
-                if (array_key_exists('title', $validated))       $caUpdate['title']       = $validated['title'];
-                if (array_key_exists('description', $validated)) $caUpdate['description'] = $validated['description'];
-                if (array_key_exists('due_date', $validated))    $caUpdate['deadline']    = $validated['due_date'];
-                if (array_key_exists('max_score', $validated))   $caUpdate['max_points']  = $validated['max_score'];
-                if (array_key_exists('is_visible', $validated))  $caUpdate['is_visible']  = $validated['is_visible'];
-                if (array_key_exists('status', $validated)) {
-                    $caUpdate['status'] = $validated['status'] === 'active' ? 'published' : 'draft';
-                }
-                if (! empty($caUpdate)) {
-                    $courseAssignment->restore();  // restore if soft-deleted
-                    $courseAssignment->update($caUpdate);
-                }
-            }
+        if (array_key_exists('due_date', $validated))   $update['deadline'] = $validated['due_date'];
+        if (array_key_exists('deadline', $validated))   $update['deadline'] = $validated['deadline'];
+
+        if (array_key_exists('max_score', $validated))  $update['max_points'] = (int) $validated['max_score'];
+        if (array_key_exists('max_points', $validated)) $update['max_points'] = (int) $validated['max_points'];
+
+        if (array_key_exists('status', $validated)) {
+            $update['status'] = match ($validated['status']) {
+                'active'   => 'published',
+                'archived' => 'draft',
+                default    => $validated['status'],
+            };
         }
 
-        return (new LmsAssignmentResource($assignment->fresh()->load('course.instructor.user')))
+        $courseAssignment->update($update);
+
+        // Sync the bridge Assignment row so the submit FK path stays consistent.
+        $bridge->ensureLmsAssignment($courseAssignment->fresh());
+
+        return (new LmsAssignmentResource($courseAssignment->fresh()->load('course.instructor.user')))
             ->additional(['success' => true, 'message' => 'Assignment updated successfully'])
             ->response();
     }
 
-    public function destroy(Assignment $assignment): JsonResponse
+    public function destroy(CourseAssignment $courseAssignment): JsonResponse
     {
-        // Also soft-delete the linked CourseAssignment so it disappears from course content page.
-        if ($assignment->course_assignment_id) {
-            CourseAssignment::withTrashed()
-                ->where('id', $assignment->course_assignment_id)
-                ->delete();
-        }
-
-        $assignment->delete();
+        $courseAssignment->delete();
 
         return response()->json(['success' => true, 'message' => 'Assignment deleted successfully']);
     }

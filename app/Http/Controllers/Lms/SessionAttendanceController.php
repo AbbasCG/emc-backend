@@ -121,7 +121,7 @@ class SessionAttendanceController extends Controller
                 'id'                        => $reg->user_id,
                 'name'                      => $reg->user?->name ?? $reg->full_name,
                 'email'                     => $reg->user?->email ?? $reg->email,
-                'avatar'                    => $reg->user?->avatar ?? null,
+                'avatar_url'                => $this->resolveAvatarUrl($reg->user?->avatar ?? null),
                 'current_attendance_status' => $att?->status,
                 'attendance_status'         => $att?->status,
                 'notes'                     => $att?->notes,
@@ -281,6 +281,13 @@ class SessionAttendanceController extends Controller
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
+
+    private function resolveAvatarUrl(?string $path): ?string
+    {
+        if (!$path) return null;
+        if (str_starts_with($path, 'http')) return $path;
+        return asset('storage/' . ltrim($path, '/'));
+    }
 
     /**
      * Ensure the authenticated instructor (or admin) is authorised to

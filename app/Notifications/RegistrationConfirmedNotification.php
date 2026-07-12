@@ -2,6 +2,7 @@
 
 namespace App\Notifications;
 
+use App\Models\NotificationPreference;
 use Illuminate\Notifications\Notification;
 
 class RegistrationConfirmedNotification extends Notification
@@ -14,7 +15,11 @@ class RegistrationConfirmedNotification extends Notification
 
     public function via(object $notifiable): array
     {
-        return ['database'];
+        $channels = [];
+        if (NotificationPreference::isEnabled($notifiable->id, 'in_app', 'registration_confirmed')) {
+            $channels[] = 'database';
+        }
+        return $channels ?: ['database'];
     }
 
     public function toDatabase(object $notifiable): array

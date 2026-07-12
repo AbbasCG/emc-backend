@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
@@ -23,6 +24,7 @@ class Course extends Model
         'instructor_id',
         'department_id',
         'created_by',
+        'updated_by',
         'assigned_by',
         'title',
         'slug',
@@ -71,6 +73,8 @@ class Course extends Model
         'currency',
         'stripe_product_id',
         'stripe_price_id',
+        'finance_approval_status',
+        'submitted_for_finance_at',
     ];
 
     protected $casts = [
@@ -88,6 +92,8 @@ class Course extends Model
         'certificate_available'  => 'boolean',
         'requires_placement_test'=> 'boolean',
         'requires_registration_code' => 'boolean',
+        'submitted_for_finance_at'   => 'datetime',
+        'finance_approval_status'    => 'string',
     ];
 
     public function instructor()
@@ -105,9 +111,41 @@ class Course extends Model
         return $this->belongsTo(Department::class);
     }
 
-    public function createdBy()
+    public function createdBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function creator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function updatedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'updated_by');
+    }
+
+    public function financeApproval()
+    {
+        return $this->morphOne(ProgramFinanceApproval::class, 'approvable');
+    }
+
+    public function isPaid(): bool
+    {
+        return $this->is_paid
+            || $this->type === 'paid'
+            || (float) $this->price > 0;
+    }
+
+    public function isFree(): bool
+    {
+        return ! $this->isPaid();
+    }
+
+    public function requiresFinanceApproval(): bool
+    {
+        return $this->isPaid();
     }
 
     public function assignedBy()

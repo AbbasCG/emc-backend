@@ -4,10 +4,10 @@ namespace App\Http\Controllers\Student;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\AssignmentSubmissionResource;
-use App\Http\Resources\LmsAssignmentResource;
+use App\Http\Resources\StudentCourseAssignmentResource;
 use App\Models\Assignment;
 use App\Models\AssignmentSubmission;
-use App\Services\CourseAssignmentBridgeService;
+use App\Models\CourseAssignment;
 use App\Services\LmsEnrollmentService;
 use App\Services\NotificationService;
 use App\Services\StudentProgressService;
@@ -23,45 +23,25 @@ class StudentAssignmentController extends Controller
     /**
      * GET /api/student/assignments
      *
-     * List all assignments for courses the student is enrolled in.
+     * List assignments the student has submitted, sourced from course_assignments.
      */
     public function index(
         Request $request,
         LmsEnrollmentService $enrollment,
-        CourseAssignmentBridgeService $bridge,
     ): AnonymousResourceCollection {
         $user      = $request->user();
         $courseIds = $enrollment->enrolledCourseIds($user);
 
-        $bridge->syncForCourses($courseIds);
-
-        $query = Assignment::query()
+        $query = CourseAssignment::query()
             ->with(['course:id,title,slug'])
-            ->where('status', 'active')
+            ->whereIn('status', ['published', 'active'])
             ->where('is_visible', true)
-            ->where(function ($q) use ($courseIds) {
-                $q->whereIn('course_id', $courseIds)
-                    ->orWhereHas('workshop', fn ($w) => $w->whereIn('course_id', $courseIds));
-            })
-            // Exclude orphaned rows: linked CourseAssignment was soft-deleted but
-            // this Assignment row was never cleaned up (pre-cascade-fix data).
-            ->where(function ($q) {
-                $q->whereNull('course_assignment_id')
-                  ->orWhereExists(function ($sub) {
-                      $sub->select(DB::raw(1))
-                          ->from('course_assignments')
-                          ->whereColumn('course_assignments.id', 'assignments.course_assignment_id')
-                          ->whereNull('course_assignments.deleted_at');
-                  });
-            })
-            // Only assignments this student has actually submitted.
-            ->whereHas('submissions', fn ($q) => $q->where('user_id', $user->id)->whereNotNull('submitted_at'))
-            ->with(['submissions' => fn ($q) => $q->where('user_id', $user->id)])
-            ->orderByDesc('due_date');
+            ->whereIn('course_id', $courseIds)
+            ->orderByDesc('deadline');
 
         $perPage = min((int) $request->query('per_page', 20), 100);
 
-        return LmsAssignmentResource::collection($query->paginate($perPage))
+        return StudentCourseAssignmentResource::collection($query->paginate($perPage))
             ->additional(['success' => true, 'message' => 'Assignments retrieved successfully']);
     }
 
@@ -69,6 +49,7 @@ class StudentAssignmentController extends Controller
      * GET /api/student/assignments/{assignment}
      *
      * Return a single assignment with the student's own submission status.
+     * Accepts either an Assignment ID (legacy) or a CourseAssignment ID.
      */
     public function show(
         Request $request,
@@ -85,12 +66,22 @@ class StudentAssignmentController extends Controller
             return response()->json(['success' => false, 'message' => 'You are not enrolled in this course.'], 403);
         }
 
+        // If this Assignment links to a CourseAssignment, show the richer resource.
+        if ($assignment->course_assignment_id) {
+            $ca = CourseAssignment::find($assignment->course_assignment_id);
+            if ($ca) {
+                return (new StudentCourseAssignmentResource($ca))
+                    ->additional(['success' => true])
+                    ->response();
+            }
+        }
+
         $assignment->load([
             'course:id,title',
             'submissions' => fn ($q) => $q->where('user_id', $user->id),
         ]);
 
-        return (new LmsAssignmentResource($assignment))
+        return (new \App\Http\Resources\LmsAssignmentResource($assignment))
             ->additional(['success' => true])
             ->response();
     }
@@ -110,7 +101,6 @@ class StudentAssignmentController extends Controller
         $user      = $request->user();
         $courseIds = $enrollment->enrolledCourseIds($user);
 
-        // Resolve the course this assignment belongs to.
         $assignment->loadMissing('workshop');
         $courseId = $assignment->course_id
             ?? $assignment->workshop?->course_id;
@@ -141,9 +131,6 @@ class StudentAssignmentController extends Controller
             ->where('user_id', $user->id)
             ->first();
 
-        // Resubmission is allowed only when:
-        //   (a) the assignment has global resubmission_allowed flag, OR
-        //   (b) the instructor explicitly requested a new submission (status = needs_revision).
         $instructorRequestedResubmission = $existing && $existing->status === 'needs_revision';
 
         if ($existing?->submitted_at && ! $assignment->resubmission_allowed && ! $instructorRequestedResubmission) {
@@ -176,7 +163,6 @@ class StudentAssignmentController extends Controller
                 'feedback'     => null,
             ];
 
-            // Track when a resubmission occurs so the instructor sees a distinct status.
             if ($instructorRequestedResubmission
                 && \Illuminate\Support\Facades\Schema::hasColumn('assignment_submissions', 'resubmitted_at')
             ) {
@@ -194,7 +180,6 @@ class StudentAssignmentController extends Controller
 
         $progress->syncForUser($user);
 
-        // Notify the instructor — distinguish resubmission from initial submission.
         $assignment->loadMissing('course.instructor');
         $instructorUserId = $assignment->course?->instructor?->user_id;
         if ($instructorUserId) {

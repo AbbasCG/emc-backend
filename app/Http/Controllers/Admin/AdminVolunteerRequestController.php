@@ -11,19 +11,20 @@ use App\Services\AuditLogService;
 use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AdminVolunteerRequestController extends Controller
 {
     // GET /api/admin/volunteer-requests
-    // ?status= &desired_department= &search= &date_from= &date_to= &per_page=
+    // ?status= &desired_department= &search= &date_from= &date_to= &per_page= &page=
     public function index(Request $request): JsonResponse
     {
-        $query = VolunteerRequest::with('reviewer')
-            ->when($request->status, fn ($q) => $q->where('status', $request->status))
-            ->when($request->desired_department, fn ($q) => $q->where('desired_department', $request->desired_department))
-            ->when($request->search, function ($q) use ($request) {
+        // ── Base query: filters shared by both the list and the statistics ──
+        $base = VolunteerRequest::query()
+            ->when($request->filled('desired_department'), fn ($q) => $q->where('desired_department', $request->desired_department))
+            ->when($request->filled('search'), function ($q) use ($request) {
                 $term = $request->search;
                 $q->where(function ($sub) use ($term) {
                     $sub->where('full_name', 'like', "%{$term}%")
@@ -31,16 +32,43 @@ class AdminVolunteerRequestController extends Controller
                         ->orWhere('phone',     'like', "%{$term}%");
                 });
             })
-            ->when($request->date_from, fn ($q) => $q->whereDate('created_at', '>=', $request->date_from))
-            ->when($request->date_to,   fn ($q) => $q->whereDate('created_at', '<=', $request->date_to))
-            ->latest();
+            ->when($request->filled('date_from'), fn ($q) => $q->whereDate('created_at', '>=', $request->date_from))
+            ->when($request->filled('date_to'),   fn ($q) => $q->whereDate('created_at', '<=', $request->date_to));
 
+        // ── Statistics (filter-aware but status-agnostic for correct card counts) ──
+        $statusCounts = (clone $base)
+            ->select('status', DB::raw('COUNT(*) as cnt'))
+            ->groupBy('status')
+            ->pluck('cnt', 'status');
+
+        $statistics = [
+            'total'               => $statusCounts->sum(),
+            'pending'             => (int) ($statusCounts['pending']             ?? 0),
+            'reviewing'           => (int) ($statusCounts['reviewing']           ?? 0),
+            'reviewed'            => (int) ($statusCounts['reviewed']            ?? 0),
+            'accepted'            => (int) ($statusCounts['accepted']            ?? 0),
+            'rejected'            => (int) ($statusCounts['rejected']            ?? 0),
+            'contacted'           => (int) ($statusCounts['contacted']           ?? 0),
+            'converted_to_member' => (int) ($statusCounts['converted_to_member'] ?? 0),
+        ];
+
+        // ── Paginated list (adds status filter on top of base) ──
         $perPage  = min((int) $request->query('per_page', 20), 100);
-        $requests = $query->paginate($perPage);
+        $requests = (clone $base)
+            ->with('reviewer')
+            ->when($request->filled('status'), fn ($q) => $q->where('status', $request->status))
+            ->latest()
+            ->paginate($perPage)
+            ->withQueryString();
+
+        $paginated = VolunteerRequestResource::collection($requests)->response()->getData(true);
 
         return response()->json([
-            'success' => true,
-            'data'    => VolunteerRequestResource::collection($requests)->response()->getData(true),
+            'success'    => true,
+            'data'       => $paginated['data']  ?? [],
+            'meta'       => $paginated['meta']  ?? [],
+            'links'      => $paginated['links'] ?? [],
+            'statistics' => $statistics,
         ]);
     }
 

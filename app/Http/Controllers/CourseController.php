@@ -107,9 +107,18 @@ class CourseController extends Controller
             'whatsapp_community_url' => ['nullable', 'string', 'starts_with:https://chat.whatsapp.com/'],
         ]);
 
-        $validated['slug']   = $this->uniqueSlug($validated['title']);
-        $validated['price']  = $validated['type'] === 'free' ? 0 : ($validated['price'] ?? 0);
-        $validated['status'] = $validated['status'] ?? 'active';
+        $validated['slug']       = $this->uniqueSlug($validated['title']);
+        $validated['price']      = $validated['type'] === 'free' ? 0 : ($validated['price'] ?? 0);
+        $validated['status']     = $validated['status'] ?? 'draft';
+        $validated['created_by'] = $request->user()->id;
+        $validated['updated_by'] = $request->user()->id;
+
+        // Finance publish guard: paid courses require finance approval before publishing
+        $isPaid = $validated['type'] === 'paid' || (float) ($validated['price'] ?? 0) > 0;
+        $validated['finance_approval_status'] = $isPaid ? 'pending' : 'not_required';
+        if ($isPaid && in_array($validated['status'], ['published', 'active'], true)) {
+            $validated['status'] = 'draft'; // Force draft — finance approval required
+        }
 
         $features = $validated['features'] ?? [];
         unset($validated['features']);

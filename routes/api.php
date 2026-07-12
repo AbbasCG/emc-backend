@@ -15,6 +15,8 @@ use App\Http\Controllers\Admin\CourseModuleController;
 use App\Http\Controllers\Admin\DocumentFolderController;
 use App\Http\Controllers\Admin\FinanceAccountController;
 use App\Http\Controllers\Admin\FinanceController;
+use App\Http\Controllers\Admin\ManualPaymentController;
+use App\Http\Controllers\Admin\ProductUpdateController;
 use App\Http\Controllers\Admin\KnowledgeArticleController;
 use App\Http\Controllers\Admin\KnowledgeCategoryController;
 use App\Http\Controllers\Admin\KpiController;
@@ -71,6 +73,7 @@ use App\Http\Controllers\Instructor\InstructorSubmissionController;
 use App\Http\Controllers\InstructorController;
 use App\Http\Controllers\Lms\SessionAttendanceController;
 use App\Http\Controllers\PaymentController;
+use App\Http\Controllers\Platform\PlatformScaleController;
 use App\Http\Controllers\Public\PartnershipRequestController as PublicPartnershipRequestController;
 use App\Http\Controllers\Public\PublicFormController;
 use App\Http\Controllers\Public\SupportTicketController as PublicSupportTicketController;
@@ -230,11 +233,24 @@ Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(fu
 Route::middleware(['auth:sanctum', 'role:student'])
     ->get('/dashboard', \App\Http\Controllers\Student\StudentDashboardController::class);
 
-// ─── Protected material download (auth:sanctum, access checked inside) ────────
-Route::middleware('auth:sanctum')->get(
-    '/materials/{material}/download',
-    [\App\Http\Controllers\Student\MaterialDownloadController::class, 'download']
-)->name('materials.download');
+// ─── Protected material delivery (auth:sanctum, policy-guarded) ──────────────
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/materials/{material}/download',
+        [\App\Http\Controllers\Student\MaterialDownloadController::class, 'download']
+    )->name('materials.download');
+
+    Route::get('/materials/{material}/thumbnail',
+        [\App\Http\Controllers\Student\MaterialDownloadController::class, 'thumbnail']
+    )->name('materials.thumbnail');
+
+    Route::get('/materials/{material}/medium',
+        [\App\Http\Controllers\Student\MaterialDownloadController::class, 'medium']
+    )->name('materials.medium');
+
+    Route::get('/student/materials/{material}',
+        [\App\Http\Controllers\Student\StudentMaterialController::class, 'show']
+    )->name('student.materials.show');
+});
 
 // ─── Protected assignment submission download (auth:sanctum, access checked inside) ──
 Route::middleware('auth:sanctum')->get(
@@ -504,14 +520,17 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->group(
 
         Route::get('/assignments', [AdminLmsAssignmentController::class, 'index']);
         Route::post('/assignments', [AdminLmsAssignmentController::class, 'store']);
-        Route::get('/assignments/{assignment}', [AdminLmsAssignmentController::class, 'show']);
-        Route::put('/assignments/{assignment}', [AdminLmsAssignmentController::class, 'update']);
-        Route::delete('/assignments/{assignment}', [AdminLmsAssignmentController::class, 'destroy']);
+        Route::get('/assignments/{courseAssignment}', [AdminLmsAssignmentController::class, 'show']);
+        Route::put('/assignments/{courseAssignment}', [AdminLmsAssignmentController::class, 'update']);
+        Route::delete('/assignments/{courseAssignment}', [AdminLmsAssignmentController::class, 'destroy']);
 
+        Route::get('/materials/stats', [AdminLmsMaterialController::class, 'stats']);
         Route::get('/materials', [AdminLmsMaterialController::class, 'index']);
-        Route::post('/materials', [AdminLmsMaterialController::class, 'store']);
+        Route::post('/materials', [AdminLmsMaterialController::class, 'store'])
+            ->middleware('throttle:20,60'); // 20 uploads per hour
         Route::get('/materials/{material}', [AdminLmsMaterialController::class, 'show']);
         Route::put('/materials/{material}', [AdminLmsMaterialController::class, 'update']);
+        Route::patch('/materials/{material}', [AdminLmsMaterialController::class, 'update']);
         Route::delete('/materials/{material}', [AdminLmsMaterialController::class, 'destroy']);
 
         Route::get('/attendance', [AdminLmsAttendanceController::class, 'index']);
@@ -699,6 +718,8 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::get('finance/payments',         [FinanceController::class, 'payments']);
     Route::get('finance/revenue-by-course',[FinanceController::class, 'revenueByCourse']);
 
+    // Program Finance Approval routes are registered below with finance_manager access
+
     // ── Phase 4: Quality ─────────────────────────────────────────────────────
     Route::get('quality-reviews',                        [QualityReviewController::class, 'index']);
     Route::post('quality-reviews',                       [QualityReviewController::class, 'store']);
@@ -852,9 +873,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('notifications/read-all',    [NotificationController::class, 'markAllRead']);
     Route::delete('notifications/{id}',      [NotificationController::class, 'delete']);
     // Frontend uses /notifications/preferences; backend uses /notification-preferences
+    Route::post('notifications/preferences/reset', [NotificationPreferenceController::class, 'reset']);
     Route::get('notifications/preferences',   [NotificationPreferenceController::class, 'index']);
     Route::patch('notifications/preferences', [NotificationPreferenceController::class, 'update']);
 });
+
+// ─── Program Finance Approvals — finance_manager + admin + super_admin ──────
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_manager'])
+    ->prefix('admin')
+    ->group(function () {
+        Route::get('finance/program-approvals',                                       [\App\Http\Controllers\Admin\ProgramFinanceApprovalController::class, 'index']);
+        Route::post('finance/program-approvals/{programFinanceApproval}/approve',     [\App\Http\Controllers\Admin\ProgramFinanceApprovalController::class, 'approve']);
+        Route::post('finance/program-approvals/{programFinanceApproval}/reject',      [\App\Http\Controllers\Admin\ProgramFinanceApprovalController::class, 'reject']);
+    });
 
 // ─── Admin dashboard alias ───────────────────────────────────────────────────
 Route::get('dashboard/admin', [AdminController::class, 'dashboard'])
@@ -887,16 +918,18 @@ Route::middleware(['auth:sanctum', 'role:admin,programs_manager,tech_admin,super
     Route::get('attendance',                 [AdminLmsAttendanceController::class, 'index']);
 
     // Assignments CRUD
-    Route::get('assignments',                [AdminLmsAssignmentController::class, 'index']);
-    Route::post('assignments',               [AdminLmsAssignmentController::class, 'store']);
-    Route::get('assignments/{assignment}',   [AdminLmsAssignmentController::class, 'show']);
-    Route::put('assignments/{assignment}',   [AdminLmsAssignmentController::class, 'update']);
-    Route::patch('assignments/{assignment}', [AdminLmsAssignmentController::class, 'update']);
-    Route::delete('assignments/{assignment}',[AdminLmsAssignmentController::class, 'destroy']);
+    Route::get('assignments',                        [AdminLmsAssignmentController::class, 'index']);
+    Route::post('assignments',                       [AdminLmsAssignmentController::class, 'store']);
+    Route::get('assignments/{courseAssignment}',     [AdminLmsAssignmentController::class, 'show']);
+    Route::put('assignments/{courseAssignment}',     [AdminLmsAssignmentController::class, 'update']);
+    Route::patch('assignments/{courseAssignment}',   [AdminLmsAssignmentController::class, 'update']);
+    Route::delete('assignments/{courseAssignment}',  [AdminLmsAssignmentController::class, 'destroy']);
 
     // Materials CRUD
+    Route::get('materials/stats',            [AdminLmsMaterialController::class,   'stats']);
     Route::get('materials',                  [AdminLmsMaterialController::class,   'index']);
-    Route::post('materials',                 [AdminLmsMaterialController::class,   'store']);
+    Route::post('materials',                 [AdminLmsMaterialController::class,   'store'])
+        ->middleware('throttle:20,60');
     Route::get('materials/{material}',       [AdminLmsMaterialController::class,   'show']);
     Route::put('materials/{material}',       [AdminLmsMaterialController::class,   'update']);
     Route::patch('materials/{material}',     [AdminLmsMaterialController::class,   'update']);
@@ -981,6 +1014,24 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_ma
     Route::get('accounts/{account}/transactions',                    [FinanceAccountController::class, 'transactions']);
     Route::post('accounts/{account}/transactions',                   [FinanceAccountController::class, 'addTransaction']);
     Route::get('accounts-summary',                                   [FinanceController::class,        'accountsSummary']);
+
+    // Manual payments
+    Route::get('manual-payments/stats',                              [ManualPaymentController::class, 'stats']);
+    Route::get('purchasables',                                       [ManualPaymentController::class, 'searchPurchasables']);
+    Route::get('students/search',                                    [ManualPaymentController::class, 'searchStudents']);
+    Route::get('manual-payments',                                    [ManualPaymentController::class, 'index']);
+    Route::post('manual-payments',                                   [ManualPaymentController::class, 'store']);
+    Route::get('manual-payments/{manualPayment}',                    [ManualPaymentController::class, 'show']);
+    Route::patch('manual-payments/{manualPayment}',                  [ManualPaymentController::class, 'update']);
+    Route::post('manual-payments/{manualPayment}/confirm',           [ManualPaymentController::class, 'confirm']);
+    Route::post('manual-payments/{manualPayment}/reject',            [ManualPaymentController::class, 'reject']);
+    Route::post('manual-payments/{manualPayment}/cancel',            [ManualPaymentController::class, 'cancel']);
+    Route::get('manual-payments/{manualPayment}/proof',              [ManualPaymentController::class, 'downloadProof']);
+
+    // Account management extras
+    Route::delete('accounts/{account}',                              [FinanceAccountController::class, 'destroy']);
+    Route::get('accounts/{account}',                                 [FinanceAccountController::class, 'show']);
+    Route::post('accounts/{account}/recalculate',                    [FinanceAccountController::class, 'recalculate']);
 });
 
 // ─── KPI unified endpoint (?tab=overview|education|finance|…) ────────────────
@@ -1163,19 +1214,9 @@ Route::post('contact', function (\App\Http\Requests\ContactFormRequest $request)
     }
 })->middleware('throttle:5,1');
 
-// ─── Platform scale (public stats) ───────────────────────────────────────────
-Route::get('platform/scale', function () {
-    $data = \Illuminate\Support\Facades\Cache::remember('platform_scale', 3600, function () {
-        return [
-            'users'         => \App\Models\User::count(),
-            'courses'       => \App\Models\Course::count(),
-            'instructors'   => \App\Models\Instructor::count(),
-            'registrations' => \App\Models\Registration::count(),
-        ];
-    });
-
-    return response()->json(['success' => true, 'data' => $data]);
-})->middleware('throttle:api');
+// ─── Platform scale (admin / tech admin infrastructure + counts) ─────────────
+Route::get('platform/scale', [PlatformScaleController::class, 'show'])
+    ->middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin', 'throttle:api']);
 
 // ─── Mobile readiness (auth required) ────────────────────────────────────────
 Route::get('mobile/readiness', [MobileController::class, 'home'])
@@ -1299,6 +1340,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,programs_m
     Route::get('users/search',    [AdminUserController::class, 'search']);
 });
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('admin')->group(function () {
+    Route::get('stats',           [AdminUserController::class, 'stats']);
     Route::get('users',           [AdminUserController::class, 'index']);
     Route::post('users',          [AdminUserController::class, 'store']);
     Route::get('users/{user}',    [AdminUserController::class, 'show']);
@@ -1333,6 +1375,10 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,department
     Route::post('admin/courses/{course}/assign-instructor',     [AdminCourseController::class, 'assignInstructor']);
     Route::patch('admin/courses/{course}/assign-instructor',    [AdminCourseController::class, 'assignInstructor']);
     Route::put('admin/courses/{course}/assign-instructor',      [AdminCourseController::class, 'assignInstructor']);
+
+    // ── Finance approval: submit for review ──────────────────────────────────
+    Route::post('admin/courses/{course}/submit-for-finance',       [\App\Http\Controllers\Admin\ProgramFinanceApprovalController::class, 'submitCourse']);
+    Route::post('admin/learning-paths/{learningPath}/submit-for-finance', [\App\Http\Controllers\Admin\ProgramFinanceApprovalController::class, 'submitLearningPath']);
 
     // ── Course students (manual enrollment + participant list) ────────────────
     Route::get('admin/courses/{course}/students',              [\App\Http\Controllers\Admin\AdminCourseStudentsController::class, 'index']);
@@ -1469,8 +1515,10 @@ Route::middleware(['auth:sanctum'])->group(function () {
 
 // ─── Audit Logs (super_admin + admin + tech_admin) ───────────────────────────
 Route::middleware(['auth:sanctum', 'role:super_admin,admin,tech_admin'])->prefix('admin')->group(function () {
-    Route::get('audit-logs',             [AdminAuditLogController::class, 'index']);
-    Route::get('audit-logs/{auditLog}',  [AdminAuditLogController::class, 'show']);
+    Route::get('audit-logs/stats',           [AdminAuditLogController::class, 'stats']);
+    Route::get('audit-logs/export',          [AdminAuditLogController::class, 'export']);
+    Route::get('audit-logs',                 [AdminAuditLogController::class, 'index']);
+    Route::get('audit-logs/{auditLog}',      [AdminAuditLogController::class, 'show']);
 });
 
 // ─── Impersonation ────────────────────────────────────────────────────────────
@@ -1512,4 +1560,22 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get( 'uploads/status/{record}',   [UploadController::class, 'status'])->name('api.uploads.status');
     Route::get( 'uploads/download/{record}', [UploadController::class, 'download'])->name('api.uploads.download');
     Route::post('uploads/{context}',         [UploadController::class, 'store'])->name('api.uploads.store');
+});
+
+
+// ─── Product Updates ─────────────────────────────────────────────────────────
+// Named static segments must be declared before {productUpdate} wildcard.
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('product-updates/unread-count',          [ProductUpdateController::class, 'unreadCount']);
+    Route::get('product-updates/whats-new',             [ProductUpdateController::class, 'whatsNew']);
+    Route::get('product-updates',                       [ProductUpdateController::class, 'index']);
+    Route::get('product-updates/{productUpdate}',       [ProductUpdateController::class, 'show']);
+    Route::post('product-updates/{productUpdate}/read', [ProductUpdateController::class, 'markRead']);
+});
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,marketing_manager'])->group(function () {
+    Route::get('product-updates/admin-stats',                   [ProductUpdateController::class, 'stats']);
+    Route::post('product-updates',                              [ProductUpdateController::class, 'store']);
+    Route::patch('product-updates/{productUpdate}',             [ProductUpdateController::class, 'update']);
+    Route::delete('product-updates/{productUpdate}',            [ProductUpdateController::class, 'destroy']);
+    Route::post('product-updates/{productUpdate}/publish',      [ProductUpdateController::class, 'publish']);
 });

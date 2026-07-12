@@ -2,7 +2,6 @@
 
 namespace App\Http\Middleware;
 
-use App\Enums\RegistrationStatus;
 use App\Models\OralAssessmentBooking;
 use App\Models\PlacementTestAttempt;
 use App\Models\Registration;
@@ -37,10 +36,11 @@ class PlacementTestRequired
 
         // Students who enrolled via a Learning Path bypass the placement test gate.
         // LP enrollment auto-creates a Registration with learning_path_id set.
-        $enrolledViaLearningPath = Registration::where('user_id', $user->id)
+        $enrolledViaLearningPath = Registration::query()
+            ->forStudent($user)
             ->where('course_id', $course->id)
             ->whereNotNull('learning_path_id')
-            ->whereIn('status', RegistrationStatus::activeEnrollment())
+            ->activeEnrollment()
             ->exists();
 
         if ($enrolledViaLearningPath) {

@@ -123,6 +123,68 @@ class StudentDashboardTest extends TestCase
             ->assertJson(['success' => true]);
     }
 
+    public function test_learn_access_matches_enrolled_courses_list_for_legacy_registered_status(): void
+    {
+        $student = User::factory()->create(['role' => 'student']);
+        $course  = Course::factory()->create([
+            'requires_placement_test' => false,
+            'status'                  => 'published',
+        ]);
+
+        Registration::factory()->create([
+            'course_id' => $course->id,
+            'user_id'   => $student->id,
+            'email'     => $student->email,
+            'status'    => 'Registered',
+        ]);
+
+        $this->actingAs($student, 'sanctum')
+            ->getJson('/api/student/courses')
+            ->assertOk()
+            ->assertJsonPath('data.0.course_id', $course->id);
+
+        $this->actingAs($student, 'sanctum')
+            ->getJson("/api/student/courses/{$course->id}/learn")
+            ->assertOk()
+            ->assertJsonPath('data.course.id', $course->id);
+    }
+
+    public function test_learn_access_matches_enrolled_courses_list_for_normalized_registered_status(): void
+    {
+        $student = User::factory()->create(['role' => 'student']);
+        $course  = Course::factory()->create([
+            'requires_placement_test' => false,
+            'status'                  => 'published',
+        ]);
+
+        Registration::factory()->create([
+            'course_id' => $course->id,
+            'user_id'   => $student->id,
+            'email'     => $student->email,
+            'status'    => 'registered',
+        ]);
+
+        $this->actingAs($student, 'sanctum')
+            ->getJson('/api/student/courses')
+            ->assertOk()
+            ->assertJsonPath('data.0.course_id', $course->id);
+
+        $this->actingAs($student, 'sanctum')
+            ->getJson("/api/student/courses/{$course->id}/learn")
+            ->assertOk()
+            ->assertJsonPath('data.course.id', $course->id);
+    }
+
+    public function test_learn_denied_for_non_enrolled_course(): void
+    {
+        $student = User::factory()->create(['role' => 'student']);
+        $course  = Course::factory()->create(['status' => 'published']);
+
+        $this->actingAs($student, 'sanctum')
+            ->getJson("/api/student/courses/{$course->id}/learn")
+            ->assertStatus(403);
+    }
+
     // ─── Certificates ─────────────────────────────────────────────────────────
 
     public function test_student_can_list_own_certificates(): void

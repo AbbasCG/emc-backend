@@ -84,9 +84,16 @@ class SupportTicketController extends Controller
             'is_internal_note' => $isInternal,
         ], $request);
 
+        $emailQueued  = false;
+        $emailWarning = null;
+
         // Send email to requester on public replies only
         if (!$isInternal) {
-            $recipientEmail = $supportTicket->email;
+            // Resolve recipient email with explicit fallback chain
+            $recipientEmail = $supportTicket->email
+                ?? $supportTicket->contact_email
+                ?? $supportTicket->user?->email;
+
             $recipientName  = $supportTicket->full_name ?? $supportTicket->name ?? 'المستخدم';
             $ticketNumber   = $supportTicket->ticket_number ?? ('#' . $supportTicket->id);
 
@@ -102,14 +109,24 @@ class SupportTicketController extends Controller
                         $supportTicket->subject,
                         $data['message'],
                     ),
-                    'رد على تذكرتك — منصة EMC',
+                    "رد على تذكرتك {$ticketNumber} — منصة EMC",
+                    [],
+                    [
+                        'triggered_by_user_id' => $request->user()->id,
+                        'related_ticket_id'    => $supportTicket->id,
+                    ],
                 );
+                $emailQueued = true;
+            } else {
+                $emailWarning = 'لا يوجد بريد إلكتروني صالح لهذه التذكرة — لم يُرسل الرد بريدياً.';
             }
         }
 
         return response()->json([
-            'success' => true,
-            'data'    => new SupportTicketReplyResource($reply->load('user')),
+            'success'       => true,
+            'data'          => new SupportTicketReplyResource($reply->load('user')),
+            'email_queued'  => $emailQueued,
+            'email_warning' => $emailWarning,
         ], 201);
     }
 

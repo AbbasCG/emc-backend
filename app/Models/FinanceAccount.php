@@ -14,6 +14,7 @@ class FinanceAccount extends Model
         'name', 'type', 'currency',
         'opening_balance', 'current_balance',
         'notes', 'is_active', 'created_by', 'updated_by',
+        'bank_name', 'account_holder', 'iban', 'account_number',
     ];
 
     protected $casts = [

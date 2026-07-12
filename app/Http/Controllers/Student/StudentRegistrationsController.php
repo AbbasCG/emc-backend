@@ -92,7 +92,7 @@ class StudentRegistrationsController extends Controller
     /**
      * GET /api/student/courses
      *
-     * Active enrolled courses (status=Registered) with full detail, including placement status.
+     * Active enrolled courses with full detail, including placement status.
      */
     public function courses(Request $request): JsonResponse
     {
@@ -100,11 +100,8 @@ class StudentRegistrationsController extends Controller
 
         $registrations = Registration::query()
             ->with(['course.track', 'course.instructor.user', 'payments', 'learningPath:id,title'])
-            ->where(function ($q) use ($user) {
-                $q->where('user_id', $user->id)
-                  ->orWhere('email', $user->email);
-            })
-            ->where('status', 'Registered')
+            ->forStudent($user)
+            ->activeEnrollment()
             ->latest()
             ->get();
 

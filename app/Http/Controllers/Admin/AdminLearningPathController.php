@@ -11,6 +11,7 @@ use App\Models\LearningPathEnrollment;
 use App\Models\LearningPathItem;
 use App\Models\StudentProgress;
 use App\Services\AuditLogService;
+use App\Services\ProgramFinanceApprovalService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -21,6 +22,8 @@ use Illuminate\Validation\Rule;
 
 class AdminLearningPathController extends Controller
 {
+    public function __construct(private ProgramFinanceApprovalService $financeService) {}
+
     // ─── GET /api/admin/learning-paths ────────────────────────────────────────
     public function index(Request $request): JsonResponse
     {
@@ -80,8 +83,23 @@ class AdminLearningPathController extends Controller
         $this->authorize('create', LearningPath::class);
 
         $data = $this->validate($request);
-        $data['slug']   = $data['slug'] ?? $this->uniqueSlug($data['title']);
-        $data['status'] = $data['status'] ?? 'draft';
+        $data['slug']       = $data['slug'] ?? $this->uniqueSlug($data['title']);
+        $data['status']     = $data['status'] ?? 'draft';
+        $data['created_by'] = $request->user()->id;
+        $data['updated_by'] = $request->user()->id;
+
+        // Set initial finance approval status
+        $isPaid = (float) ($data['price'] ?? 0) > 0;
+        $data['finance_approval_status'] = $isPaid ? 'pending' : 'not_required';
+
+        // ── Finance publish guard (create) ────────────────────────────────────
+        if ($isPaid && ($data['status'] ?? 'draft') === 'published') {
+            AuditLogService::log('PROGRAM_PUBLISH_BLOCKED', 'LearningPath', null, $data['title'] ?? null,
+                ['reason' => 'finance_approval_required_on_create', 'price' => $data['price'] ?? 0],
+                null, null, $request
+            );
+            $data['status'] = 'draft';
+        }
 
         $data['featured_image'] = $this->handleImageUpload($request, null);
 
@@ -92,6 +110,11 @@ class AdminLearningPathController extends Controller
             $path = LearningPath::create($data);
             $this->syncCourses($path, $courseIds);
         });
+
+        // Auto-submit paid learning paths for finance review immediately after creation
+        if ($isPaid) {
+            $this->financeService->submit($path, $request->user());
+        }
 
         AuditLogService::logModel('created', $path, null,
             ['title' => $path->title, 'status' => $path->status], null, $request);
@@ -240,6 +263,38 @@ class AdminLearningPathController extends Controller
         $courseIds = $data['course_ids'] ?? null;
         unset($data['course_ids']);
 
+        // ── Finance guard ──────────────────────────────────────────────────────
+        $priceChanged    = array_key_exists('price', $data) && (float) $data['price'] !== (float) $learningPath->price;
+        $becameFreeToPaid = $priceChanged && (float) $data['price'] > 0 && (float) $learningPath->price <= 0;
+        $becamePaidToFree = $priceChanged && (float) $data['price'] <= 0 && (float) $learningPath->price > 0;
+
+        if ($becameFreeToPaid) {
+            $data['finance_approval_status']  = 'pending';
+            $data['submitted_for_finance_at'] = now();
+        }
+        if ($becamePaidToFree) {
+            $data['finance_approval_status'] = 'not_required';
+            $data['price']                   = 0;
+        }
+
+        $newStatus = $data['status'] ?? null;
+        if ($newStatus === 'published' && $learningPath->isPaid()) {
+            $effectiveStatus = $data['finance_approval_status'] ?? $learningPath->finance_approval_status;
+            if ($effectiveStatus !== 'approved') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'يجب اعتماد المسار التعليمي من المدير المالي قبل النشر.',
+                    'code'    => 'FINANCE_APPROVAL_REQUIRED',
+                ], 422);
+            }
+        }
+
+        if ($priceChanged && $learningPath->finance_approval_status === 'approved' && $learningPath->isPaid()) {
+            $data['finance_approval_status'] = 'pending';
+        }
+
+        $data['updated_by'] = $request->user()->id;
+
         $oldInstructorId = $learningPath->instructor_id;
 
         DB::transaction(function () use ($learningPath, $data, $courseIds, $oldInstructorId) {
@@ -285,6 +340,22 @@ class AdminLearningPathController extends Controller
         $data = $request->validate([
             'status' => 'required|in:draft,published,archived',
         ]);
+
+        // ── Finance publish guard ─────────────────────────────────────────────
+        if ($data['status'] === 'published' && $learningPath->isPaid()) {
+            if ($learningPath->finance_approval_status !== 'approved') {
+                AuditLogService::log('PROGRAM_PUBLISH_BLOCKED', 'LearningPath',
+                    $learningPath->id, $learningPath->title,
+                    ['reason' => 'finance_approval_required', 'finance_approval_status' => $learningPath->finance_approval_status],
+                    null, null, $request
+                );
+                return response()->json([
+                    'success' => false,
+                    'message' => 'يجب اعتماد المسار التعليمي من المدير المالي قبل النشر.',
+                    'code'    => 'FINANCE_APPROVAL_REQUIRED',
+                ], 422);
+            }
+        }
 
         $old = $learningPath->status;
         $learningPath->update(['status' => $data['status']]);

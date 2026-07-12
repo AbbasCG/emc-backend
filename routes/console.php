@@ -52,6 +52,15 @@ Schedule::command('courses:mark-ended')
     ->withoutOverlapping()
     ->appendOutputTo(storage_path('logs/scheduler.log'));
 
+// Archive expired audit logs — runs on the 1st of each month at 04:30
+// Logs older than the retention period (default 24 months) are moved to audit_logs_archive.
+// Use AUDIT_RETENTION_MONTHS env var to override. Never deletes permanently.
+Schedule::command('audit-logs:archive')
+    ->monthlyOn(1, '04:30')
+    ->withoutOverlapping()
+    ->runInBackground()
+    ->appendOutputTo(storage_path('logs/scheduler.log'));
+
 // Optional: daily database backup at 01:00 (enable by setting ENABLE_SCHEDULED_BACKUP=true)
 // --prune-days=30 removes backup files older than 30 days after each successful run.
 if (env('ENABLE_SCHEDULED_BACKUP', false)) {

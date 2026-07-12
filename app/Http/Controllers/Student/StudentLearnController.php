@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers\Student;
 
-use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\CourseMaterialResource;
 use App\Http\Resources\CourseSessionResource;
@@ -35,13 +34,11 @@ class StudentLearnController extends Controller
     ): JsonResponse {
         $user = $request->user();
 
-        // Direct enrollment — match by user_id OR email (mirrors StudentRegistrationsController::index)
-        $enrolled = Registration::where('course_id', $courseId)
-            ->where(function ($q) use ($user) {
-                $q->where('user_id', $user->id)
-                  ->orWhere('email', $user->email);
-            })
-            ->whereIn('status', RegistrationStatus::activeEnrollment())
+        // Direct enrollment — match by user_id OR email (mirrors StudentRegistrationsController::courses)
+        $enrolled = Registration::query()
+            ->forStudent($user)
+            ->where('course_id', $courseId)
+            ->activeEnrollment()
             ->exists();
 
         // Fallback: access via learning path enrollment
@@ -130,6 +127,9 @@ class StudentLearnController extends Controller
                 'external_url' => $m->external_url,
                 'sort_order'   => (int) $m->sort_order,
                 'is_visible'   => $m->is_visible,
+                'size_human'   => $m->humanSize(),
+                'extension'    => $m->extension,
+                'mime_type'    => $m->mime_type,
                 'updated_at'   => $m->updated_at?->toIso8601String(),
             ])->values();
 

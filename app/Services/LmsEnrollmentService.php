@@ -15,7 +15,7 @@ class LmsEnrollmentService
     public function enrolledCourseIds(User $user): Collection
     {
         return Registration::query()
-            ->whereIn('status', RegistrationStatus::activeEnrollment())
+            ->activeEnrollment()
             ->where(function ($q) use ($user) {
                 $q->where('user_id', $user->id)
                     ->orWhere('email', $user->email);

@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Course;
+use App\Models\Registration;
 use App\Models\User;
 use App\Services\AuditLogService;
 use App\Services\NotificationService;
@@ -319,6 +321,92 @@ class AdminUserController extends Controller
             'message' => 'User restored successfully.',
             'data'    => $this->formatUser($user->fresh()),
         ]);
+    }
+
+    // GET /admin/stats
+    public function stats(Request $request): JsonResponse
+    {
+        // Role already enforced by route middleware (admin,super_admin,tech_admin)
+        $now            = now();
+        $thisMonthStart = $now->copy()->startOfMonth();
+        $prevMonthStart = $now->copy()->subMonthNoOverflow()->startOfMonth();
+        $prevMonthEnd   = $now->copy()->subMonthNoOverflow()->endOfMonth();
+
+        $totalUsers    = User::count();
+        $activeUsers   = User::where('is_active', true)->count();
+        $inactiveUsers = User::where('is_active', false)->count();
+        $newThisMonth  = User::where('created_at', '>=', $thisMonthStart)->count();
+        $newLastMonth  = User::whereBetween('created_at', [$prevMonthStart, $prevMonthEnd])->count();
+
+        $totalStudents    = User::where('role', 'student')->count();
+        $activeStudents   = User::where('role', 'student')->where('is_active', true)->count();
+        $studNewThisMonth = User::where('role', 'student')->where('created_at', '>=', $thisMonthStart)->count();
+        $studNewLastMonth = User::where('role', 'student')->whereBetween('created_at', [$prevMonthStart, $prevMonthEnd])->count();
+
+        $totalRegs    = Registration::count();
+        $pendingRegs  = Registration::where(function ($q) {
+            $q->whereIn('status', ['pending', 'processing'])->orWhereNull('status');
+        })->count();
+        $regsThisMonth = Registration::where('created_at', '>=', $thisMonthStart)->count();
+        $regsLastMonth = Registration::whereBetween('created_at', [$prevMonthStart, $prevMonthEnd])->count();
+
+        $totalCourses = Course::count();
+
+        $pct = function (int $cur, int $last): ?float {
+            if ($last === 0) return null;
+            return round(($cur - $last) / $last * 100, 1);
+        };
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'users' => [
+                    'total'             => $totalUsers,
+                    'active'            => $activeUsers,
+                    'inactive'          => $inactiveUsers,
+                    'new_this_month'    => $newThisMonth,
+                    'new_last_month'    => $newLastMonth,
+                    'change_percentage' => $pct($newThisMonth, $newLastMonth),
+                ],
+                'students' => [
+                    'total'             => $totalStudents,
+                    'active'            => $activeStudents,
+                    'new_this_month'    => $studNewThisMonth,
+                    'new_last_month'    => $studNewLastMonth,
+                    'change_percentage' => $pct($studNewThisMonth, $studNewLastMonth),
+                ],
+                'registrations' => [
+                    'total'             => $totalRegs,
+                    'pending'           => $pendingRegs,
+                    'new_this_month'    => $regsThisMonth,
+                    'new_last_month'    => $regsLastMonth,
+                    'change_percentage' => $pct($regsThisMonth, $regsLastMonth),
+                ],
+                'courses' => [
+                    'total' => $totalCourses,
+                ],
+                'chart' => $this->buildChartData(),
+            ],
+        ]);
+    }
+
+    private function buildChartData(): array
+    {
+        $now    = now();
+        $months = [];
+        for ($i = 5; $i >= 0; $i--) {
+            $d     = $now->copy()->subMonthsNoOverflow($i);
+            $start = $d->copy()->startOfMonth();
+            $end   = $d->copy()->endOfMonth();
+            $months[] = [
+                'key'           => $d->format('Y-m'),
+                'label'         => $d->locale('ar')->isoFormat('MMM'),
+                'students'      => User::where('role', 'student')
+                                    ->whereBetween('created_at', [$start, $end])->count(),
+                'registrations' => Registration::whereBetween('created_at', [$start, $end])->count(),
+            ];
+        }
+        return $months;
     }
 
     private function formatUser(User $user, bool $withPermissions = false): array

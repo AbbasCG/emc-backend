@@ -18,6 +18,7 @@ use App\Models\LmsSession;
 use App\Models\Registration;
 use App\Models\StudentProgress;
 use App\Services\AuditLogService;
+use App\Services\ProgramFinanceApprovalService;
 use App\Support\CourseDisplay;
 use App\Support\CourseComputedStatus;
 use Illuminate\Http\JsonResponse;
@@ -31,6 +32,8 @@ use Illuminate\Validation\ValidationException;
 
 class AdminCourseController extends Controller
 {
+    public function __construct(private ProgramFinanceApprovalService $financeService) {}
+
     // ─── GET /api/admin/courses ───────────────────────────────────────────────
     public function index(Request $request): JsonResponse
     {
@@ -109,6 +112,31 @@ class AdminCourseController extends Controller
         // Ended courses (published + end_date in the past)
         if ($request->boolean('ended')) {
             $query->where('status', 'published')->where('end_date', '<', now()->toDateString());
+        }
+
+        // ── Pricing filter ────────────────────────────────────────────────────
+        if ($request->filled('pricing_type')) {
+            match ($request->query('pricing_type')) {
+                'free' => $query->where(fn ($q) => $q->where('is_free', true)
+                    ->orWhere('type', 'free')
+                    ->orWhere(fn ($q2) => $q2->whereNull('price')->orWhere('price', 0))
+                ),
+                'paid' => $query->where(fn ($q) => $q->where('is_paid', true)
+                    ->orWhere('type', 'paid')
+                    ->orWhere('price', '>', 0)
+                ),
+                default => null,
+            };
+        }
+
+        // ── Finance approval status filter ────────────────────────────────────
+        if ($request->filled('finance_approval_status')) {
+            $query->where('finance_approval_status', $request->query('finance_approval_status'));
+        }
+
+        // ── Creator filter ────────────────────────────────────────────────────
+        if ($request->filled('created_by')) {
+            $query->where('created_by', (int) $request->query('created_by'));
         }
 
         // Sort
@@ -198,6 +226,7 @@ class AdminCourseController extends Controller
 
         $data['slug']       = $data['slug'] ?? $this->uniqueSlug($data['title']);
         $data['created_by'] = $request->user()->id;
+        $data['updated_by'] = $request->user()->id;
         $data['status']     = $data['status'] ?? 'draft';
 
         // Derive type from is_free if type not sent
@@ -205,6 +234,21 @@ class AdminCourseController extends Controller
             $data['type'] = ($data['is_free'] ?? false) ? 'free' : 'paid';
         }
         $data['price'] = ($data['type'] === 'free') ? 0 : ($data['price'] ?? 0);
+
+        // Set initial finance approval status
+        $isPaid = $data['type'] === 'paid' || (float) ($data['price'] ?? 0) > 0;
+        $data['finance_approval_status'] = $isPaid ? 'pending' : 'not_required';
+
+        // ── Finance publish guard (create) ────────────────────────────────────
+        // A paid course can never be created as published — force draft and let
+        // the finance approval workflow unlock publishing later.
+        if ($isPaid && ($data['status'] ?? 'draft') === 'published') {
+            AuditLogService::log('PROGRAM_PUBLISH_BLOCKED', 'Course', null, $data['title'] ?? null,
+                ['reason' => 'finance_approval_required_on_create', 'price' => $data['price'] ?? 0],
+                null, null, $request
+            );
+            $data['status'] = 'draft';
+        }
 
         // Path string in DB (e.g. courses/abc.jpg) — never the uploaded object
         $data['course_image'] = $this->handleImageUpload($request, null);
@@ -214,6 +258,11 @@ class AdminCourseController extends Controller
         unset($data['features'], $data['learning_path_id']);
 
         $course = Course::create($data);
+
+        // Auto-submit paid courses for finance review immediately after creation
+        if ($isPaid) {
+            $this->financeService->submit($course, $request->user());
+        }
 
         foreach ($features as $i => $feat) {
             $course->features()->create(['title' => $feat, 'sort_order' => $i + 1]);
@@ -252,8 +301,11 @@ class AdminCourseController extends Controller
     // ─── GET /api/admin/courses/{course} ─────────────────────────────────────
     public function show(Course $course): JsonResponse
     {
-        $course->load(['instructor.user', 'track', 'features', 'department', 'createdBy', 'assignedBy'])
-            ->loadCount(['registrations', 'sessions', 'assignments', 'materials']);
+        $course->load([
+            'instructor.user', 'track', 'features', 'department',
+            'createdBy', 'updatedBy', 'assignedBy',
+            'financeApproval.submitter', 'financeApproval.reviewer',
+        ])->loadCount(['registrations', 'sessions', 'assignments', 'materials']);
 
         $lpItem = LearningPathItem::with('learningPath')->where('course_id', $course->id)->first();
         $lpEnrollCount = $lpItem ? LearningPathEnrollment::where('learning_path_id', $lpItem->learning_path_id)
@@ -314,8 +366,50 @@ class AdminCourseController extends Controller
         $learningPathId   = $data['learning_path_id'] ?? null;
         unset($data['features'], $data['learning_path_id']);
 
-        // Block archiving/deactivating if linked to an active/published learning path
+        // ── Finance approval guard ─────────────────────────────────────────────
+        // Detect price/currency changes that would reset an approved status
+        $priceChanged    = array_key_exists('price', $data) && (float) $data['price'] !== (float) $course->price;
+        $typeChanged     = array_key_exists('type', $data) && $data['type'] !== $course->type;
+        $becameFreeToPaid = $typeChanged && $data['type'] === 'paid' && $course->type !== 'paid';
+        $becamePaidToFree = $typeChanged && $data['type'] === 'free' && $course->type === 'paid';
+
+        // Free → paid: requires new finance approval
+        if ($becameFreeToPaid) {
+            $data['finance_approval_status']  = 'pending';
+            $data['submitted_for_finance_at'] = now();
+        }
+        // Paid → free: approval no longer required
+        if ($becamePaidToFree) {
+            $data['finance_approval_status'] = 'not_required';
+            $data['price']                   = 0;
+        }
+
+        // Block publishing a paid program without finance approval
         $newStatus = $data['status'] ?? null;
+        if ($newStatus === 'published' && $course->isPaid()) {
+            $effectiveApprovalStatus = $data['finance_approval_status'] ?? $course->finance_approval_status;
+            if ($effectiveApprovalStatus !== 'approved') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'يجب اعتماد البرنامج من المدير المالي قبل النشر.',
+                    'code'    => 'FINANCE_APPROVAL_REQUIRED',
+                ], 422);
+            }
+        }
+
+        // Price changed after approval → reset to pending
+        if ($priceChanged && $course->finance_approval_status === 'approved' && $course->isPaid()) {
+            $data['finance_approval_status'] = 'pending';
+            AuditLogService::log('PROGRAM_PRICE_CHANGED', 'Course', $course->id, $course->title,
+                ['old_price' => $course->price, 'new_price' => $data['price'], 'finance_approval_status' => 'reset_to_pending'],
+                null, null, $request
+            );
+        }
+
+        // Track who last updated the record
+        $data['updated_by'] = $request->user()->id;
+
+        // Block archiving/deactivating if linked to an active/published learning path
         if ($newStatus !== null && $newStatus !== $course->status && in_array($newStatus, ['archived', 'draft'])) {
             $activeLpItem = LearningPathItem::with('learningPath')
                 ->where('course_id', $course->id)
@@ -812,9 +906,26 @@ class AdminCourseController extends Controller
                 'name' => $course->department->name,
             ] : null,
             'created_by'          => $course->createdBy ? [
-                'id'   => $course->createdBy->id,
-                'name' => $course->createdBy->name,
+                'id'    => $course->createdBy->id,
+                'name'  => $course->createdBy->name,
+                'email' => $course->createdBy->email,
+                'role'  => $course->createdBy->role,
             ] : null,
+            'updated_by'          => $course->updatedBy ? [
+                'id'    => $course->updatedBy->id,
+                'name'  => $course->updatedBy->name,
+                'email' => $course->updatedBy->email,
+                'role'  => $course->updatedBy->role,
+            ] : null,
+            // Finance approval
+            'is_paid'             => $course->isPaid(),
+            'is_free'             => $course->isFree(),
+            'currency'            => strtoupper($course->currency ?? 'EUR'),
+            'finance_approval_status' => $course->finance_approval_status ?? 'not_required',
+            'submitted_for_finance_at' => $course->submitted_for_finance_at?->toIso8601String(),
+            'finance_approval'    => $course->relationLoaded('financeApproval') && $course->financeApproval
+                ? $this->formatFinanceApproval($course->financeApproval)
+                : null,
             'registrations_count'      => $course->registrations_count ?? 0,
             // For LP-owned courses students enroll via the learning path, not directly,
             // so the direct registrations_count is 0. effective_enrollment_count returns
@@ -840,6 +951,22 @@ class AdminCourseController extends Controller
             'can_archive'               => ! $isActiveLp,
             'can_deactivate'            => ! $isActiveLp,
             'lock_reason'               => $lockReason,
+        ];
+    }
+
+    private function formatFinanceApproval(\App\Models\ProgramFinanceApproval $a): array
+    {
+        return [
+            'id'               => $a->id,
+            'status'           => $a->status,
+            'submitted_at'     => $a->submitted_at?->toIso8601String(),
+            'reviewed_at'      => $a->reviewed_at?->toIso8601String(),
+            'review_note'      => $a->review_note,
+            'rejection_reason' => $a->rejection_reason,
+            'price_snapshot'   => $a->price_snapshot ? (float) $a->price_snapshot : null,
+            'currency_snapshot' => $a->currency_snapshot,
+            'submitter'        => $a->submitter ? ['id' => $a->submitter->id, 'name' => $a->submitter->name, 'role' => $a->submitter->role] : null,
+            'reviewer'         => $a->reviewer  ? ['id' => $a->reviewer->id,  'name' => $a->reviewer->name,  'role' => $a->reviewer->role]  : null,
         ];
     }
 

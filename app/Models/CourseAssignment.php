@@ -5,6 +5,8 @@ namespace App\Models;
 use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasManyThrough;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class CourseAssignment extends Model
@@ -49,5 +51,24 @@ class CourseAssignment extends Model
     public function courseSession(): BelongsTo
     {
         return $this->belongsTo(CourseSession::class, 'course_session_id');
+    }
+
+    /** The bridge Assignment row created for submission compatibility. */
+    public function lmsAssignment(): HasOne
+    {
+        return $this->hasOne(Assignment::class, 'course_assignment_id');
+    }
+
+    /** Student submissions via the bridge Assignment row. */
+    public function submissions(): HasManyThrough
+    {
+        return $this->hasManyThrough(
+            AssignmentSubmission::class,
+            Assignment::class,
+            'course_assignment_id', // FK on assignments → course_assignments.id
+            'assignment_id',        // FK on assignment_submissions → assignments.id
+            'id',                   // local key on course_assignments
+            'id'                    // local key on assignments
+        );
     }
 }

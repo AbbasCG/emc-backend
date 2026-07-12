@@ -24,6 +24,7 @@ use App\Models\Task;
 use App\Models\Track;
 use App\Models\VolunteerProfile;
 use App\Models\Workshop;
+use App\Models\ManualPayment;
 use App\Models\Department;
 use App\Models\Permission;
 use App\Models\Role;
@@ -52,6 +53,9 @@ use App\Policies\TaskPolicy;
 use App\Policies\TrackPolicy;
 use App\Policies\UserPolicy;
 use App\Policies\WorkshopPolicy;
+use App\Policies\ManualPaymentPolicy;
+use App\Policies\ProductUpdatePolicy;
+use App\Models\ProductUpdate;
 use App\Support\Permissions;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -172,6 +176,10 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(User::class, UserPolicy::class);
         Gate::policy(Department::class, DepartmentPolicy::class);
         Gate::policy(LearningPath::class, LearningPathPolicy::class);
+
+        // Finance manual payments
+        Gate::policy(ManualPayment::class, ManualPaymentPolicy::class);
+        Gate::policy(ProductUpdate::class, ProductUpdatePolicy::class);
     }
 
     /**

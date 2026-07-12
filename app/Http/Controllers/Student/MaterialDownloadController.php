@@ -2,73 +2,132 @@
 
 namespace App\Http\Controllers\Student;
 
-use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Models\CourseMaterial;
-use App\Models\Registration;
-use App\Services\AuditLogService;
+use App\Models\MaterialAuditLog;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class MaterialDownloadController extends Controller
 {
-    public function download(Request $request, CourseMaterial $material): StreamedResponse
+    /**
+     * GET /api/materials/{material}/download
+     *
+     * Policy-guarded secure download. Never exposes storage paths.
+     */
+    public function download(Request $request, CourseMaterial $material): StreamedResponse|JsonResponse
     {
-        abort_if(! $material->file_path, 404, 'This material has no downloadable file.');
+        $this->authorize('download', $material);
 
-        $user = $request->user();
-
-        // Hidden materials are invisible to students/instructors even when enrolled.
-        // Admins bypass this so they can verify material content before publishing.
-        if (! $material->is_visible && ! $user->isAdmin()) {
-            abort(403, 'This material is not currently available.');
+        if (! $material->file_path) {
+            return response()->json(['success' => false, 'message' => 'هذه المادة لا تحتوي على ملف للتحميل.'], 404);
         }
 
-        abort_unless($this->canAccess($user, $material), 403, 'You are not enrolled in this course.');
+        $disk = Storage::disk($material->disk ?? 'private');
 
-        [$disk, $path] = $this->resolveDisk($material->file_path);
-
-        abort_if($disk === null, 404, 'File not found.');
-
-        $filename = basename($path);
-
-        AuditLogService::logDownload($material, $filename, $request);
-
-        return Storage::disk($disk)->download($path, $filename);
-    }
-
-    private function canAccess(\App\Models\User $user, CourseMaterial $material): bool
-    {
-        if (in_array($user->role, ['admin', 'super_admin', 'department_manager'], true)) {
-            return true;
+        if (! $disk->exists($material->file_path)) {
+            return response()->json(['success' => false, 'message' => 'الملف غير موجود على الخادم.'], 404);
         }
 
-        if ($user->isTeacher()) {
-            $profile = $user->instructorProfile;
-            if ($profile && $material->course_id) {
-                return \App\Models\Course::where('id', $material->course_id)
-                    ->where('instructor_id', $profile->id)
-                    ->exists();
+        // ── Audit ─────────────────────────────────────────────────────────────
+        MaterialAuditLog::record(
+            $material,
+            'downloaded',
+            $request->user()?->id,
+            $request->ip(),
+            $request->userAgent(),
+        );
+
+        // ── Stats ─────────────────────────────────────────────────────────────
+        DB::table('course_materials')
+            ->where('id', $material->id)
+            ->update([
+                'download_count'      => DB::raw('download_count + 1'),
+                'last_downloaded_at'  => now(),
+            ]);
+
+        $downloadName = $material->original_filename ?? basename($material->file_path);
+
+        // Ensure ZIP files always carry a .zip extension regardless of stored name.
+        $zipMimes = ['application/zip', 'application/x-zip-compressed', 'application/x-zip'];
+        if (in_array($material->mime_type, $zipMimes, true) || $material->extension === 'zip') {
+            if (!str_ends_with(strtolower($downloadName), '.zip')) {
+                $downloadName = rtrim($downloadName, '.') . '.zip';
             }
         }
 
-        return Registration::where('user_id', $user->id)
-            ->where('course_id', $material->course_id)
-            ->whereIn('status', RegistrationStatus::activeEnrollment())
-            ->exists();
+        // Sanitize: strip CR/LF to prevent header injection.
+        $safeAscii  = preg_replace('/[\r\n"\\\\]/', '_', $downloadName);
+        // RFC 5987 percent-encode for filename* parameter.
+        $encodedUtf8 = rawurlencode($downloadName);
+
+        return $disk->download(
+            $material->file_path,
+            $downloadName,
+            [
+                'Content-Type'           => $material->mime_type ?? 'application/octet-stream',
+                'Cache-Control'          => 'private, no-store',
+                'X-Content-Type-Options' => 'nosniff',
+                // filename* (RFC 5987) for Unicode filenames; ASCII filename= as fallback.
+                'Content-Disposition'    => "attachment; filename=\"{$safeAscii}\"; filename*=UTF-8''{$encodedUtf8}",
+            ],
+        );
     }
 
-    private function resolveDisk(string $path): array
+    /**
+     * GET /api/materials/{material}/thumbnail
+     *
+     * Serve the WebP thumbnail for image materials (inline).
+     */
+    public function thumbnail(Request $request, CourseMaterial $material): StreamedResponse|JsonResponse
     {
-        if (Storage::disk('local')->exists($path)) {
-            return ['local', $path];
+        $this->authorize('view', $material);
+
+        $path = $material->thumbnail_path ?? $material->file_path;
+
+        if (! $path) {
+            return response()->json(['success' => false, 'message' => 'لا توجد صورة مصغّرة.'], 404);
         }
 
-        if (Storage::disk('public')->exists($path)) {
-            return ['public', $path];
+        $disk = Storage::disk($material->disk ?? 'private');
+
+        if (! $disk->exists($path)) {
+            return response()->json(['success' => false, 'message' => 'الصورة المصغّرة غير موجودة.'], 404);
         }
 
-        return [null, $path];
+        return $disk->response($path, null, [
+            'Content-Type'  => 'image/webp',
+            'Cache-Control' => 'private, max-age=3600',
+        ]);
+    }
+
+    /**
+     * GET /api/materials/{material}/medium
+     *
+     * Serve the medium-resolution WebP version inline.
+     */
+    public function medium(Request $request, CourseMaterial $material): StreamedResponse|JsonResponse
+    {
+        $this->authorize('view', $material);
+
+        $path = $material->medium_path ?? $material->file_path;
+
+        if (! $path) {
+            return response()->json(['success' => false, 'message' => 'لا توجد نسخة متوسطة.'], 404);
+        }
+
+        $disk = Storage::disk($material->disk ?? 'private');
+
+        if (! $disk->exists($path)) {
+            return response()->json(['success' => false, 'message' => 'الملف غير موجود.'], 404);
+        }
+
+        return $disk->response($path, null, [
+            'Content-Type'  => 'image/webp',
+            'Cache-Control' => 'private, max-age=3600',
+        ]);
     }
 }

@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\MorphOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class LearningPath extends Model
@@ -16,6 +17,8 @@ class LearningPath extends Model
 
     protected $fillable = [
         'instructor_id',
+        'created_by',
+        'updated_by',
         'title',
         'slug',
         'short_description',
@@ -28,6 +31,9 @@ class LearningPath extends Model
         'certificate_name',
         'price',
         'discount_price',
+        'currency',
+        'finance_approval_status',
+        'submitted_for_finance_at',
         'status',
         'is_featured',
         'enrollment_open',
@@ -44,14 +50,45 @@ class LearningPath extends Model
         'enrollment_open'  => 'boolean',
         'price'            => 'decimal:2',
         'discount_price'   => 'decimal:2',
-        'learning_outcomes' => 'array',
-        'requirements'     => 'array',
-        'study_days'       => 'array',
+        'learning_outcomes'        => 'array',
+        'requirements'             => 'array',
+        'study_days'               => 'array',
+        'submitted_for_finance_at' => 'datetime',
     ];
 
     public function instructor(): BelongsTo
     {
         return $this->belongsTo(Instructor::class);
+    }
+
+    public function creator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function updater(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'updated_by');
+    }
+
+    public function financeApproval()
+    {
+        return $this->morphOne(ProgramFinanceApproval::class, 'approvable');
+    }
+
+    public function isPaid(): bool
+    {
+        return (float) $this->price > 0;
+    }
+
+    public function isFree(): bool
+    {
+        return ! $this->isPaid();
+    }
+
+    public function requiresFinanceApproval(): bool
+    {
+        return $this->isPaid();
     }
 
     public function courses(): BelongsToMany

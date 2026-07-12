@@ -32,7 +32,7 @@ class SupportTicketReplyMail extends Mailable implements ShouldQueue
             from:    new Address($supportEmail, $supportName),
             replyTo: [new Address($supportEmail, $supportName)],
             bcc:     [new Address($supportEmail, $supportName)],
-            subject: 'رد على تذكرتك — منصة EMC',
+            subject: "رد على تذكرتك {$this->ticketNumber} — منصة EMC",
         );
     }
 

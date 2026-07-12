@@ -13,6 +13,8 @@ class SupportTicketReplyResource extends JsonResource
             'id'               => $this->id,
             'body'             => $this->message,
             'message'          => $this->message,
+            'user_id'          => $this->user_id,
+            'author_id'        => $this->user_id,
             'author_name'      => $this->whenLoaded('user', fn () => $this->user?->name ?? 'فريق الدعم', 'فريق الدعم'),
             'is_internal_note' => $this->is_internal_note,
             'internal'         => $this->is_internal_note,

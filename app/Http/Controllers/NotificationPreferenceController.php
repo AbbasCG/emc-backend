@@ -38,7 +38,7 @@ class NotificationPreferenceController extends Controller
     {
         $data = $request->validate([
             'preferences'           => 'required|array|min:1',
-            'preferences.*.channel' => 'required|in:email,whatsapp,in_app,sms',
+            'preferences.*.channel' => 'required|in:email,whatsapp,in_app,sms,push',
             'preferences.*.type'    => 'required|string|max:100',
             'preferences.*.enabled' => 'required|boolean',
         ]);
@@ -58,5 +58,12 @@ class NotificationPreferenceController extends Controller
             'success' => true,
             'message' => 'Notification preferences saved.',
         ]);
+    }
+
+    /** POST /api/notifications/preferences/reset */
+    public function reset(Request $request): JsonResponse
+    {
+        NotificationPreference::where('user_id', $request->user()->id)->delete();
+        return response()->json(['success' => true, 'message' => 'Preferences reset to defaults.']);
     }
 }

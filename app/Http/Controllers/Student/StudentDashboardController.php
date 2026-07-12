@@ -11,8 +11,6 @@ use App\Http\Resources\LmsSessionResource;
 use App\Http\Resources\PlatformNotificationResource;
 use App\Http\Resources\RegistrationResource;
 use App\Http\Resources\StudentProgressResource;
-use App\Models\Assignment;
-use App\Models\AssignmentSubmission;
 use App\Models\Certificate;
 use App\Models\ClassGroupStudent;
 use App\Models\LearningPathEnrollment;
@@ -231,31 +229,36 @@ class StudentDashboardController extends Controller
         $upcomingSessions = $allEnrolledSessions->where('status', 'upcoming')->values();
         $endedSessions    = $allEnrolledSessions->where('status', 'ended')->values();
 
-        // ── Assignments (active, visible, non-orphaned) ───────────────────────
-        $allAssignments = Assignment::query()
-            ->where('status', 'active')
+        // ── Assignments (published, visible) ─────────────────────────────────
+        $allAssignments = \App\Models\CourseAssignment::query()
+            ->whereIn('status', ['published', 'active'])
             ->where('is_visible', true)
-            ->where(function ($q) use ($courseIds) {
-                $q->whereIn('course_id', $courseIds)
-                    ->orWhereHas('workshop', fn ($w) => $w->whereIn('course_id', $courseIds));
-            })
-            // Exclude orphaned rows: linked CourseAssignment was soft-deleted
-            ->where(function ($q) {
-                $q->whereNull('course_assignment_id')
-                  ->orWhereExists(function ($sub) {
-                      $sub->select(\DB::raw(1))
-                          ->from('course_assignments')
-                          ->whereColumn('course_assignments.id', 'assignments.course_assignment_id')
-                          ->whereNull('course_assignments.deleted_at');
-                  });
-            })
-            ->with(['course:id,title,slug', 'submissions' => fn ($q) => $q->where('user_id', $user->id)])
-            ->orderBy('due_date')
-            ->take(20)
+            ->whereIn('course_id', $courseIds)
+            ->with([
+                'course:id,title,slug',
+                'submissions' => fn ($q) => $q->where('user_id', $user->id),
+            ])
+            ->orderBy('deadline')
             ->get();
 
         $pendingAssignments = $allAssignments->filter(
             fn ($a) => $a->submissions->isEmpty()
+        )->values();
+
+        $submittedAssignments = $allAssignments->filter(
+            fn ($a) => $a->submissions->isNotEmpty()
+        )->values();
+
+        $gradedAssignments = $submittedAssignments->filter(
+            fn ($a) => in_array($a->submissions->first()?->status, ['graded', 'reviewed'], true)
+        )->values();
+
+        $overdueAssignments = $pendingAssignments->filter(
+            fn ($a) => $a->deadline && now()->gt($a->deadline)
+        )->values();
+
+        $awaitingGradingAssignments = $submittedAssignments->filter(
+            fn ($a) => ! in_array($a->submissions->first()?->status, ['graded', 'reviewed'], true)
         )->values();
 
         // ── Certificates ──────────────────────────────────────────────────────
@@ -294,12 +297,16 @@ class StudentDashboardController extends Controller
         }
 
         // ── Build counts ──────────────────────────────────────────────────────
-        $enrolledCount   = $registrations->count();
-        $activeCount     = $activeCourses->count();
-        $completedCount  = $completedCourses->count();
-        $pendingAsgCount = $pendingAssignments->count();
-        $upcomingCount   = $upcomingSessions->count() + $liveSessions->count();
-        $certsCount      = $certificates->count();
+        $enrolledCount          = $registrations->count();
+        $activeCount            = $activeCourses->count();
+        $completedCount         = $completedCourses->count();
+        $pendingAsgCount        = $pendingAssignments->count();
+        $submittedAsgCount      = $submittedAssignments->count();
+        $gradedAsgCount         = $gradedAssignments->count();
+        $overdueAsgCount        = $overdueAssignments->count();
+        $awaitingGradingCount   = $awaitingGradingAssignments->count();
+        $upcomingCount          = $upcomingSessions->count() + $liveSessions->count();
+        $certsCount             = $certificates->count();
 
         return response()->json([
             'success' => true,
@@ -315,14 +322,18 @@ class StudentDashboardController extends Controller
                 ],
 
                 // ── Top-level counters (what the frontend expects) ────────
-                'enrolled_courses_count'    => $enrolledCount,
-                'active_courses_count'      => $activeCount,
-                'completed_courses_count'   => $completedCount,
-                'pending_assignments_count' => $pendingAsgCount,
-                'upcoming_sessions_count'   => $upcomingCount,
-                'unread_notifications_count'=> $unreadCount,
-                'certificates_count'        => $certsCount,
-                'learning_paths_count'      => $learningPathsCount,
+                'enrolled_courses_count'      => $enrolledCount,
+                'active_courses_count'        => $activeCount,
+                'completed_courses_count'     => $completedCount,
+                'pending_assignments_count'   => $pendingAsgCount,
+                'submitted_assignments_count' => $submittedAsgCount,
+                'graded_assignments_count'    => $gradedAsgCount,
+                'overdue_assignments_count'   => $overdueAsgCount,
+                'awaiting_grading_count'      => $awaitingGradingCount,
+                'upcoming_sessions_count'     => $upcomingCount,
+                'unread_notifications_count'  => $unreadCount,
+                'certificates_count'          => $certsCount,
+                'learning_paths_count'        => $learningPathsCount,
 
                 // ── Course lists ─────────────────────────────────────────
                 'recent_courses'    => $recentCourses,
@@ -357,14 +368,18 @@ class StudentDashboardController extends Controller
 
                 // ── Legacy stats block (kept for backward compat) ────────
                 'stats' => [
-                    'courses_enrolled'     => $enrolledCount,
-                    'active_courses'       => $activeCount,
-                    'completed_courses'    => $completedCount,
-                    'assignments_pending'  => $pendingAsgCount,
-                    'upcoming_sessions'    => $upcomingCount,
-                    'certificates_earned'  => $certsCount,
-                    'learning_paths'       => $learningPathsCount,
-                    'unread_notifications' => $unreadCount,
+                    'courses_enrolled'        => $enrolledCount,
+                    'active_courses'          => $activeCount,
+                    'completed_courses'       => $completedCount,
+                    'assignments_pending'     => $pendingAsgCount,
+                    'assignments_submitted'   => $submittedAsgCount,
+                    'assignments_graded'      => $gradedAsgCount,
+                    'assignments_overdue'     => $overdueAsgCount,
+                    'assignments_awaiting'    => $awaitingGradingCount,
+                    'upcoming_sessions'       => $upcomingCount,
+                    'certificates_earned'     => $certsCount,
+                    'learning_paths'          => $learningPathsCount,
+                    'unread_notifications'    => $unreadCount,
                 ],
 
                 'enrolled_course_ids' => $courseIds->values()->all(),

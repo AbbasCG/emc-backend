@@ -25,6 +25,9 @@ class CourseMaterialResource extends JsonResource
             'external_url'      => $this->external_url,
             'sort_order'        => $this->sort_order,
             'is_visible'        => $this->is_visible,
+            'size_human'        => $this->humanSize(),
+            'extension'         => $this->extension,
+            'mime_type'         => $this->mime_type,
             'created_at'        => $this->created_at?->toIso8601String(),
             'updated_at'        => $this->updated_at?->toIso8601String(),
         ];

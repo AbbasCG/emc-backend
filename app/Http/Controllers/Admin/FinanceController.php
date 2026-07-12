@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\FinancialTransactionResource;
 use App\Models\FinanceAccount;
+use App\Models\FinanceAccountTransaction;
 use App\Models\FinancialTransaction;
+use App\Models\ManualPayment;
 use App\Models\Payment;
 use App\Support\PaymentStatuses;
 use Illuminate\Http\Request;
@@ -76,17 +78,28 @@ class FinanceController extends Controller
                 ])
                 ->values();
 
+            $pendingManualCount    = ManualPayment::where('status', 'pending_review')->count();
+            $totalAccountBalance   = (float) FinanceAccount::where('is_active', true)->sum('current_balance');
+            $totalExpenses         = (float) FinanceAccountTransaction::where('status', 'confirmed')->whereIn('type', ['expense'])->sum('amount');
+            $activeAccountsCount   = FinanceAccount::where('is_active', true)->count();
+            $financeTransactionsCount = FinanceAccountTransaction::count();
+
             return response()->json([
                 'success' => true,
                 'data' => [
-                    'total_revenue'     => (float) $totalRevenue,
-                    'confirmed_revenue' => (float) $confirmedRevenue,
-                    'pending_revenue'   => (float) $pendingRevenue,
-                    'failed_count'      => $failedCount,
-                    'monthly_revenue'   => $monthlyRevenue,
-                    'revenue_by_course' => $revenueByCourse,
-                    'revenue_by_track'  => $revenueByTrack,
-                    'latest_payments'   => $latestPayments,
+                    'total_revenue'                   => (float) $totalRevenue,
+                    'confirmed_revenue'               => (float) $confirmedRevenue,
+                    'pending_revenue'                 => (float) $pendingRevenue,
+                    'failed_count'                    => $failedCount,
+                    'monthly_revenue'                 => $monthlyRevenue,
+                    'revenue_by_course'               => $revenueByCourse,
+                    'revenue_by_track'                => $revenueByTrack,
+                    'latest_payments'                 => $latestPayments,
+                    'pending_manual_payments_count'   => $pendingManualCount,
+                    'total_account_balance'           => $totalAccountBalance,
+                    'total_expenses'                  => $totalExpenses,
+                    'active_accounts_count'           => $activeAccountsCount,
+                    'finance_transactions_count'      => $financeTransactionsCount,
                 ],
             ]);
         } catch (\Throwable $e) {

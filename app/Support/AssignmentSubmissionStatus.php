@@ -11,13 +11,9 @@ class AssignmentSubmissionStatus
     /**
      * Derive student-facing status: pending | submitted | late | graded
      */
-    public static function forStudent(?AssignmentSubmission $submission, ?Assignment $assignment = null): string
+    public static function forStudent(?AssignmentSubmission $submission, mixed $assignment = null): string
     {
         if (! $submission || ! $submission->submitted_at) {
-            if ($assignment?->due_date && Carbon::parse($assignment->due_date)->isPast()) {
-                return 'pending';
-            }
-
             return 'pending';
         }
 
@@ -36,7 +32,8 @@ class AssignmentSubmissionStatus
             return 'late';
         }
 
-        $due = $assignment?->due_date ?? $submission->assignment?->due_date;
+        // Resolve deadline from either Assignment (due_date) or CourseAssignment (deadline)
+        $due = $assignment?->due_date ?? $assignment?->deadline ?? $submission->assignment?->due_date ?? null;
         if ($due && Carbon::parse($submission->submitted_at)->gt(Carbon::parse($due))) {
             return 'late';
         }

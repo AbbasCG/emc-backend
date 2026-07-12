@@ -25,7 +25,7 @@ return [
 
     'allowed_headers' => ['*'],
 
-    'exposed_headers' => [],
+    'exposed_headers' => ['Content-Disposition'],
 
     // Preflight cache in seconds (24 h in production, 0 in dev)
     'max_age' => (int) env('CORS_MAX_AGE', 0),

@@ -3,30 +3,42 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\StoreMaterialRequest;
 use App\Http\Resources\LmsCourseMaterialResource;
 use App\Models\CourseMaterial;
+use App\Models\MaterialAuditLog;
+use App\Services\Material\MaterialUploadService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AdminLmsMaterialController extends Controller
 {
+    public function __construct(private MaterialUploadService $uploader) {}
+
+    // ── List ──────────────────────────────────────────────────────────────────
+
     public function index(Request $request): AnonymousResourceCollection
     {
-        $query = CourseMaterial::query()->with(['course'])->orderBy('sort_order')->latest();
+        $query = CourseMaterial::query()
+            ->with(['course', 'uploader'])
+            ->orderBy('sort_order')
+            ->latest();
 
         if ($request->filled('course_id')) {
             $query->where('course_id', $request->query('course_id'));
         }
-
-        if ($request->filled('workshop_id')) {
-            $query->where('workshop_id', $request->query('workshop_id'));
+        if ($request->filled('module_id')) {
+            $query->where('module_id', $request->query('module_id'));
         }
-
         if ($request->filled('session_id')) {
             $query->where('session_id', $request->query('session_id'));
+        }
+        if ($request->filled('type')) {
+            $query->where('type', $request->query('type'));
         }
 
         $perPage = min((int) $request->query('per_page', 30), 100);
@@ -35,32 +47,30 @@ class AdminLmsMaterialController extends Controller
             ->additional(['success' => true, 'message' => 'Materials retrieved successfully']);
     }
 
-    public function store(Request $request): JsonResponse
+    // ── Create ────────────────────────────────────────────────────────────────
+
+    public function store(StoreMaterialRequest $request): JsonResponse
     {
-        $validated = $request->validate([
-            'course_id'    => ['nullable', 'exists:courses,id'],
-            'workshop_id'  => ['nullable', 'exists:workshops,id'],
-            'session_id'   => ['nullable', 'exists:lms_sessions,id'],
-            'title'        => ['required', 'string', 'max:255'],
-            'description'  => ['nullable', 'string'],
-            'external_url' => ['nullable', 'url', 'max:2000'],
-            'type'         => ['nullable', 'in:pdf,video,link,slide,document,image,other'],
-            'sort_order'   => ['nullable', 'integer', 'min:0'],
-            'is_visible'   => ['nullable', 'boolean'],
-            'file'         => [
-                'nullable', 'file', 'max:51200',
-                'mimes:pdf,doc,docx,xls,xlsx,ppt,pptx,mp4,mov,avi,mp3,wav,jpg,jpeg,png,webp,gif,zip',
-                'mimetypes:application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,video/mp4,video/quicktime,video/x-msvideo,audio/mpeg,audio/wav,image/jpeg,image/png,image/webp,image/gif,application/zip',
-            ],
-        ]);
+        $validated = $request->validated();
+        $user      = $request->user();
 
         if ($request->hasFile('file')) {
-            $validated['file_path'] = $request->file('file')->store('course-materials', 'local');
-            $validated['file_url']  = null;
-        }
-        unset($validated['file']);
+            $material = $this->uploader->store(
+                $request->file('file'),
+                collect($validated)->except('file')->toArray(),
+                $user,
+            );
+        } else {
+            // URL-only material
+            $material = CourseMaterial::create(array_merge(
+                collect($validated)->except('file')->toArray(),
+                ['uploaded_by' => $user->id],
+            ));
 
-        $material = CourseMaterial::query()->create($validated);
+            MaterialAuditLog::record($material, 'uploaded', $user->id, metadata: [
+                'external_url' => $validated['external_url'] ?? null,
+            ]);
+        }
 
         return (new LmsCourseMaterialResource($material->load('course')))
             ->additional(['success' => true, 'message' => 'تمت إضافة المادة بنجاح'])
@@ -68,142 +78,181 @@ class AdminLmsMaterialController extends Controller
             ->setStatusCode(201);
     }
 
+    // ── Show ──────────────────────────────────────────────────────────────────
+
     public function show(CourseMaterial $material): JsonResponse
     {
+        $material->load(['course', 'uploader']);
+
         return (new LmsCourseMaterialResource($material))
             ->additional(['success' => true, 'message' => 'Material retrieved successfully'])
             ->response();
     }
 
+    // ── Update ────────────────────────────────────────────────────────────────
+
     public function update(Request $request, CourseMaterial $material): JsonResponse
     {
         $validated = $request->validate([
-            'course_id'    => ['sometimes', 'nullable', 'exists:courses,id'],
-            'workshop_id'  => ['sometimes', 'nullable', 'exists:workshops,id'],
-            'session_id'   => ['sometimes', 'nullable', 'exists:lms_sessions,id'],
-            'title'        => ['sometimes', 'string', 'max:255'],
-            'description'  => ['nullable', 'string'],
-            'external_url' => ['nullable', 'url', 'max:2000'],
-            'type'         => ['nullable', 'in:pdf,video,link,slide,document,image,other'],
-            'sort_order'   => ['nullable', 'integer', 'min:0'],
-            'is_visible'   => ['nullable', 'boolean'],
-            'file'         => [
-                'nullable', 'file', 'max:51200',
-                'mimes:pdf,doc,docx,xls,xlsx,ppt,pptx,mp4,mov,avi,mp3,wav,jpg,jpeg,png,webp,gif,zip',
-                'mimetypes:application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,video/mp4,video/quicktime,video/x-msvideo,audio/mpeg,audio/wav,image/jpeg,image/png,image/webp,image/gif,application/zip',
-            ],
+            'title'            => ['sometimes', 'string', 'max:255'],
+            'description'      => ['nullable', 'string', 'max:5000'],
+            'type'             => ['sometimes', 'string'],
+            'sort_order'       => ['nullable', 'integer', 'min:0'],
+            'is_visible'       => ['nullable', 'boolean'],
+            'external_url'     => ['nullable', 'url', 'max:2000'],
+            'course_id'        => ['sometimes', 'nullable', 'exists:courses,id'],
+            'module_id'        => ['sometimes', 'nullable', 'exists:course_modules,id'],
+            'session_id'       => ['sometimes', 'nullable', 'exists:lms_sessions,id'],
+            'course_session_id'=> ['sometimes', 'nullable', 'exists:course_sessions,id'],
         ]);
 
+        $user = $request->user();
+
+        // File replacement
         if ($request->hasFile('file')) {
-            if ($material->file_path) {
-                $this->deleteFile($material->file_path);
-            }
-            $validated['file_path'] = $request->file('file')->store('course-materials', 'local');
-            $validated['file_url']  = null;
+            $newMaterial = $this->uploader->replace($request->file('file'), $material, $user);
+
+            return (new LmsCourseMaterialResource($newMaterial->load('course')))
+                ->additional(['success' => true, 'message' => 'تم تحديث الملف بنجاح'])
+                ->response();
         }
-        unset($validated['file']);
 
         $material->update($validated);
+
+        MaterialAuditLog::record($material, 'updated', $user->id, metadata: $validated);
 
         return (new LmsCourseMaterialResource($material->fresh()->load('course')))
             ->additional(['success' => true, 'message' => 'تم تحديث المادة بنجاح'])
             ->response();
     }
 
-    public function destroy(CourseMaterial $material): JsonResponse
+    // ── Delete ────────────────────────────────────────────────────────────────
+
+    public function destroy(Request $request, CourseMaterial $material): JsonResponse
     {
-        if ($material->file_path) {
-            $this->deleteFile($material->file_path);
-        }
+        $user = $request->user();
+
+        MaterialAuditLog::record($material, 'deleted', $user->id, metadata: [
+            'original_filename' => $material->original_filename,
+            'size'              => $material->size,
+        ]);
+
+        // Remove physical files
+        $this->uploader->deleteFiles($material);
+
         $material->delete();
 
         return response()->json(['success' => true, 'message' => 'تم حذف المادة بنجاح']);
     }
 
-    private function deleteFile(string $path): void
-    {
-        if (Storage::disk('local')->exists($path)) {
-            Storage::disk('local')->delete($path);
-        } elseif (Storage::disk('public')->exists($path)) {
-            Storage::disk('public')->delete($path);
-        }
-    }
+    // ── Secure file delivery ──────────────────────────────────────────────────
 
-    /**
-     * Serve a material file inline (for preview). Auth + role enforced by route middleware.
-     */
-    public function file(Request $request, CourseMaterial $material): StreamedResponse|JsonResponse
+    public function download(Request $request, CourseMaterial $material): StreamedResponse|JsonResponse
     {
         if (! $material->file_path) {
             return response()->json(['success' => false, 'message' => 'لا يوجد ملف مرفق.'], 404);
         }
 
-        [$disk, $path] = $this->resolveDisk($material->file_path);
-
-        if ($disk === null) {
-            return response()->json(['success' => false, 'message' => 'الملف غير موجود على الخادم.'], 404);
+        $disk = Storage::disk($material->disk ?? 'private');
+        if (! $disk->exists($material->file_path)) {
+            return response()->json(['success' => false, 'message' => 'الملف غير موجود.'], 404);
         }
 
-        try {
-            $mime     = Storage::disk($disk)->mimeType($path) ?: 'application/octet-stream';
-            $filename = basename($path);
+        MaterialAuditLog::record($material, 'downloaded', $request->user()?->id,
+            $request->ip(), $request->userAgent());
 
-            return Storage::disk($disk)->response($path, $filename, [
-                'Content-Type'        => $mime,
-                'Content-Disposition' => 'inline; filename="' . addslashes($filename) . '"',
-                'Cache-Control'       => 'private, no-store',
-            ]);
-        } catch (\Throwable $e) {
-            return response()->json(['success' => false, 'message' => 'تعذّر تحميل الملف: ' . $e->getMessage()], 500);
-        }
+        DB::table('course_materials')
+            ->where('id', $material->id)
+            ->update(['download_count' => DB::raw('download_count + 1'), 'last_downloaded_at' => now()]);
+
+        return $disk->download(
+            $material->file_path,
+            $material->original_filename ?? basename($material->file_path),
+            ['Content-Type' => $material->mime_type ?? 'application/octet-stream', 'Cache-Control' => 'private, no-store'],
+        );
     }
 
-    /**
-     * Serve a material file as a downloadable attachment. Auth + role enforced by route middleware.
-     */
-    public function download(Request $request, CourseMaterial $material): StreamedResponse|JsonResponse
+    public function file(Request $request, CourseMaterial $material): StreamedResponse|JsonResponse
     {
         if (! $material->file_path) {
-            return response()->json(['success' => false, 'message' => 'هذه المادة لا تحتوي على ملف للتحميل.'], 404);
+            return response()->json(['success' => false, 'message' => 'لا يوجد ملف.'], 404);
         }
 
-        [$disk, $path] = $this->resolveDisk($material->file_path);
-
-        if ($disk === null) {
-            return response()->json(['success' => false, 'message' => 'الملف غير موجود على الخادم.'], 404);
+        $disk = Storage::disk($material->disk ?? 'private');
+        if (! $disk->exists($material->file_path)) {
+            return response()->json(['success' => false, 'message' => 'الملف غير موجود.'], 404);
         }
 
-        $filename = basename($path);
+        $mime = $material->mime_type ?? $disk->mimeType($material->file_path) ?? 'application/octet-stream';
 
-        return Storage::disk($disk)->download($path, $filename, [
-            'Cache-Control' => 'private, no-store',
+        MaterialAuditLog::record($material, 'viewed', $request->user()?->id, $request->ip(), $request->userAgent());
+
+        return $disk->response($material->file_path, $material->original_filename ?? basename($material->file_path), [
+            'Content-Type'           => $mime,
+            'Content-Disposition'    => 'inline; filename="' . addslashes($material->original_filename ?? '') . '"',
+            'Cache-Control'          => 'private, no-store',
+            'X-Content-Type-Options' => 'nosniff',
         ]);
     }
 
-    /**
-     * Resolve the storage disk for a given file path.
-     * Probes 'local' (private) first, then 'public' (legacy), returns [null, path] when missing.
-     *
-     * @return array{0: string|null, 1: string}
-     */
-    private function resolveDisk(string $path): array
+    // ── Admin storage stats ───────────────────────────────────────────────────
+
+    public function stats(): JsonResponse
     {
-        $candidates = array_values(array_unique(array_filter([
-            $path,
-            ltrim($path, '/'),
-            preg_replace('#^(storage/|private/)#', '', $path) ?: null,
-        ])));
+        $total = CourseMaterial::whereNotNull('file_path')->count();
 
-        foreach ($candidates as $candidate) {
-            if (Storage::disk('local')->exists($candidate)) {
-                return ['local', $candidate];
-            }
+        $byType = CourseMaterial::whereNotNull('file_path')
+            ->select('type', DB::raw('COUNT(*) as count'), DB::raw('SUM(size) as total_size'))
+            ->groupBy('type')
+            ->get();
 
-            if (Storage::disk('public')->exists($candidate)) {
-                return ['public', $candidate];
-            }
+        $totalBytes = CourseMaterial::whereNotNull('file_path')->sum('size');
+
+        $largest = CourseMaterial::whereNotNull('file_path')
+            ->orderByDesc('size')
+            ->limit(10)
+            ->get(['id', 'title', 'original_filename', 'type', 'size', 'download_count', 'created_at']);
+
+        $mostDownloaded = CourseMaterial::whereNotNull('file_path')
+            ->where('download_count', '>', 0)
+            ->orderByDesc('download_count')
+            ->limit(10)
+            ->get(['id', 'title', 'original_filename', 'type', 'size', 'download_count']);
+
+        $unused = CourseMaterial::whereNotNull('file_path')
+            ->where('download_count', 0)
+            ->whereNull('deleted_at')
+            ->count();
+
+        $duplicates = CourseMaterial::whereNotNull('sha256')
+            ->select('sha256', DB::raw('COUNT(*) as cnt'))
+            ->groupBy('sha256')
+            ->having('cnt', '>', 1)
+            ->count();
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'total_files'      => $total,
+                'total_size_bytes' => $totalBytes,
+                'total_size_human' => $this->humanSize($totalBytes),
+                'by_type'          => $byType,
+                'largest_files'    => LmsCourseMaterialResource::collection($largest),
+                'most_downloaded'  => LmsCourseMaterialResource::collection($mostDownloaded),
+                'unused_count'     => $unused,
+                'duplicate_count'  => $duplicates,
+            ],
+        ]);
+    }
+
+    private function humanSize(?int $bytes): string
+    {
+        if (! $bytes) {
+            return '0 B';
         }
-
-        return [null, $path];
+        $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        $i     = 0;
+        while ($bytes >= 1024 && $i < 4) { $bytes /= 1024; $i++; }
+        return round($bytes, 1) . ' ' . $units[$i];
     }
 }
