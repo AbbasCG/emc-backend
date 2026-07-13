@@ -171,6 +171,9 @@ class StudentLearnController extends Controller
                     'is_required'          => $ca->is_required,
                     'is_visible'           => $ca->is_visible,
                     'status'               => AssignmentSubmissionStatus::forStudent($sub, $lms),
+                    'score'                => $sub?->score,
+                    'feedback'             => $sub?->feedback,
+                    'submitted_at'         => $sub?->submitted_at?->toIso8601String(),
                     'sort_order'           => (int) $ca->sort_order,
                 ];
             })->values();

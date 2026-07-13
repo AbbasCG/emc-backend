@@ -3,18 +3,15 @@
 namespace App\Mail;
 
 use App\Models\Registration;
-use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
 
-class PaymentConfirmedMail extends Mailable implements ShouldQueue
+class PaymentConfirmedMail extends Mailable
 {
-    use Queueable, SerializesModels;
+    use SerializesModels;
 
-    public int $tries = 3;
 
     public function __construct(
         public readonly string  $studentName,

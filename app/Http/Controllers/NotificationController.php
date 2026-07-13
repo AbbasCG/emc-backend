@@ -14,10 +14,12 @@ class NotificationController extends Controller
         $user = $request->user();
 
         $notifications = PlatformNotification::where('user_id', $user->id)
+            ->where('type', '!=', 'product_update')
             ->latest()
             ->paginate(30);
 
         $unreadCount = PlatformNotification::where('user_id', $user->id)
+            ->where('type', '!=', 'product_update')
             ->where('is_read', false)
             ->count();
 
@@ -37,6 +39,7 @@ class NotificationController extends Controller
     public function unreadCount(Request $request): JsonResponse
     {
         $count = PlatformNotification::where('user_id', $request->user()->id)
+            ->where('type', '!=', 'product_update')
             ->where('is_read', false)
             ->count();
 
@@ -56,6 +59,7 @@ class NotificationController extends Controller
     public function markAllRead(Request $request): JsonResponse
     {
         PlatformNotification::where('user_id', $request->user()->id)
+            ->where('type', '!=', 'product_update')
             ->where('is_read', false)
             ->update(['is_read' => true, 'read_at' => now()]);
 

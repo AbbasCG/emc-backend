@@ -3,12 +3,15 @@
 namespace App\Services\Finance;
 
 use App\Mail\PaymentConfirmedMail;
+use App\Models\Course;
 use App\Models\FinanceAccount;
 use App\Models\FinanceAccountTransaction;
 use App\Models\ManualPayment;
 use App\Models\Order;
 use App\Models\Payment;
+use App\Models\PlatformNotification;
 use App\Models\Registration;
+use App\Models\StudentProgress;
 use App\Models\User;
 use App\Services\AuditLogService;
 use App\Services\EmailService;
@@ -93,14 +96,31 @@ class ManualPaymentConfirmationService
                 $order->update(['status' => 'paid', 'paid_at' => now()]);
             }
 
-            // 4. Create Payment if not already exists
-            if (! $payment) {
-                // Find existing registration for registration_id on payment
-                $existingReg = $this->findRegistration($student->id, $isCourse, $isWorkshop, $isLearningPath, $purchasableId);
+            // 4. Find or create Registration — must exist before Payment is created.
+            //    Previous code created Payment first with registration_id = null, causing NOT NULL violation.
+            $registration = $this->findRegistration($student->id, $isCourse, $isWorkshop, $isLearningPath, $purchasableId);
 
+            if (! $registration) {
+                $regData = [
+                    'user_id'   => $student->id,
+                    'full_name' => $student->name,
+                    'email'     => $student->email,
+                    'phone'     => $student->phone ?? null,
+                    'status'    => 'pending',
+                ];
+
+                if ($isCourse)       { $regData['course_id']        = $purchasableId; }
+                if ($isWorkshop)     { $regData['workshop_id']       = $purchasableId; }
+                if ($isLearningPath) { $regData['learning_path_id']  = $purchasableId; }
+
+                $registration = Registration::create($regData);
+            }
+
+            // 5. Create Payment — Registration is now guaranteed to exist.
+            if (! $payment) {
                 $payment = Payment::create([
                     'order_id'            => $order->id,
-                    'registration_id'     => $existingReg?->id,
+                    'registration_id'     => $registration->id,
                     'amount'              => (float) $mp->paid_amount,
                     'provider'            => 'manual',
                     'provider_payment_id' => $providerPaymentId,
@@ -109,41 +129,48 @@ class ManualPaymentConfirmationService
                     'confirmed_at'        => now(),
                     'receipt_url'         => $mp->proof_path,
                 ]);
+            } elseif (! $payment->registration_id) {
+                // Heal any orphaned payment created before this fix was deployed.
+                $payment->update(['registration_id' => $registration->id]);
             }
 
-            // 5. Create or activate Registration
-            $registration = $this->findRegistration($student->id, $isCourse, $isWorkshop, $isLearningPath, $purchasableId);
+            // Activate Registration after payment is confirmed.
+            $registration->update(['status' => 'registered']);
 
-            if ($registration) {
-                $registration->update(['status' => 'registered']);
-            } else {
-                $regData = [
-                    'user_id'   => $student->id,
-                    'full_name' => $student->name,
-                    'email'     => $student->email,
-                    'phone'     => $student->phone ?? null,
-                    'status'    => 'registered',
-                ];
-
-                if ($isCourse)       { $regData['course_id']        = $purchasableId; }
-                if ($isWorkshop)     { $regData['workshop_id']       = $purchasableId; }
-                if ($isLearningPath) { $regData['learning_path_id']  = $purchasableId; }
-
-                $registration = Registration::create($regData);
-
-                // Update payment with registration_id now that we have it
-                $payment->update(['registration_id' => $registration->id]);
+            // 5b. Create StudentProgress for course enrollments (idempotent)
+            if ($isCourse) {
+                $totalSessions = Course::find($purchasableId)?->sessions()->count() ?? 0;
+                StudentProgress::firstOrCreate(
+                    ['user_id' => $student->id, 'course_id' => $purchasableId],
+                    [
+                        'progress_percentage' => 0,
+                        'completed_sessions'  => 0,
+                        'total_sessions'      => $totalSessions,
+                        'status'              => 'in_progress',
+                    ],
+                );
             }
 
             // 6. Create FinanceAccountTransaction
             $financeAccount = FinanceAccount::lockForUpdate()->findOrFail($mp->finance_account_id);
+
+            // Guard: currency on the payment record must match the account currency.
+            // New payments always have the correct currency (set in store()), but this
+            // catches any legacy records that were saved before this constraint was enforced.
+            if ($mp->currency !== $financeAccount->currency) {
+                throw new \RuntimeException(
+                    "Currency mismatch on ManualPayment #{$mp->id}: payment currency is '{$mp->currency}' " .
+                    "but account '{$financeAccount->name}' is '{$financeAccount->currency}'. " .
+                    "Run `php artisan finance:audit-currency-mismatches` to identify and correct inconsistent records."
+                );
+            }
 
             $transaction = FinanceAccountTransaction::create([
                 'finance_account_id' => $financeAccount->id,
                 'type'               => 'revenue',
                 'category'           => $txnCategory,
                 'amount'             => (float) $mp->paid_amount,
-                'currency'           => $mp->currency,
+                'currency'           => $financeAccount->currency,
                 'status'             => 'confirmed',
                 'description'        => "Manual payment confirmed for: {$itemTitle} (#{$mp->id})",
                 'payment_method'     => $mp->payment_method,
@@ -182,8 +209,33 @@ class ManualPaymentConfirmationService
             return compact('order', 'payment', 'registration', 'transaction');
         });
 
-        // 10. Queue email AFTER transaction commits
+        // 10. In-app notification + email AFTER transaction commits
         $student = User::find($manualPayment->student_id);
+
+        if ($student) {
+            $purchasable = $manualPayment->purchasable()->first();
+            $itemTitle   = $purchasable?->title ?? $purchasable?->name ?? 'Your purchase';
+
+            $isWs      = str_ends_with($manualPayment->purchasable_type, 'Workshop');
+            $notifTitle = $isWs ? 'تم تسجيلك في ورشة جديدة' : 'تم تسجيلك في دورة جديدة';
+            $notifMsg   = $isWs
+                ? "تم تسجيل دفعتك وإضافتك إلى الورشة «{$itemTitle}»."
+                : "تم تسجيل دفعتك وإضافتك إلى الدورة «{$itemTitle}».";
+
+            PlatformNotification::create([
+                'user_id'     => $student->id,
+                'type'        => $isWs ? 'course_update' : 'course_registration',
+                'title'       => $notifTitle,
+                'message'     => $notifMsg,
+                'entity_type' => $isWs ? 'Workshop' : 'Course',
+                'entity_id'   => $manualPayment->purchasable_id,
+                'action_url'  => '/dashboard/my-courses',
+                'icon'        => 'check-circle',
+                'color'       => 'green',
+                'is_read'     => false,
+                'created_by'  => $manualPayment->updated_by ?? $manualPayment->created_by,
+            ]);
+        }
 
         if ($student && $student->email) {
             $purchasable = $manualPayment->purchasable()->first();
@@ -213,7 +265,7 @@ class ManualPaymentConfirmationService
 
     private function findRegistration(int $userId, bool $isCourse, bool $isWorkshop, bool $isLearningPath, int $purchasableId): ?Registration
     {
-        $query = Registration::where('user_id', $userId);
+        $query = Registration::where('user_id', $userId)->lockForUpdate();
 
         if ($isCourse)       { return $query->where('course_id', $purchasableId)->first(); }
         if ($isWorkshop)     { return $query->where('workshop_id', $purchasableId)->first(); }

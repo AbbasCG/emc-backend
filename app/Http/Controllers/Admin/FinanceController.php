@@ -79,10 +79,25 @@ class FinanceController extends Controller
                 ->values();
 
             $pendingManualCount    = ManualPayment::where('status', 'pending_review')->count();
-            $totalAccountBalance   = (float) FinanceAccount::where('is_active', true)->sum('current_balance');
-            $totalExpenses         = (float) FinanceAccountTransaction::where('status', 'confirmed')->whereIn('type', ['expense'])->sum('amount');
             $activeAccountsCount   = FinanceAccount::where('is_active', true)->count();
             $financeTransactionsCount = FinanceAccountTransaction::count();
+
+            // Ledger-based totals (finance_account_transactions) — covers manual payments
+            // and Stripe payments after the ledger wiring was deployed.
+            $ledgerIncome  = (float) FinanceAccountTransaction::where('status', 'confirmed')->whereIn('type', ['revenue', 'transfer_in'])->sum('amount');
+            $ledgerExpense = (float) FinanceAccountTransaction::where('status', 'confirmed')->whereIn('type', ['expense', 'transfer'])->sum('amount');
+
+            // Per-currency account balances — never sum across currencies.
+            $accountBalancesByCurrency = FinanceAccount::where('is_active', true)
+                ->selectRaw('currency, SUM(current_balance) as total')
+                ->groupBy('currency')
+                ->get()
+                ->mapWithKeys(fn ($r) => [$r->currency => (float) $r->total]);
+
+            // Legacy scalar: EUR total only (backward compat for frontend cards that expect one number).
+            $totalAccountBalance = (float) FinanceAccount::where('is_active', true)
+                ->where('currency', 'EUR')
+                ->sum('current_balance');
 
             return response()->json([
                 'success' => true,
@@ -97,7 +112,10 @@ class FinanceController extends Controller
                     'latest_payments'                 => $latestPayments,
                     'pending_manual_payments_count'   => $pendingManualCount,
                     'total_account_balance'           => $totalAccountBalance,
-                    'total_expenses'                  => $totalExpenses,
+                    'account_balances_by_currency'    => $accountBalancesByCurrency,
+                    'ledger_income'                   => $ledgerIncome,
+                    'ledger_expense'                  => $ledgerExpense,
+                    'net_ledger'                      => $ledgerIncome - $ledgerExpense,
                     'active_accounts_count'           => $activeAccountsCount,
                     'finance_transactions_count'      => $financeTransactionsCount,
                 ],
@@ -211,24 +229,38 @@ class FinanceController extends Controller
     public function accountsSummary(): \Illuminate\Http\JsonResponse
     {
         $accounts = FinanceAccount::where('is_active', true)
+            ->orderBy('currency')
             ->orderBy('name')
             ->get()
             ->map(fn ($a) => [
                 'id'              => $a->id,
                 'name'            => $a->name,
                 'type'            => $a->type,
+                'provider'        => $a->provider,
                 'currency'        => $a->currency,
                 'opening_balance' => (float) $a->opening_balance,
                 'current_balance' => (float) $a->current_balance,
             ]);
 
-        $totalCash = $accounts->where('currency', 'EUR')->sum('current_balance');
+        // Per-currency totals — never add across currencies (EUR + SAR is meaningless).
+        $balancesByCurrency = $accounts
+            ->groupBy('currency')
+            ->map(fn ($group, $currency) => [
+                'currency' => $currency,
+                'total'    => round($group->sum('current_balance'), 2),
+                'accounts' => $group->count(),
+            ])
+            ->values();
+
+        // Legacy field: total of EUR accounts only, kept for backward compat.
+        $totalCash = round($accounts->where('currency', 'EUR')->sum('current_balance'), 2);
 
         return response()->json([
             'success' => true,
             'data'    => [
-                'accounts'   => $accounts,
-                'total_cash' => $totalCash,
+                'accounts'             => $accounts,
+                'balances_by_currency' => $balancesByCurrency,
+                'total_cash'           => $totalCash,
             ],
         ]);
     }

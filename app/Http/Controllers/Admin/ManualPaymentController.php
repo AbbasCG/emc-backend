@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Course;
 use App\Models\ManualPayment;
+use App\Models\Registration;
+use App\Models\Workshop;
 use App\Services\AuditLogService;
 use App\Services\Finance\ManualPaymentConfirmationService;
 use Illuminate\Http\JsonResponse;
@@ -59,13 +61,16 @@ class ManualPaymentController extends Controller
             'finance_account_id' => 'required|exists:finance_accounts,id',
             'expected_amount'    => 'required|numeric|min:0',
             'paid_amount'        => 'required|numeric|min:0',
-            'currency'           => 'required|string|max:10',
             'payment_method'     => 'nullable|in:bank_transfer,cash,wise,other',
             'external_reference' => 'nullable|string|max:191',
             'payment_date'       => 'required|date',
             'notes'              => 'nullable|string|max:2000',
             'proof'              => 'nullable|file|mimes:pdf,jpg,jpeg,png,webp|max:5120',
         ]);
+
+        // Currency is always derived from the destination finance account — never trusted from the client.
+        $financeAccount = \App\Models\FinanceAccount::findOrFail($data['finance_account_id']);
+        $currency = $financeAccount->currency;
 
         $typeMap = [
             'course'        => 'App\Models\Course',
@@ -92,7 +97,7 @@ class ManualPaymentController extends Controller
             'expected_amount'    => $data['expected_amount'],
             'paid_amount'        => $data['paid_amount'],
             'difference_amount'  => $data['paid_amount'] - $data['expected_amount'],
-            'currency'           => $data['currency'],
+            'currency'           => $currency,
             'payment_method'     => $data['payment_method'] ?? null,
             'external_reference' => $data['external_reference'] ?? null,
             'proof_path'         => $proofPath,
@@ -136,7 +141,6 @@ class ManualPaymentController extends Controller
         $data = $request->validate([
             'expected_amount'    => 'sometimes|numeric|min:0',
             'paid_amount'        => 'sometimes|numeric|min:0',
-            'currency'           => 'sometimes|string|max:10',
             'payment_method'     => 'nullable|in:bank_transfer,cash,wise,other',
             'external_reference' => 'nullable|string|max:191',
             'payment_date'       => 'sometimes|date',
@@ -269,35 +273,120 @@ class ManualPaymentController extends Controller
         return Storage::disk('private')->download($manualPayment->proof_path);
     }
 
-    // GET /finance/purchasables?q={query}&per_page=30
+    // GET /finance/purchasables?q={query}&type=all|course|workshop&student_id={id}&per_page=30
     public function searchPurchasables(Request $request): JsonResponse
     {
         $this->authorize('viewAny', ManualPayment::class);
 
-        $q       = trim((string) $request->get('q', ''));
-        $perPage = min((int) $request->get('per_page', 30), 100);
+        $q         = trim((string) $request->get('q', ''));
+        $type      = (string) $request->get('type', 'all');
+        $studentId = (int) $request->get('student_id', 0);
+        $perPage   = min((int) $request->get('per_page', 30), 100);
 
-        $courses = Course::query()
-            ->select(['id', 'title', 'slug', 'price', 'status'])
-            ->when($q !== '', function ($query) use ($q) {
-                $escaped = '%' . addcslashes($q, '%_\\') . '%';
-                $query->where('title', 'like', $escaped)
-                      ->orWhere('slug', 'like', $escaped);
-            })
-            ->orderBy('title')
-            ->limit($perPage)
-            ->get()
-            ->map(fn ($c) => [
-                'id'              => $c->id,
-                'type'            => 'course',
-                'title'           => $c->title,
-                'slug'            => $c->slug,
-                'price'           => $c->price,
-                'status'          => $c->status,
-                'instructor_name' => null,
-            ]);
+        $results = collect();
 
-        return response()->json(['success' => true, 'data' => $courses]);
+        // ── Paid courses ──────────────────────────────────────────────────────
+        if ($type === 'all' || $type === 'course') {
+            $courses = Course::query()
+                ->select(['id', 'title', 'slug', 'price', 'status'])
+                ->where('price', '>', 0)
+                ->whereNull('deleted_at')
+                ->when($q !== '', function ($query) use ($q) {
+                    $escaped = '%' . addcslashes($q, '%_\\') . '%';
+                    $query->where(function ($inner) use ($escaped) {
+                        $inner->where('title', 'like', $escaped)
+                              ->orWhere('slug', 'like', $escaped);
+                    });
+                })
+                ->orderBy('title')
+                ->limit($perPage)
+                ->get();
+
+            // Eager-load enrollment status for the selected student
+            $enrolledCourseIds = $studentId
+                ? Registration::where('user_id', $studentId)
+                    ->whereNotNull('course_id')
+                    ->whereIn('status', ['registered', 'active', 'pending'])
+                    ->pluck('course_id')
+                    ->flip()
+                : collect();
+
+            foreach ($courses as $c) {
+                $results->push([
+                    'id'              => $c->id,
+                    'type'            => 'course',
+                    'title'           => $c->title,
+                    'slug'            => $c->slug,
+                    'price'           => (float) $c->price,
+                    'currency'        => 'EUR',
+                    'status'          => $c->status,
+                    'is_paid'         => true,
+                    'student_relation' => [
+                        'is_enrolled'    => $studentId ? $enrolledCourseIds->has($c->id) : null,
+                        'payment_status' => null,
+                    ],
+                ]);
+            }
+        }
+
+        // ── Paid workshops (price from parent course) ─────────────────────────
+        if ($type === 'all' || $type === 'workshop') {
+            $workshops = Workshop::query()
+                ->join('courses', 'workshops.course_id', '=', 'courses.id')
+                ->select([
+                    'workshops.id', 'workshops.title', 'workshops.slug',
+                    'workshops.status', 'courses.price',
+                ])
+                ->where('courses.price', '>', 0)
+                ->whereNull('workshops.deleted_at')
+                ->whereNull('courses.deleted_at')
+                ->when($q !== '', function ($query) use ($q) {
+                    $escaped = '%' . addcslashes($q, '%_\\') . '%';
+                    $query->where(function ($inner) use ($escaped) {
+                        $inner->where('workshops.title', 'like', $escaped)
+                              ->orWhere('workshops.slug', 'like', $escaped);
+                    });
+                })
+                ->orderBy('workshops.title')
+                ->limit($perPage)
+                ->get();
+
+            $enrolledWorkshopIds = $studentId
+                ? Registration::where('user_id', $studentId)
+                    ->whereNotNull('workshop_id')
+                    ->whereIn('status', ['registered', 'active', 'pending'])
+                    ->pluck('workshop_id')
+                    ->flip()
+                : collect();
+
+            foreach ($workshops as $w) {
+                $results->push([
+                    'id'              => $w->id,
+                    'type'            => 'workshop',
+                    'title'           => $w->title,
+                    'slug'            => $w->slug,
+                    'price'           => (float) $w->price,
+                    'currency'        => 'EUR',
+                    'status'          => $w->status,
+                    'is_paid'         => true,
+                    'student_relation' => [
+                        'is_enrolled'    => $studentId ? $enrolledWorkshopIds->has($w->id) : null,
+                        'payment_status' => null,
+                    ],
+                ]);
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'data'    => $results->values(),
+            'meta'    => [
+                'total'        => $results->count(),
+                'current_page' => 1,
+                'last_page'    => 1,
+                'per_page'     => $perPage,
+            ],
+        ]);
     }
 
     // GET /finance/students/search?q={query}

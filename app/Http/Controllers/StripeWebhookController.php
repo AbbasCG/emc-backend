@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Enums\RegistrationStatus;
 use App\Mail\PaymentConfirmedMail;
+use App\Models\FinanceAccount;
+use App\Models\FinanceAccountTransaction;
 use App\Models\Invoice;
 use App\Models\Order;
 use App\Models\Payment;
@@ -284,6 +286,46 @@ class StripeWebhookController extends Controller
                         'issued_at'      => now(),
                     ]
                 );
+            }
+
+            // ── Finance ledger entry ──────────────────────────────────────────
+            // Every confirmed Stripe payment must produce one FinanceAccountTransaction
+            // on the configured Stripe finance account. Without this entry the account
+            // balance never reflects online income.
+            //
+            // Idempotency: we check for an existing ledger entry keyed by
+            // (reference_type='payment', reference_id=$payment->id) before creating.
+            $ledgerExists = FinanceAccountTransaction::where('reference_type', 'payment')
+                ->where('reference_id', $payment->id)
+                ->exists();
+
+            if (! $ledgerExists) {
+                $txCurrency    = strtoupper($order?->currency ?? 'EUR');
+                $stripeAccount = FinanceAccount::forProvider('stripe', $txCurrency);
+
+                if ($stripeAccount) {
+                    FinanceAccountTransaction::create([
+                        'finance_account_id' => $stripeAccount->id,
+                        'type'               => 'revenue',
+                        'category'           => 'course_revenue',
+                        'amount'             => (float) $payment->amount,
+                        'currency'           => $stripeAccount->currency,
+                        'status'             => 'confirmed',
+                        'description'        => 'Stripe — ' . ($order?->order_number ?? $sessionId),
+                        'payment_method'     => 'stripe',
+                        'reference_type'     => 'payment',
+                        'reference_id'       => $payment->id,
+                        'external_reference' => $sessionId,
+                        'transaction_date'   => now()->toDateString(),
+                        'created_by'         => null,
+                    ]);
+                    $stripeAccount->increment('current_balance', (float) $payment->amount);
+                } else {
+                    Log::warning('Stripe webhook: no active finance account configured for provider=stripe, currency=' . $txCurrency . '. Ledger entry skipped — run finance:reconcile to detect gaps.', [
+                        'payment_id' => $payment->id,
+                        'session_id' => $sessionId,
+                    ]);
+                }
             }
 
             $shouldMail = true;

@@ -6,6 +6,7 @@ use App\Models\Attendance;
 use App\Models\Course;
 use App\Models\Department;
 use App\Models\Evaluation;
+use App\Models\FinanceAccountTransaction;
 use App\Models\FinancialTransaction;
 use App\Models\Instructor;
 use App\Models\LmsSession;
@@ -22,6 +23,7 @@ use App\Models\VolunteerProfile;
 use App\Models\Workshop;
 use App\Enums\CourseStatus;
 use App\Enums\RegistrationStatus;
+use App\Support\PaymentStatuses;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
@@ -133,18 +135,26 @@ class KpiService
 
     private function computeFinance(): array
     {
-        // Sum from financial_transactions if populated, else fall back to payments
-        $totalRevenue = FinancialTransaction::where('type', 'revenue')
-            ->where('status', 'confirmed')->sum('amount');
+        // Authoritative ledger income: finance_account_transactions covers manual payments
+        // and (after the Stripe fix) Stripe payments too.
+        $ledgerIncome = FinanceAccountTransaction::where('type', 'revenue')
+            ->where('status', 'confirmed')
+            ->sum('amount');
 
-        $confirmedRevenue = Payment::where('status', 'Confirmed')->sum('amount');
-        $pendingRevenue   = Payment::where('status', 'Pending Payment')->sum('amount');
-        $failedPayments   = Payment::where('status', 'Failed')->count();
+        // payments table covers the full payment record (Stripe + manual).
+        // PaymentStatuses::CONFIRMED is the canonical status string.
+        $confirmedRevenue = Payment::where('status', PaymentStatuses::CONFIRMED)->sum('amount');
+        $pendingRevenue   = Payment::where('status', PaymentStatuses::PENDING)->sum('amount');
+        $failedPayments   = Payment::where('status', PaymentStatuses::FAILED)->count();
+
+        // Use confirmedRevenue (from payments) as the primary total revenue.
+        // ledgerIncome is exposed separately for dashboard comparison.
+        $totalRevenue = $confirmedRevenue;
 
         $revenueByCourse = DB::table('payments')
             ->join('registrations', 'payments.registration_id', '=', 'registrations.id')
             ->join('courses', 'registrations.course_id', '=', 'courses.id')
-            ->where('payments.status', 'Confirmed')
+            ->where('payments.status', PaymentStatuses::CONFIRMED)
             ->select('courses.title', DB::raw('SUM(payments.amount) as revenue'), DB::raw('COUNT(payments.id) as payments_count'))
             ->groupBy('courses.id', 'courses.title')
             ->orderByDesc('revenue')
@@ -152,7 +162,7 @@ class KpiService
             ->get();
 
         $monthlyRevenue = DB::table('payments')
-            ->where('status', 'Confirmed')
+            ->where('status', PaymentStatuses::CONFIRMED)
             ->whereNotNull('confirmed_at')
             ->select(
                 DB::raw("DATE_FORMAT(confirmed_at, '%Y-%m') as month"),
@@ -167,7 +177,7 @@ class KpiService
         $revenueByTrack = DB::table('payments')
             ->join('registrations', 'payments.registration_id', '=', 'registrations.id')
             ->join('tracks', 'registrations.track_id', '=', 'tracks.id')
-            ->where('payments.status', 'Confirmed')
+            ->where('payments.status', PaymentStatuses::CONFIRMED)
             ->select('tracks.name', DB::raw('SUM(payments.amount) as revenue'))
             ->groupBy('tracks.id', 'tracks.name')
             ->orderByDesc('revenue')
@@ -175,7 +185,8 @@ class KpiService
 
         return compact(
             'totalRevenue', 'confirmedRevenue', 'pendingRevenue',
-            'failedPayments', 'revenueByCourse', 'revenueByTrack', 'monthlyRevenue'
+            'failedPayments', 'ledgerIncome',
+            'revenueByCourse', 'revenueByTrack', 'monthlyRevenue'
         );
     }
 

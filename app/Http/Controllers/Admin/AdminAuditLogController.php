@@ -64,7 +64,10 @@ class AdminAuditLogController extends Controller
 
             $successful = max(0, $total - $failed);
 
+            // reorder() strips the inherited ORDER BY from the base query so that
+            // the GROUP BY sub-queries don't violate MySQL's ONLY_FULL_GROUP_BY mode.
             $topEntity = (clone $base)
+                ->reorder()
                 ->select('entity_type', DB::raw('COUNT(*) as total'))
                 ->whereNotNull('entity_type')
                 ->where('entity_type', '!=', '')
@@ -73,6 +76,7 @@ class AdminAuditLogController extends Controller
                 ->first();
 
             $mostActiveUser = (clone $base)
+                ->reorder()
                 ->select('user_name', 'user_id', DB::raw('COUNT(*) as total'))
                 ->whereNotNull('user_name')
                 ->where('user_name', '!=', '')
@@ -81,6 +85,7 @@ class AdminAuditLogController extends Controller
                 ->first();
 
             $mostCommonAction = (clone $base)
+                ->reorder()
                 ->select('action', DB::raw('COUNT(*) as total'))
                 ->whereNotNull('action')
                 ->groupBy('action')

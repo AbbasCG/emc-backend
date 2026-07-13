@@ -3,18 +3,15 @@
 namespace App\Mail;
 
 use App\Models\VolunteerRequest;
-use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
 
-class VolunteerApplicationAdminMail extends Mailable implements ShouldQueue
+class VolunteerApplicationAdminMail extends Mailable
 {
-    use Queueable, SerializesModels;
+    use SerializesModels;
 
-    public int $tries = 3;
 
     public function __construct(
         public readonly string  $adminName,

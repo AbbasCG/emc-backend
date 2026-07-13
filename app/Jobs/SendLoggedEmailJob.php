@@ -33,9 +33,15 @@ class SendLoggedEmailJob implements ShouldQueue
     {
         $startMs = (int) (microtime(true) * 1000);
 
-        Mail::to($this->toEmail, $this->toName)->send($this->mailable);
+        $sent = Mail::to($this->toEmail, $this->toName)->send($this->mailable);
 
         $executionMs = (int) (microtime(true) * 1000) - $startMs;
+
+        // Capture the SMTP debug string if available (Symfony Mailer SentMessage)
+        $smtpResponse = null;
+        if ($sent instanceof \Illuminate\Mail\SentMessage) {
+            $smtpResponse = mb_substr($sent->getSymfonySentMessage()->getDebug(), 0, 500);
+        }
 
         NotificationLog::where('id', $this->logId)->update([
             'status'            => 'sent',
@@ -43,6 +49,7 @@ class SendLoggedEmailJob implements ShouldQueue
             'execution_time_ms' => max(0, $executionMs),
             'job_id'            => $this->job?->getJobId(),
             'mail_driver'       => config('mail.default'),
+            'smtp_response'     => $smtpResponse,
         ]);
     }
 
@@ -52,7 +59,10 @@ class SendLoggedEmailJob implements ShouldQueue
             'status'        => 'failed',
             'failed_at'     => now(),
             'error_message' => mb_substr($e->getMessage(), 0, 1000),
-            'smtp_response' => mb_substr($e->getMessage(), 0, 500),
+            'smtp_response' => mb_substr(
+                '[' . get_class($e) . '] ' . $e->getMessage(),
+                0, 500
+            ),
             'retry_count'   => DB::raw('retry_count + 1'),
         ]);
     }

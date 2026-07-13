@@ -3,18 +3,15 @@
 namespace App\Mail;
 
 use App\Models\WorkshopRequest;
-use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
 
-class WorkshopRequestAdminNotificationMail extends Mailable implements ShouldQueue
+class WorkshopRequestAdminNotificationMail extends Mailable
 {
-    use Queueable, SerializesModels;
+    use SerializesModels;
 
-    public int $tries = 3;
 
     public function __construct(
         public readonly WorkshopRequest $workshopRequest,
