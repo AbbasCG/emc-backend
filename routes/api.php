@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Admin\AdminAmbassadorApplicationFileController;
 use App\Http\Controllers\Admin\ActivityLogController;
 use App\Http\Controllers\UploadController;
 use App\Http\Controllers\Admin\AdminLmsAssignmentController;
@@ -59,6 +60,8 @@ use App\Http\Controllers\Admin\AdminVolunteerRequestController;
 use App\Http\Controllers\Admin\AdminMemberController;
 use App\Http\Controllers\Admin\AdminTeamProfileController;
 use App\Http\Controllers\Public\VolunteerRequestController as PublicVolunteerRequestController;
+use App\Http\Controllers\Public\AmbassadorApplicationController as PublicAmbassadorController;
+use App\Http\Controllers\Admin\AdminAmbassadorApplicationController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AdminPaymentController;
 use App\Http\Controllers\AdminTrackController;
@@ -134,7 +137,7 @@ use Illuminate\Support\Facades\Route;
 // ─── Health (no throttle — used by uptime monitors) ──────────────────────────
 Route::get('/health', \App\Http\Controllers\HealthController::class);
 
-// ─── Auth (throttle:auth — 10 req/min per IP) ────────────────────────────────
+// ─── Auth (throttle:auth — 5 req/min per IP, see AppServiceProvider::boot) ───
 Route::prefix('auth')->middleware('throttle:auth')->group(function () {
     Route::post('/register',       [AuthController::class, 'register']);
     Route::post('/login',          [AuthController::class, 'login']);
@@ -561,6 +564,14 @@ Route::post('/partnership-requests', [PublicPartnershipRequestController::class,
 Route::post('/volunteer-requests', [PublicVolunteerRequestController::class, 'store'])
     ->middleware('throttle:workshop');
 
+// ─── Public: Ambassador applications ─────────────────────────────────────────
+Route::post('/ambassador-applications', [PublicAmbassadorController::class, 'store'])
+    ->middleware('throttle:workshop');
+Route::post('/ambassador-applications/draft', [PublicAmbassadorController::class, 'saveDraft'])
+    ->middleware('throttle:60,1');
+Route::get('/ambassador-applications/draft/{token}', [PublicAmbassadorController::class, 'getDraft'])
+    ->middleware('throttle:30,1');
+
 // Signed CV download — URL issued only via authenticated admin volunteer-request APIs
 Route::get('admin/volunteer-requests/{volunteerRequest}/cv', [AdminVolunteerRequestController::class, 'downloadCv'])
     ->middleware('signed')
@@ -570,6 +581,33 @@ Route::get('admin/volunteer-requests/{volunteerRequest}/cv', [AdminVolunteerRequ
 Route::get('admin/volunteer-requests/{volunteerRequest}/cv/view', [AdminVolunteerRequestController::class, 'viewCv'])
     ->middleware('signed')
     ->name('admin.volunteer-requests.cv.view');
+
+// Ambassador application file routes (auth:sanctum — role check done in controller)
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('admin/ambassador-applications/{ambassadorApplication}/cv',
+        [AdminAmbassadorApplicationController::class, 'downloadCv'])
+        ->name('admin.ambassador.cv.download');
+    Route::get('admin/ambassador-applications/{ambassadorApplication}/cv/view',
+        [AdminAmbassadorApplicationController::class, 'viewCv'])
+        ->name('admin.ambassador.cv.view');
+    Route::get('admin/ambassador-applications/{ambassadorApplication}/student-id',
+        [AdminAmbassadorApplicationController::class, 'downloadStudentId'])
+        ->name('admin.ambassador.student-id.download');
+    Route::get('admin/ambassador-applications/{ambassadorApplication}/photo',
+        [AdminAmbassadorApplicationController::class, 'viewPhoto'])
+        ->name('admin.ambassador.photo.view');
+
+    // Ambassador application file management (role check: super_admin, admin, hr_manager via controller)
+    Route::prefix('admin/ambassador-applications/{ambassadorApplication}/files')
+        ->name('admin.ambassador-applications.files.')
+        ->group(function () {
+            Route::get('/',                  [AdminAmbassadorApplicationFileController::class, 'index'])    ->name('index');
+            Route::get('/{fileId}/preview',  [AdminAmbassadorApplicationFileController::class, 'preview'])  ->name('preview');
+            Route::get('/{fileId}/download', [AdminAmbassadorApplicationFileController::class, 'download']) ->name('download');
+            Route::get('/{fileId}/thumbnail',[AdminAmbassadorApplicationFileController::class, 'thumbnail'])->name('thumbnail');
+            Route::delete('/{fileId}',       [AdminAmbassadorApplicationFileController::class, 'destroy'])  ->name('destroy');
+        });
+});
 
 // ─── Public: Support tickets ─────────────────────────────────────────────────
 Route::post('/support-tickets', [PublicSupportTicketController::class, 'store'])
@@ -635,6 +673,15 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::get('volunteer-requests',                                           [AdminVolunteerRequestController::class, 'index']);
     Route::get('volunteer-requests/{volunteerRequest}',                        [AdminVolunteerRequestController::class, 'show']);
     Route::patch('volunteer-requests/{volunteerRequest}/status',               [AdminVolunteerRequestController::class, 'updateStatus']);
+
+    // Ambassador applications — admin / super_admin (hr_manager duplicated below)
+    Route::get('ambassador-applications',                                          [AdminAmbassadorApplicationController::class, 'index']);
+    Route::get('ambassador-applications/analytics',                                [AdminAmbassadorApplicationController::class, 'analytics']);
+    Route::get('ambassador-applications/{ambassadorApplication}',                  [AdminAmbassadorApplicationController::class, 'show']);
+    Route::patch('ambassador-applications/{ambassadorApplication}/status',         [AdminAmbassadorApplicationController::class, 'updateStatus']);
+    Route::post('ambassador-applications/{ambassadorApplication}/notes',           [AdminAmbassadorApplicationController::class, 'storeNote']);
+    Route::delete('ambassador-applications/{ambassadorApplication}/notes/{noteId}',[AdminAmbassadorApplicationController::class, 'deleteNote']);
+    Route::delete('ambassador-applications/{ambassadorApplication}',               [AdminAmbassadorApplicationController::class, 'destroy']);
 
     // NOTE: GET /admin/members (index + show) are registered OUTSIDE this admin group
     // (auth:sanctum only) so that department_manager and other non-admin roles can access
@@ -1229,6 +1276,14 @@ Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin
     Route::get('volunteer-requests/{volunteerRequest}',                    [AdminVolunteerRequestController::class, 'show']);
     Route::patch('volunteer-requests/{volunteerRequest}/status',           [AdminVolunteerRequestController::class, 'updateStatus']);
     Route::post('volunteer-requests/{volunteerRequest}/convert-to-member', [AdminVolunteerRequestController::class, 'convertToMember']);
+
+    // Ambassador applications — accessible to hr_manager + admin + super_admin
+    Route::get('ambassador-applications',                                          [AdminAmbassadorApplicationController::class, 'index']);
+    Route::get('ambassador-applications/analytics',                                [AdminAmbassadorApplicationController::class, 'analytics']);
+    Route::get('ambassador-applications/{ambassadorApplication}',                  [AdminAmbassadorApplicationController::class, 'show']);
+    Route::patch('ambassador-applications/{ambassadorApplication}/status',         [AdminAmbassadorApplicationController::class, 'updateStatus']);
+    Route::post('ambassador-applications/{ambassadorApplication}/notes',           [AdminAmbassadorApplicationController::class, 'storeNote']);
+    Route::delete('ambassador-applications/{ambassadorApplication}/notes/{noteId}',[AdminAmbassadorApplicationController::class, 'deleteNote']);
 });
 
 // ─── HR Manager portal (auth:sanctum + role:hr_manager,admin,super_admin,tech_admin) ────

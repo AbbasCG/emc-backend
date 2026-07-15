@@ -93,6 +93,27 @@ return [
             'retry_after' => 60,
         ],
 
+        // ── Support / Contact Form mailer ────────────────────────────────
+        // Uses its own SMTP credentials so Contact Form emails come from
+        // support@edumc.nl rather than the platform default noreply address.
+        // Falls back to the default 'smtp' mailer if the support SMTP fails.
+        'support_smtp' => [
+            'transport'  => 'smtp',
+            'scheme'     => env('SUPPORT_MAIL_SCHEME', env('MAIL_SCHEME')),
+            'host'       => env('SUPPORT_MAIL_HOST',       env('MAIL_HOST', '127.0.0.1')),
+            'port'       => env('SUPPORT_MAIL_PORT',       env('MAIL_PORT', 2525)),
+            'username'   => env('SUPPORT_MAIL_USERNAME',   env('MAIL_USERNAME')),
+            'password'   => env('SUPPORT_MAIL_PASSWORD',   env('MAIL_PASSWORD')),
+            'timeout'    => null,
+            'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
+        ],
+
+        'support' => [
+            'transport' => 'failover',
+            'mailers'   => ['support_smtp', 'smtp'],
+            'retry_after' => 60,
+        ],
+
         'roundrobin' => [
             'transport' => 'roundrobin',
             'mailers' => [

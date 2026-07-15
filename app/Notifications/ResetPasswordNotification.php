@@ -3,10 +3,15 @@
 namespace App\Notifications;
 
 use Illuminate\Auth\Notifications\ResetPassword as BaseResetPassword;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
 
-class ResetPasswordNotification extends BaseResetPassword
+class ResetPasswordNotification extends BaseResetPassword implements ShouldQueue
 {
+    use Queueable;
+
+
     public function toMail($notifiable): MailMessage
     {
         // Build the frontend SPA reset URL directly — no named web route exists in this API project.

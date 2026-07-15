@@ -1103,4 +1103,79 @@ class NotificationService
         ];
         return "{$dt->day} {$months[$dt->month]} {$dt->year}، {$dt->format('H:i')}";
     }
+
+    // ── Ambassador applications ───────────────────────────────────────────────
+
+    public static function ambassadorApplicationSubmitted(int $applicationId, string $fullName, string $university): void
+    {
+        $recipients = User::whereIn('role', ['super_admin', 'admin', 'hr_manager'])
+            ->pluck('id')
+            ->all();
+
+        self::send(
+            $recipients,
+            'ambassador_application',
+            'طلب سفير تحول رقمي جديد',
+            "تقدّم {$fullName} من {$university}",
+            [
+                'entity_type' => 'ambassador_application',
+                'entity_id'   => $applicationId,
+                'action_url'  => "/dashboard/super-admin/ambassador-applications/{$applicationId}",
+                'icon'        => 'star',
+                'color'       => 'blue',
+            ]
+        );
+
+        // Email notification to each admin/HR
+        $admins = User::whereIn('role', ['super_admin', 'admin', 'hr_manager'])->get();
+        $app    = \App\Models\AmbassadorApplication::find($applicationId);
+
+        if ($app) {
+            foreach ($admins as $admin) {
+                \App\Services\EmailService::dispatch(
+                    'ambassador_admin_notification',
+                    $admin->email,
+                    $admin->name,
+                    $admin->id,
+                    \App\Mail\AmbassadorApplicationAdminMail::fromApplication($app, $admin->name),
+                    'طلب سفير تحول رقمي جديد — ' . $fullName,
+                );
+            }
+        }
+    }
+
+    public static function ambassadorStatusChanged(int $applicationId, string $fullName, string $oldStatus, string $newStatus): void
+    {
+        // No platform notification to the applicant (they may not have an account).
+        // Email is dispatched separately in the controller.
+        // Notify admins of the status change.
+        $recipients = User::whereIn('role', ['super_admin', 'admin', 'hr_manager'])
+            ->pluck('id')
+            ->all();
+
+        $statusLabels = [
+            'under_review'        => 'قيد المراجعة',
+            'interview_scheduled' => 'تمت جدولة مقابلة',
+            'approved'            => 'تمت الموافقة',
+            'rejected'            => 'مرفوض',
+            'waitlisted'          => 'على قائمة الانتظار',
+            'cancelled'           => 'ملغى',
+        ];
+
+        $label = $statusLabels[$newStatus] ?? $newStatus;
+
+        self::send(
+            $recipients,
+            'ambassador_status_changed',
+            "تغيّرت حالة الطلب",
+            "{$fullName} — {$label}",
+            [
+                'entity_type' => 'ambassador_application',
+                'entity_id'   => $applicationId,
+                'action_url'  => "/dashboard/super-admin/ambassador-applications/{$applicationId}",
+                'icon'        => 'refresh-cw',
+                'color'       => 'orange',
+            ]
+        );
+    }
 }

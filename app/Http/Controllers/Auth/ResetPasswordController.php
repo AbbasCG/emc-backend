@@ -45,16 +45,16 @@ class ResetPasswordController extends Controller
         if ($status === Password::PASSWORD_RESET) {
             return response()->json([
                 'success' => true,
-                'message' => 'Password has been reset successfully. Please log in with your new password.',
+                'message' => 'تم تغيير كلمة المرور بنجاح. يمكنك الآن تسجيل الدخول بكلمة المرور الجديدة.',
             ]);
         }
 
         return response()->json([
             'success' => false,
             'message' => match ($status) {
-                Password::INVALID_TOKEN => 'This password reset token is invalid or has expired.',
-                Password::INVALID_USER  => 'No account found with this email address.',
-                default                 => 'Unable to reset password. Please request a new link.',
+                Password::INVALID_TOKEN => 'رابط إعادة التعيين غير صالح أو منتهي الصلاحية. يرجى طلب رابط جديد.',
+                Password::INVALID_USER  => 'لا يوجد حساب مرتبط بهذا البريد الإلكتروني.',
+                default                 => 'تعذّر تغيير كلمة المرور. يرجى طلب رابط جديد.',
             },
         ], 422);
     }

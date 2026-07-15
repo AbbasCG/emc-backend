@@ -23,11 +23,21 @@ class ContactAdminNotificationMail extends Mailable
         public readonly string  $submittedAt,
         public readonly ?string $adminUrl = null,
         public readonly string  $ticketNumber = '',
-    ) {}
+    ) {
+        // Route all Contact Form emails through the dedicated support mailer.
+        $this->mailer('support');
+    }
 
     public function envelope(): Envelope
     {
+        $supportEmail = (string) config('mail.support_email', 'support@edumc.nl');
+        $supportName  = (string) config('mail.support_name', 'EMC Support');
+
         return new Envelope(
+            from:    new Address(
+                env('SUPPORT_MAIL_FROM_ADDRESS', $supportEmail),
+                env('SUPPORT_MAIL_FROM_NAME',    $supportName),
+            ),
             replyTo: [new Address($this->visitorEmail, $this->visitorName)],
             subject: 'رسالة جديدة من نموذج التواصل — ' . $this->visitorName,
         );

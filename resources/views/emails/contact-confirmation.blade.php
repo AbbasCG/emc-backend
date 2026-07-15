@@ -27,7 +27,7 @@
     <strong style="color:#0E7490;">تاريخ الإرسال:</strong> {{ $submittedAt }}
   </p>
   <div style="background:#ffffff;border-radius:8px;padding:14px;margin-top:10px;border:1px solid #CFFAFE;">
-    <p style="margin:0;color:#334155;font-size:14px;line-height:1.7;">{{ $message }}</p>
+    <p style="margin:0;color:#334155;font-size:14px;line-height:1.7;">{{ $messageBody }}</p>
   </div>
 </div>
 
