@@ -2,6 +2,7 @@
 
 namespace App\Mail;
 
+use App\Mail\Concerns\UsesSupportSender;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Address;
 use Illuminate\Mail\Mailables\Content;
@@ -11,7 +12,7 @@ use Illuminate\Queue\SerializesModels;
 class ContactConfirmationMail extends Mailable
 {
     use SerializesModels;
-
+    use UsesSupportSender;
 
     public function __construct(
         public readonly string  $visitorName,
@@ -20,9 +21,6 @@ class ContactConfirmationMail extends Mailable
         public readonly string  $submittedAt,
         public readonly string  $ticketNumber = '',
     ) {
-        // Route all Contact Form emails through the dedicated support mailer
-        // (support_smtp → smtp failover) so they originate from support@edumc.nl.
-        $this->mailer('support');
     }
 
     public function envelope(): Envelope
@@ -31,10 +29,9 @@ class ContactConfirmationMail extends Mailable
         $supportName  = (string) config('mail.support_name', 'EMC Support');
 
         return new Envelope(
-            from:    new Address(
-                env('SUPPORT_MAIL_FROM_ADDRESS', $supportEmail),
-                env('SUPPORT_MAIL_FROM_NAME',    $supportName),
-            ),
+            // Sets ->mailer('support') when configured; otherwise falls back to the
+            // default mailer with a matching From — see UsesSupportSender.
+            from:    $this->resolveSupportSender(),
             replyTo: [new Address($supportEmail, $supportName)],
             subject: 'تم استلام رسالتك — منصة EMC',
         );

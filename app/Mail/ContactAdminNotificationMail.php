@@ -2,6 +2,7 @@
 
 namespace App\Mail;
 
+use App\Mail\Concerns\UsesSupportSender;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Address;
 use Illuminate\Mail\Mailables\Content;
@@ -11,7 +12,7 @@ use Illuminate\Queue\SerializesModels;
 class ContactAdminNotificationMail extends Mailable
 {
     use SerializesModels;
-
+    use UsesSupportSender;
 
     public function __construct(
         public readonly string  $visitorName,
@@ -24,20 +25,14 @@ class ContactAdminNotificationMail extends Mailable
         public readonly ?string $adminUrl = null,
         public readonly string  $ticketNumber = '',
     ) {
-        // Route all Contact Form emails through the dedicated support mailer.
-        $this->mailer('support');
     }
 
     public function envelope(): Envelope
     {
-        $supportEmail = (string) config('mail.support_email', 'support@edumc.nl');
-        $supportName  = (string) config('mail.support_name', 'EMC Support');
-
         return new Envelope(
-            from:    new Address(
-                env('SUPPORT_MAIL_FROM_ADDRESS', $supportEmail),
-                env('SUPPORT_MAIL_FROM_NAME',    $supportName),
-            ),
+            // Sets ->mailer('support') when configured; otherwise falls back to the
+            // default mailer with a matching From — see UsesSupportSender.
+            from:    $this->resolveSupportSender(),
             replyTo: [new Address($this->visitorEmail, $this->visitorName)],
             subject: 'رسالة جديدة من نموذج التواصل — ' . $this->visitorName,
         );

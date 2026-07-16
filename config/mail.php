@@ -21,6 +21,12 @@ return [
     'support_email' => env('MAIL_SUPPORT_ADDRESS', env('SUPPORT_EMAIL', 'support@edumc.nl')),
     'support_name'  => env('MAIL_SUPPORT_NAME', 'EMC Support'),
 
+    // Sender identity for the dedicated 'support' SMTP mailer below. Kept separate
+    // from support_email/support_name (which are also used as Reply-To on non-support
+    // mailers) so the From address always matches the support mailer's login exactly.
+    'support_from_address' => env('SUPPORT_MAIL_FROM_ADDRESS', 'support@edumc.nl'),
+    'support_from_name'    => env('SUPPORT_MAIL_FROM_NAME', 'EMC Support'),
+
     /*
     |--------------------------------------------------------------------------
     | Mailer Configurations
@@ -94,24 +100,24 @@ return [
         ],
 
         // ── Support / Contact Form mailer ────────────────────────────────
-        // Uses its own SMTP credentials so Contact Form emails come from
-        // support@edumc.nl rather than the platform default noreply address.
-        // Falls back to the default 'smtp' mailer if the support SMTP fails.
-        'support_smtp' => [
-            'transport'  => 'smtp',
-            'scheme'     => env('SUPPORT_MAIL_SCHEME', env('MAIL_SCHEME')),
-            'host'       => env('SUPPORT_MAIL_HOST',       env('MAIL_HOST', '127.0.0.1')),
-            'port'       => env('SUPPORT_MAIL_PORT',       env('MAIL_PORT', 2525)),
-            'username'   => env('SUPPORT_MAIL_USERNAME',   env('MAIL_USERNAME')),
-            'password'   => env('SUPPORT_MAIL_PASSWORD',   env('MAIL_PASSWORD')),
-            'timeout'    => null,
-            'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
-        ],
-
+        // Uses its own SMTP login (support@edumc.nl) so Contact Form and support
+        // emails never ride the noreply account. Deliberately NOT a failover onto
+        // 'smtp': failing over to the noreply login while the Envelope still claims
+        // From: support@edumc.nl would trigger "553 Sender address rejected: not
+        // owned by user". If these credentials are missing, callers must check
+        // config('mail.mailers.support.username')/.password themselves (see
+        // App\Mail\Concerns\UsesSupportSender) and fall back to the default mailer
+        // WITH a matching default From address instead.
         'support' => [
-            'transport' => 'failover',
-            'mailers'   => ['support_smtp', 'smtp'],
-            'retry_after' => 60,
+            'transport'  => 'smtp',
+            'scheme'     => env('SUPPORT_MAIL_SCHEME'),
+            'url'        => env('SUPPORT_MAIL_URL'),
+            'host'       => env('SUPPORT_MAIL_HOST', 'smtp.hostinger.com'),
+            'port'       => env('SUPPORT_MAIL_PORT', 587),
+            'username'   => env('SUPPORT_MAIL_USERNAME'),
+            'password'   => env('SUPPORT_MAIL_PASSWORD'),
+            'timeout'    => null,
+            'local_domain' => env('SUPPORT_MAIL_EHLO_DOMAIN', env('MAIL_EHLO_DOMAIN', 'api.edumc.nl')),
         ],
 
         'roundrobin' => [

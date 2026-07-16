@@ -2,6 +2,7 @@
 
 namespace App\Mail;
 
+use App\Mail\Concerns\UsesSupportSender;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Address;
 use Illuminate\Mail\Mailables\Content;
@@ -11,7 +12,7 @@ use Illuminate\Queue\SerializesModels;
 class SupportTicketReplyMail extends Mailable
 {
     use SerializesModels;
-
+    use UsesSupportSender;
 
     public function __construct(
         public readonly string $recipientName,
@@ -26,7 +27,11 @@ class SupportTicketReplyMail extends Mailable
         $supportName  = (string) config('mail.support_name', 'EMC Support');
 
         return new Envelope(
-            from:    new Address($supportEmail, $supportName),
+            // Previously hardcoded From: support@edumc.nl without ever switching off
+            // the default mailer — sent through the noreply SMTP login, which strict
+            // providers reject as sender spoofing. Now correctly routes through the
+            // 'support' mailer (or falls back safely) via UsesSupportSender.
+            from:    $this->resolveSupportSender(),
             replyTo: [new Address($supportEmail, $supportName)],
             bcc:     [new Address($supportEmail, $supportName)],
             subject: "رد على تذكرتك {$this->ticketNumber} — منصة EMC",
