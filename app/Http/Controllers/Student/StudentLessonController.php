@@ -34,6 +34,13 @@ class StudentLessonController extends Controller
             return response()->json(['success' => false, 'message' => 'You are not enrolled in this course.'], 403);
         }
 
+        // A student may only complete a lesson they could actually view — draft/inactive
+        // lessons, or lessons under a deactivated/draft module, cannot be completed by
+        // guessing the ID directly.
+        if (! $lesson->isVisibleToStudents() || ! $lesson->module?->isVisibleToStudents()) {
+            return response()->json(['success' => false, 'message' => 'This lesson is not available.'], 404);
+        }
+
         $row = LessonCompletion::query()->updateOrCreate(
             ['user_id' => $user->id, 'lesson_id' => $lesson->id],
             ['completed_at' => now()],

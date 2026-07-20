@@ -6,7 +6,7 @@ use App\Models\Course;
 use App\Models\CourseMaterial;
 use App\Models\Registration;
 use App\Models\User;
-use App\Services\LmsEnrollmentService;
+use App\Services\LearningContentEligibilityService;
 
 class CourseMaterialPolicy
 {
@@ -88,10 +88,12 @@ class CourseMaterialPolicy
 
     private function isEnrolledStudent(User $user, CourseMaterial $material): bool
     {
-        $courseId = $material->course_id;
-        if (! $courseId) {
-            return false;
-        }
-        return app(LmsEnrollmentService::class)->isEnrolledInCourse($user, $courseId);
+        // Delegates to the canonical eligibility service, which also
+        // cross-checks material.session_id/course_session_id against the
+        // student's actual class membership — course enrollment and a
+        // matching material.class_group_id alone are not enough, since a
+        // material can be linked to a session belonging to a different
+        // class than the material's own class_group_id declares.
+        return app(LearningContentEligibilityService::class)->studentCanViewMaterial($user, $material);
     }
 }

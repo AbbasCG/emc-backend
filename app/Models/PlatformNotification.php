@@ -15,6 +15,7 @@ class PlatformNotification extends Model
         'entity_type',
         'entity_id',
         'action_url',
+        'meta_url',
         'icon',
         'color',
         'is_read',

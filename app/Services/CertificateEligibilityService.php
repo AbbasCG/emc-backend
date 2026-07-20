@@ -6,6 +6,7 @@ use App\Enums\RegistrationStatus;
 use App\Models\Assignment;
 use App\Models\AssignmentSubmission;
 use App\Models\Certificate;
+use App\Models\ClassGroupStudent;
 use App\Models\Registration;
 use App\Models\StudentProgress;
 use App\Models\User;
@@ -14,6 +15,90 @@ use Illuminate\Support\Facades\DB;
 
 class CertificateEligibilityService
 {
+    /**
+     * Deterministic class-context resolution for Ticket 1 Phase 5. Certificate
+     * eligibility itself (StudentProgress/Registration) is keyed by
+     * user_id+course_id only — there is no class_group_id on Certificate or
+     * StudentProgress, and no migration was added to introduce one (the
+     * "least risky architecture" per the recovery instructions, given
+     * Certificate has live automated issuance listeners/PDF generation that
+     * a schema change would put at risk). Instead, a student's actual active
+     * class for a course is resolved on read, the same intersection pattern
+     * already used for the canonical class detail endpoint's progress_summary.
+     * This is purely additive metadata — it never changes is_eligible/
+     * already_issued/existing_certificate, so it carries zero risk to
+     * existing certificate behavior.
+     *
+     * @return array{class_group_id:int,name:string,status:string}|null
+     */
+    public function resolveClassGroupForUser(int $userId, int $courseId): ?array
+    {
+        // Deterministic tie-break for the (structurally rare, not impossible)
+        // case of multiple active memberships for the same user+course: the
+        // most recently assigned membership wins, rather than depending on
+        // unordered DB row order. Phase 6: do not randomly select a row.
+        $membership = ClassGroupStudent::where('user_id', $userId)
+            ->whereIn('status', ClassGroupStudent::ACTIVE_STATUSES)
+            ->whereHas('classGroup', fn ($q) => $q->where('course_id', $courseId))
+            ->with('classGroup:id,name,status')
+            ->orderByDesc('assigned_at')
+            ->orderByDesc('id')
+            ->first();
+
+        if (! $membership || ! $membership->classGroup) {
+            return null;
+        }
+
+        return [
+            'class_group_id' => $membership->classGroup->id,
+            'name'            => $membership->classGroup->name,
+            'status'          => $membership->classGroup->status,
+        ];
+    }
+
+    /**
+     * Centralized course-completion-certificate issuance decision (Ticket 1
+     * final blocker). Every automated/manual course-certificate issuance
+     * path must call this — never re-derive class-status rules inline.
+     *
+     * Rule (Ticket 1 recovery Phase 2):
+     *   no resolved class  → allowed (preserves existing non-class-linked
+     *                         course flows; ClassGroup involvement is opt-in)
+     *   draft / ready       → blocked (class isn't ready for students yet)
+     *   active               → blocked (not formally completed; no existing
+     *                         product rule requires certificate issuance
+     *                         before class completion — verified absent by
+     *                         audit, so the safe default applies)
+     *   completed            → allowed
+     *   archived              → blocked, UNLESS there is deterministic
+     *                         evidence the class was completed before being
+     *                         archived. ClassGroup has no `completed_at`
+     *                         column, so that evidence never exists today —
+     *                         this always blocks new issuance for archived
+     *                         classes rather than fabricating completion.
+     *                         Already-issued certificates are never touched
+     *                         by this method (it only gates NEW issuance).
+     *
+     * @return array{allowed: bool, reason: string, class_group: array|null}
+     */
+    public function canIssueForClassContext(int $userId, int $courseId): array
+    {
+        $classGroup = $this->resolveClassGroupForUser($userId, $courseId);
+
+        if ($classGroup === null) {
+            return ['allowed' => true, 'reason' => 'no_class_context', 'class_group' => null];
+        }
+
+        return match ($classGroup['status']) {
+            'draft'     => ['allowed' => false, 'reason' => 'class_draft', 'class_group' => $classGroup],
+            'ready'     => ['allowed' => false, 'reason' => 'class_ready', 'class_group' => $classGroup],
+            'active'    => ['allowed' => false, 'reason' => 'class_active', 'class_group' => $classGroup],
+            'completed' => ['allowed' => true,  'reason' => 'eligible',    'class_group' => $classGroup],
+            'archived'  => ['allowed' => false, 'reason' => 'class_archived_without_completion_evidence', 'class_group' => $classGroup],
+            default     => ['allowed' => false, 'reason' => 'class_unknown_status', 'class_group' => $classGroup],
+        };
+    }
+
     /**
      * Same enrollment scope as AdminCourseStudentsController (registrations table).
      */
@@ -93,6 +178,7 @@ class CertificateEligibilityService
                     'certificate_status'     => null,
                     'registration_id'        => $reg->id,
                     'registration_status'    => $reg->status,
+                    'class_group'            => null,
                 ];
                 continue;
             }
@@ -102,6 +188,7 @@ class CertificateEligibilityService
             $attendancePct   = (int) ($progress?->attendance_percentage ?? 0);
             $assignmentPct   = (int) ($progress?->assignment_completion_percentage ?? 0);
             $assignCompleted = (int) ($submittedByUser->get($user->id) ?? 0);
+            $classGroup      = $this->resolveClassGroupForUser($user->id, $courseId);
 
             $existingCert = $existingCerts->get($user->id);
             $alreadyIssued = $existingCert !== null && in_array($existingCert->status, ['issued', 'approved', 'pending', 'draft'], true);
@@ -135,6 +222,9 @@ class CertificateEligibilityService
                 'certificate_status'     => $existingCert?->status,
                 'registration_id'        => $reg->id,
                 'registration_status'    => $reg->status,
+                // Additive — Ticket 1 Phase 5. Purely informational; never
+                // affects is_eligible/already_issued above.
+                'class_group'            => $classGroup,
             ];
         }
 

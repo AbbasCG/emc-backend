@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\MaterialType;
+use App\Models\Concerns\BelongsToClassGroup;
 use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -11,14 +12,16 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class CourseMaterial extends Model
 {
-    use Auditable, SoftDeletes;
+    use Auditable, SoftDeletes, BelongsToClassGroup;
 
     protected $fillable = [
         // Organisational
         'course_id',
+        'class_group_id',
         'workshop_id',
         'session_id',
         'module_id',
+        'lesson_id',
         'course_session_id',
         // Content
         'title',
@@ -83,6 +86,11 @@ class CourseMaterial extends Model
     public function module(): BelongsTo
     {
         return $this->belongsTo(CourseModule::class, 'module_id');
+    }
+
+    public function lesson(): BelongsTo
+    {
+        return $this->belongsTo(Lesson::class, 'lesson_id');
     }
 
     public function courseSession(): BelongsTo

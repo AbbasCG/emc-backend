@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToClassGroup;
 use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -11,18 +12,21 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class CourseAssignment extends Model
 {
-    use Auditable, SoftDeletes;
+    use Auditable, SoftDeletes, BelongsToClassGroup;
     protected $table = 'course_assignments';
 
     protected $fillable = [
         'course_id',
+        'class_group_id',
         'module_id',
         'course_session_id',
+        'session_id',
         'title',
         'description',
         'instructions',
         'deadline',
         'max_points',
+        'max_attempts',
         'submission_type',
         'is_required',
         'resubmission_allowed',
@@ -36,7 +40,14 @@ class CourseAssignment extends Model
         'is_required' => 'boolean',
         'is_visible'  => 'boolean',
         'resubmission_allowed' => 'boolean',
+        'max_attempts' => 'integer',
     ];
+
+    /** The Ticket-4-canonical live session this assignment is scoped to (distinct from `course_session_id` → CourseSession, content-scheduling). */
+    public function session(): BelongsTo
+    {
+        return $this->belongsTo(LmsSession::class, 'session_id');
+    }
 
     public function course(): BelongsTo
     {

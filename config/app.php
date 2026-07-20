@@ -79,6 +79,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Booking Timezone
+    |--------------------------------------------------------------------------
+    |
+    | The wall-clock timezone in which all student/instructor booking flows
+    | (e.g. placement-test oral interviews) are entered and displayed. Storage
+    | always stays UTC (see 'timezone' above) — this value is only used to
+    | interpret local time input and to render local time output.
+    |
+    */
+
+    'booking_timezone' => env('BOOKING_TIMEZONE', 'Europe/Amsterdam'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Locale Configuration
     |--------------------------------------------------------------------------
     |

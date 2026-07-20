@@ -7,6 +7,9 @@ use App\Http\Resources\CourseAssignmentResource;
 use App\Http\Resources\CourseMaterialResource;
 use App\Http\Resources\CourseModuleResource;
 use App\Http\Resources\CourseSessionResource;
+use App\Services\ContentReorderService;
+use App\Support\CourseContentStatus;
+use Illuminate\Validation\Rule;
 use App\Http\Resources\LessonResource;
 use App\Models\Course;
 use App\Models\CourseAssignment;
@@ -73,7 +76,7 @@ class CourseContentController extends Controller
             'title'       => 'required|string|max:255',
             'description' => 'nullable|string',
             'sort_order'  => 'nullable|integer|min:0',
-            'status'      => 'nullable|in:active,inactive,draft',
+            'status'      => ['nullable', Rule::in(CourseContentStatus::ALL)],
             'is_active'   => 'nullable|boolean',
         ]);
 
@@ -102,7 +105,7 @@ class CourseContentController extends Controller
             'title'       => 'sometimes|string|max:255',
             'description' => 'nullable|string',
             'sort_order'  => 'nullable|integer|min:0',
-            'status'      => 'nullable|in:active,inactive,draft',
+            'status'      => ['nullable', Rule::in(CourseContentStatus::ALL)],
             'is_active'   => 'nullable|boolean',
         ]);
 
@@ -374,13 +377,33 @@ class CourseContentController extends Controller
             'module_ids'  => 'sometimes|array',
         ]);
 
-        $orderedIds = $data['ids'] ?? $data['ordered_ids'] ?? $data['module_ids'] ?? [];
+        $orderedIds = array_map('intval', $data['ids'] ?? $data['ordered_ids'] ?? $data['module_ids'] ?? []);
 
-        foreach ($orderedIds as $position => $id) {
-            CourseModule::where('id', $id)
-                ->where('course_id', $course->id)
-                ->update(['sort_order' => $position]);
-        }
+        app(ContentReorderService::class)->reorder(
+            CourseModule::query()->where('course_id', $course->id),
+            $orderedIds
+        );
+
+        return response()->json(['success' => true, 'message' => 'تم حفظ الترتيب']);
+    }
+
+    /**
+     * POST /admin/modules/{module}/lessons/reorder
+     */
+    public function reorderLessons(Request $request, CourseModule $module): JsonResponse
+    {
+        $data = $request->validate([
+            'ids'         => 'sometimes|array',
+            'ordered_ids' => 'sometimes|array',
+            'lesson_ids'  => 'sometimes|array',
+        ]);
+
+        $orderedIds = array_map('intval', $data['ids'] ?? $data['ordered_ids'] ?? $data['lesson_ids'] ?? []);
+
+        app(ContentReorderService::class)->reorder(
+            Lesson::query()->where('module_id', $module->id),
+            $orderedIds
+        );
 
         return response()->json(['success' => true, 'message' => 'تم حفظ الترتيب']);
     }
@@ -490,7 +513,7 @@ class CourseContentController extends Controller
             'video_url'        => 'nullable|url|max:500',
             'duration_minutes' => 'nullable|integer|min:1',
             'sort_order'       => 'nullable|integer|min:0',
-            'status'           => 'nullable|in:active,inactive,draft',
+            'status'           => ['nullable', Rule::in(CourseContentStatus::ALL)],
         ]);
     }
 

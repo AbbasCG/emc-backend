@@ -155,6 +155,7 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Assignment::class, AssignmentPolicy::class);
         Gate::policy(AssignmentSubmission::class, AssignmentSubmissionPolicy::class);
         Gate::policy(CourseMaterial::class, CourseMaterialPolicy::class);
+        Gate::policy(\App\Models\ClassGroup::class, \App\Policies\ClassGroupPolicy::class);
         Gate::policy(Evaluation::class, EvaluationPolicy::class);
         Gate::policy(StudentProgress::class, StudentProgressPolicy::class);
 

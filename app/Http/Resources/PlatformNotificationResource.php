@@ -19,6 +19,9 @@ class PlatformNotificationResource extends JsonResource
             'is_read'     => (bool) $this->is_read,
             'read_at'     => $this->read_at,
             'action_url'  => $this->action_url,
+            // External action link (e.g. a meeting URL) — always validated to
+            // http(s) at write time in NotificationService, never raw HTML.
+            'meta_url'    => $this->meta_url,
             'entity_type' => $this->entity_type,
             'entity_id'   => $this->entity_id,
             'created_at'  => $this->created_at,

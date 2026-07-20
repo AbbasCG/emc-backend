@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Student;
 use App\Http\Controllers\Controller;
 use App\Models\Attendance;
 use App\Models\LmsSession;
+use App\Services\AttendanceStatisticsService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -122,6 +123,23 @@ class StudentAttendanceController extends Controller
                 'marked_at'         => ($attendance?->checked_in_at ?? $attendance?->created_at)?->toIso8601String(),
                 'attendance_id'     => $attendance?->id,
             ],
+        ]);
+    }
+
+    /**
+     * GET /api/student/attendance/summary
+     *
+     * Ticket 6: the authenticated student's own attendance statistics/
+     * streaks — never accepts user_id from the request, always derives the
+     * student from auth. Optional `course_id` filter.
+     */
+    public function summary(Request $request, AttendanceStatisticsService $stats): JsonResponse
+    {
+        $courseId = $request->query('course_id') ? (int) $request->query('course_id') : null;
+
+        return response()->json([
+            'success' => true,
+            'data'    => $stats->forStudent($request->user()->id, $courseId),
         ]);
     }
 

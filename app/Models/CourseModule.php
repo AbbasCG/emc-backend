@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\CourseContentStatus;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -15,6 +16,12 @@ class CourseModule extends Model
     protected $fillable = ['course_id', 'title', 'description', 'sort_order', 'status', 'is_active'];
 
     protected $casts = ['is_active' => 'boolean'];
+
+    public function isVisibleToStudents(): bool
+    {
+        return ($this->is_active === null || $this->is_active === true)
+            && CourseContentStatus::isVisibleToStudents($this->status);
+    }
 
     public function course(): BelongsTo
     {

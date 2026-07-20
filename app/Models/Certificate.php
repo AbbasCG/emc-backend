@@ -10,6 +10,8 @@ use Illuminate\Support\Str;
 
 class Certificate extends Model
 {
+    use \Illuminate\Database\Eloquent\Factories\HasFactory;
+
     use Auditable, SoftDeletes;
 
     // ── Status constants ──────────────────────────────────────────────────────

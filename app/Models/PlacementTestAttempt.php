@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class PlacementTestAttempt extends Model
@@ -54,6 +55,11 @@ class PlacementTestAttempt extends Model
     public function oralBooking(): HasOne
     {
         return $this->hasOne(OralAssessmentBooking::class, 'placement_test_attempt_id');
+    }
+
+    public function violations(): HasMany
+    {
+        return $this->hasMany(ExamViolation::class, 'placement_test_attempt_id');
     }
 
     public function isCompleted(): bool

@@ -131,6 +131,7 @@ use App\Http\Controllers\Student\StudentPlacementTestController;
 use App\Http\Controllers\Student\StudentOralAssessmentController;
 use App\Http\Controllers\Instructor\InstructorPlacementController;
 use App\Http\Controllers\Instructor\InstructorAvailabilityController;
+use App\Http\Controllers\Instructor\InstructorOralBookingController;
 use App\Http\Controllers\Admin\AdminPlacementController;
 use Illuminate\Support\Facades\Route;
 
@@ -171,14 +172,19 @@ Route::get('/team', [\App\Http\Controllers\TeamController::class, 'index'])->mid
 Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(function () {
     Route::get('/dashboard',     StudentDashboardController::class);
     Route::get('/sessions',      [StudentSessionController::class, 'index']);
+    Route::get('/sessions/calendar', [StudentSessionController::class, 'calendar']);
+    Route::get('/sessions/{session}', [StudentSessionController::class, 'show']);
     Route::get('/materials',     [StudentMaterialController::class, 'index']);
     Route::get('/assignments',              [StudentAssignmentController::class, 'index']);
     Route::get('/assignments/{assignment}', [StudentAssignmentController::class, 'show']);
     Route::post('/assignments/{assignment}/submit', [StudentAssignmentController::class, 'submit']);
+    Route::get('/assignments/{assignment}/history', [StudentAssignmentController::class, 'history']);
     Route::post('/lessons/{lesson}/complete', [StudentLessonController::class, 'complete']);
     Route::get('/progress',      [StudentProgressController::class, 'index']);
     Route::get('/attendance',           [\App\Http\Controllers\Student\StudentAttendanceController::class, 'index']);
+    Route::get('/attendance/summary',   [\App\Http\Controllers\Student\StudentAttendanceController::class, 'summary']);
     Route::get('/attendance/{session}', [\App\Http\Controllers\Student\StudentAttendanceController::class, 'show']);
+    Route::get('/classes/{group}/announcements', [\App\Http\Controllers\Student\StudentClassAnnouncementController::class, 'index']);
     Route::post('/evaluations',  [StudentEvaluationController::class, 'store']);
     Route::get('/reviews',       [StudentEvaluationController::class, 'index']);
     Route::get('/certificates',                       [StudentCertificateController::class, 'index']);
@@ -215,6 +221,8 @@ Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(fu
     Route::post('/courses/{course}/placement-test/start',  [StudentPlacementTestController::class, 'start']);
     Route::get( '/courses/{course}/placement-test',        [StudentPlacementTestController::class, 'show']);
     Route::post('/courses/{course}/placement-test/submit', [StudentPlacementTestController::class, 'submit']);
+    Route::post('/courses/{course}/placement-test/violations', [StudentPlacementTestController::class, 'logViolation'])
+        ->middleware('throttle:30,1'); // exam-integrity events, but must not be abusable as a flood vector
 
     // ── Oral assessment ──────────────────────────────────────────────────────
     Route::get( '/courses/{course}/oral-assessment/slots', [StudentOralAssessmentController::class, 'slots']);
@@ -241,6 +249,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/materials/{material}/download',
         [\App\Http\Controllers\Student\MaterialDownloadController::class, 'download']
     )->name('materials.download');
+
+    Route::get('/materials/{material}/preview',
+        [\App\Http\Controllers\Student\MaterialDownloadController::class, 'preview']
+    )->name('materials.preview');
+
+    Route::get('/materials/{material}/stream',
+        [\App\Http\Controllers\Student\MaterialDownloadController::class, 'stream']
+    )->name('materials.stream');
 
     Route::get('/materials/{material}/thumbnail',
         [\App\Http\Controllers\Student\MaterialDownloadController::class, 'thumbnail']
@@ -328,12 +344,22 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:instructor,admin'
     Route::get('/courses',     [InstructorCourseController::class, 'index']);
     Route::get('/workshops',   [InstructorWorkshopController::class, 'index']);
     Route::get('/students',    [InstructorStudentController::class, 'index']);
+    Route::get('/attendance/dashboard',                                 [SessionAttendanceController::class,    'dashboard']);
+    Route::get('/attendance/settings',                                  [\App\Http\Controllers\Admin\AttendanceSettingsController::class, 'show']);
+    Route::get('/attendance/reports',                                   [SessionAttendanceController::class,    'reports']);
+    Route::get('/attendance/export',                                    [SessionAttendanceController::class,    'export']);
+    Route::get('/attendance/export-pdf',                                [SessionAttendanceController::class,    'exportPdf']);
+    Route::get('/attendance/export-excel',                              [SessionAttendanceController::class,    'exportExcel']);
     Route::get('/attendance/{session}',            [SessionAttendanceController::class,    'show']);
     Route::get('/attendance',                                           [SessionAttendanceController::class,    'index']);
     Route::put('/attendance/{session}',                                 [SessionAttendanceController::class,    'update']);
     Route::get('/assignments',                                          [InstructorAssignmentController::class, 'index']);
+    Route::get('/assignments/dashboard',                                [InstructorAssignmentController::class, 'dashboard']);
+    Route::get('/assignments/missing-submissions',                      [InstructorAssignmentController::class, 'missingSubmissions']);
     Route::get('/submissions',                                          [InstructorSubmissionController::class, 'index']);
+    Route::put('/submissions/bulk-review',                              [InstructorSubmissionController::class, 'bulkReview']);
     Route::get('/submissions/{submission}',                             [InstructorSubmissionController::class, 'show']);
+    Route::get('/submissions/{submission}/history',                     [InstructorSubmissionController::class, 'history']);
     Route::put('/submissions/{submission}/review',                      [InstructorSubmissionController::class, 'review']);
     Route::patch('/submissions/{submission}/review',                    [InstructorSubmissionController::class, 'review']);
     Route::patch('/submissions/{submission}/grade',                     [InstructorSubmissionController::class, 'review']);
@@ -342,7 +368,6 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:instructor,admin'
 
     // ── Placement: per-course student list + oral assessment management ───────
     Route::get( '/courses/{course}/placement-students',       [InstructorPlacementController::class, 'students']);
-    Route::get( '/courses/{course}/students',                 [InstructorPlacementController::class, 'students']);
     Route::get( '/placement-tests',                                     [InstructorPlacementController::class, 'placementTests']);
     Route::get( '/placement-tests/{attempt}/answers',                  [InstructorPlacementController::class, 'answers']);
 
@@ -351,9 +376,27 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:instructor,admin'
     Route::post(  '/classes',                                           [\App\Http\Controllers\Instructor\InstructorClassController::class, 'store']);
     Route::patch( '/classes/{group}',                                   [\App\Http\Controllers\Instructor\InstructorClassController::class, 'update']);
     Route::delete('/classes/{group}',                                   [\App\Http\Controllers\Instructor\InstructorClassController::class, 'destroy']);
+    Route::get(   '/classes/{group}',                                   [\App\Http\Controllers\Instructor\InstructorClassController::class, 'show']);
     Route::get(   '/classes/{group}/students',                          [\App\Http\Controllers\Instructor\InstructorClassController::class, 'groupStudents']);
     Route::post(  '/classes/{group}/students',                          [\App\Http\Controllers\Instructor\InstructorClassController::class, 'addStudent']);
     Route::delete('/classes/{group}/students/{userId}',                 [\App\Http\Controllers\Instructor\InstructorClassController::class, 'removeStudent']);
+    Route::get(   '/sessions/calendar',                                 [\App\Http\Controllers\Instructor\InstructorClassController::class, 'calendar']);
+    Route::get(   '/classes/{group}/sessions',                          [\App\Http\Controllers\Instructor\InstructorClassController::class, 'groupSessions']);
+    Route::post(  '/classes/{group}/sessions',                          [\App\Http\Controllers\Instructor\InstructorClassController::class, 'storeSession']);
+    Route::get(   '/classes/{group}/sessions/{session}',                 [\App\Http\Controllers\Instructor\InstructorClassController::class, 'showSession']);
+    Route::patch( '/classes/{group}/sessions/{session}',                 [\App\Http\Controllers\Instructor\InstructorClassController::class, 'updateSession']);
+    Route::post(  '/classes/{group}/sessions/{session}/transition',      [\App\Http\Controllers\Instructor\InstructorClassController::class, 'transitionSession']);
+    Route::delete('/classes/{group}/sessions/{session}',                 [\App\Http\Controllers\Instructor\InstructorClassController::class, 'destroySession']);
+    Route::post(  '/classes/{group}/sessions/generation-preview',        [\App\Http\Controllers\Instructor\InstructorClassController::class, 'previewSessionGeneration']);
+    Route::post(  '/classes/{group}/sessions/generate',                  [\App\Http\Controllers\Instructor\InstructorClassController::class, 'generateSessions']);
+    Route::get(   '/classes/{group}/attendance',                        [\App\Http\Controllers\Instructor\InstructorClassController::class, 'groupAttendance']);
+    Route::get(   '/classes/{group}/materials',                         [\App\Http\Controllers\Instructor\InstructorClassController::class, 'groupMaterials']);
+    Route::get(   '/classes/{group}/curriculum/analytics',              [\App\Http\Controllers\Instructor\InstructorClassController::class, 'curriculumAnalytics']);
+    Route::get(   '/classes/{group}/assignments',                       [\App\Http\Controllers\Instructor\InstructorClassController::class, 'groupAssignments']);
+    Route::get(   '/classes/{group}/announcements',                     [\App\Http\Controllers\Instructor\InstructorClassController::class, 'groupAnnouncements']);
+    Route::post(  '/classes/{group}/announcements',                     [\App\Http\Controllers\Instructor\InstructorClassController::class, 'storeAnnouncement']);
+    Route::patch( '/classes/{group}/announcements/{announcement}/publish', [\App\Http\Controllers\Instructor\InstructorClassController::class, 'publishAnnouncement']);
+    Route::delete('/classes/{group}/announcements/{announcement}',      [\App\Http\Controllers\Instructor\InstructorClassController::class, 'archiveAnnouncement']);
     Route::get(   '/courses/{course}/classes',                          [\App\Http\Controllers\Instructor\InstructorClassController::class, 'courseGroups']);
     Route::get(   '/courses/{course}/students',                         [\App\Http\Controllers\Instructor\InstructorClassController::class, 'courseStudents']);
     Route::get(   '/courses/{course}/class-assignment/students',        [\App\Http\Controllers\Instructor\InstructorClassController::class, 'assignmentStudents']);
@@ -366,6 +409,12 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:instructor,admin'
     Route::post(  '/availability',             [InstructorAvailabilityController::class, 'store']);
     Route::delete('/availability/{slot}',      [InstructorAvailabilityController::class, 'destroy']);
 
+    // ── Oral-interview booking detail & post-booking actions ──────────────────
+    Route::get(  '/oral-bookings/{booking}',              [InstructorOralBookingController::class, 'show']);
+    Route::patch('/oral-bookings/{booking}/status',        [InstructorOralBookingController::class, 'updateStatus']);
+    Route::post( '/oral-bookings/{booking}/message',        [InstructorOralBookingController::class, 'sendMessage']);
+    Route::post( '/oral-bookings/{booking}/reschedule',      [InstructorOralBookingController::class, 'reschedule']);
+
     // ── Course content: individual GET indexes ───────────────────────────────
     Route::get('/courses/{course}/content',                              [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'content']);
     Route::get('/courses/{course}/modules',                              [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'indexModules']);
@@ -376,6 +425,7 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:instructor,admin'
     // ── Course content: nested CRUD (POST /instructor/courses/{course}/…) ────────
     Route::post('/courses/{course}/modules',                             [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'storeModule']);
     Route::post('/courses/{course}/modules/reorder',                     [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'reorderModules']);
+    Route::post('/courses/{course}/modules/{module}/lessons/reorder',    [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'reorderLessons']);
     Route::put('/courses/{course}/modules/{module}',                     [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateModule']);
     Route::patch('/courses/{course}/modules/{module}',                   [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'updateModule']);
     Route::delete('/courses/{course}/modules/{module}',                  [\App\Http\Controllers\Instructor\InstructorCourseContentController::class, 'destroyModule']);
@@ -538,6 +588,8 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->group(
 
         Route::get('/attendance', [AdminLmsAttendanceController::class, 'index']);
         Route::put('/attendance/{session}', [SessionAttendanceController::class, 'update']);
+        Route::get('/attendance-settings', [\App\Http\Controllers\Admin\AttendanceSettingsController::class, 'show']);
+        Route::put('/attendance-settings', [\App\Http\Controllers\Admin\AttendanceSettingsController::class, 'update']);
 
         Route::get('/progress', [AdminLmsProgressController::class, 'index']);
         Route::get('/evaluations', [AdminLmsEvaluationController::class, 'index']);
@@ -1444,6 +1496,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,department
     Route::get('admin/courses/{course}/content',                             [\App\Http\Controllers\Admin\CourseContentController::class, 'content']);
     Route::post('admin/courses/{course}/modules',                            [\App\Http\Controllers\Admin\CourseContentController::class, 'storeModule']);
     Route::post('admin/courses/{course}/modules/reorder',                    [\App\Http\Controllers\Admin\CourseContentController::class, 'reorderModules']);
+    Route::post('admin/modules/{module}/lessons/reorder',                    [\App\Http\Controllers\Admin\CourseContentController::class, 'reorderLessons']);
     Route::put('admin/courses/{course}/modules/{module}',                    [\App\Http\Controllers\Admin\CourseContentController::class, 'updateModule']);
     Route::patch('admin/courses/{course}/modules/{module}',                  [\App\Http\Controllers\Admin\CourseContentController::class, 'updateModule']);
     Route::delete('admin/courses/{course}/modules/{module}',                 [\App\Http\Controllers\Admin\CourseContentController::class, 'destroyModule']);
@@ -1603,6 +1656,8 @@ Route::middleware(['auth:sanctum'])->group(function () {
 // ─── Placement tests — admin management ──────────────────────────────────────
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('admin')->group(function () {
     Route::get( 'placement-tests',                                        [AdminPlacementController::class, 'indexTests']);
+    Route::get( 'placement-tests/violations/summary',                     [AdminPlacementController::class, 'violationsSummary']);
+    Route::get( 'placement-tests/attempts/{attempt}/violations',          [AdminPlacementController::class, 'attemptViolations']);
     Route::post('courses/{course}/oral-assessment-slots',                 [AdminPlacementController::class, 'storeSlot']);
     Route::get( 'courses/{course}/oral-assessment-slots',                 [AdminPlacementController::class, 'indexSlots']);
     Route::delete('oral-assessment-slots/{slot}',                         [AdminPlacementController::class, 'destroySlot']);

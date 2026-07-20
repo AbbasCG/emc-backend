@@ -107,7 +107,11 @@ class StudentOralAssessmentController extends Controller
 
         $booking->load('slot', 'instructor.user', 'attempt');
 
-        $slotDatetime = $booking->slot->starts_at->format('Y-m-d H:i');
+        // Render notification text in Amsterdam local time — not raw UTC storage.
+        $slotDatetime = $booking->slot->starts_at
+            ->copy()
+            ->setTimezone(config('app.booking_timezone', 'Europe/Amsterdam'))
+            ->format('Y-m-d H:i');
 
         NotificationService::oralAssessmentBooked(
             $user->id,

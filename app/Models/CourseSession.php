@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Models\Attendance;
+use App\Models\Concerns\BelongsToClassGroup;
 use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -11,11 +12,12 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class CourseSession extends Model
 {
-    use Auditable, SoftDeletes;
+    use Auditable, SoftDeletes, BelongsToClassGroup;
     protected $table = 'course_sessions';
 
     protected $fillable = [
         'course_id',
+        'class_group_id',
         'module_id',
         'title',
         'description',

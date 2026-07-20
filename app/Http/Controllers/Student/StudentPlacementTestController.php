@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\PlacementTestAttemptResource;
 use App\Http\Resources\PlacementTestResource;
 use App\Models\Course;
+use App\Models\ExamViolation;
 use App\Models\OralAssessmentBooking;
 use App\Models\PlacementTest;
 use App\Models\PlacementTestAttempt;
@@ -15,6 +16,7 @@ use App\Services\PlacementProgressService;
 use App\Services\PlacementScoringService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class StudentPlacementTestController extends Controller
 {
@@ -261,6 +263,51 @@ class StudentPlacementTestController extends Controller
                 'next_step'          => 'يرجى حجز موعد المقابلة الشفهية لإكمال عملية تحديد المستوى.',
             ],
         ]);
+    }
+
+    // ─── POST /api/student/courses/{course}/placement-test/violations ────────
+    //
+    // Logs a single client-detected exam-integrity violation (copy attempt, tab
+    // switch, fullscreen exit, etc.) against the student's current attempt.
+    // Fire-and-forget from the frontend — failures here must never block the exam.
+
+    public function logViolation(Request $request, Course $course): JsonResponse
+    {
+        $this->requireEnrollment($request, $course);
+
+        $user = $request->user();
+
+        $attempt = PlacementTestAttempt::where('user_id', $user->id)
+            ->where('course_id', $course->id)
+            ->where('status', 'in_progress')
+            ->first();
+
+        // No active attempt (already submitted, or race on page unload) — accept
+        // silently rather than erroring; there's nothing meaningful left to log against.
+        if (! $attempt) {
+            return response()->json(['success' => true]);
+        }
+
+        $validated = $request->validate([
+            'violation_type' => ['required', 'string', Rule::in(ExamViolation::TYPES)],
+            'severity'       => ['nullable', 'string', Rule::in(ExamViolation::SEVERITIES)],
+            'question_id'    => ['nullable', 'integer', 'exists:placement_test_questions,id'],
+            'meta'           => ['nullable', 'array'],
+        ]);
+
+        ExamViolation::create([
+            'user_id'                   => $user->id,
+            'placement_test_attempt_id' => $attempt->id,
+            'question_id'               => $validated['question_id'] ?? null,
+            'violation_type'            => $validated['violation_type'],
+            'severity'                  => $validated['severity'] ?? 'low',
+            'meta'                      => $validated['meta'] ?? null,
+            'ip_address'                => $request->ip(),
+            'user_agent'                => mb_substr((string) $request->userAgent(), 0, 500),
+            'occurred_at'               => now(),
+        ]);
+
+        return response()->json(['success' => true]);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────

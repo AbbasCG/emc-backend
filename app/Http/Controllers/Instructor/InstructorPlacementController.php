@@ -5,11 +5,13 @@ namespace App\Http\Controllers\Instructor;
 use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\OralAssessmentBookingResource;
+use App\Models\ClassGroupStudent;
 use App\Models\Course;
 use App\Models\Instructor;
 use App\Models\OralAssessmentBooking;
 use App\Models\PlacementTestAttempt;
 use App\Models\Registration;
+use App\Services\ClassAssignmentService;
 use App\Services\NotificationService;
 use App\Services\PlacementProgressService;
 use App\Services\PlacementScoringService;
@@ -19,7 +21,10 @@ use Illuminate\Support\Facades\DB;
 
 class InstructorPlacementController extends Controller
 {
-    public function __construct(private readonly PlacementProgressService $placement) {}
+    public function __construct(
+        private readonly PlacementProgressService $placement,
+        private readonly ClassAssignmentService $classAssignment,
+    ) {}
 
     // ─── GET /api/instructor/courses/{course}/placement-students ─────────────
     //
@@ -45,76 +50,15 @@ class InstructorPlacementController extends Controller
             ], 422);
         }
 
-        // Only show students with an active paid enrollment — not pending_payment.
-        $registrations = Registration::with('user')
-            ->where('course_id', $course->id)
-            ->whereIn('status', RegistrationStatus::activeEnrollment())
-            ->get();
-
-        // Collect user IDs that can have placement attempts (API-based test requires auth)
-        $registeredUserIds = $registrations->pluck('user_id')->filter()->unique()->values()->all();
-
-        // Use explicit string casting for keyBy to prevent int/string key mismatch
-        // between Registration.user_id and PlacementTestAttempt.user_id.
-        $attempts = PlacementTestAttempt::where('course_id', $course->id)
-            ->whereIn('user_id', $registeredUserIds)
-            ->get()
-            ->keyBy(fn ($a) => (string) $a->user_id);
-
-        $bookings = OralAssessmentBooking::with('slot')
-            ->where('course_id', $course->id)
-            ->whereIn('user_id', $registeredUserIds)
-            ->get()
-            ->keyBy(fn ($b) => (string) $b->user_id);
-
-        $students = $registrations->map(function ($reg) use ($attempts, $bookings) {
-            $attempt  = $reg->user_id ? $attempts->get((string) $reg->user_id) : null;
-            $booking  = $reg->user_id ? $bookings->get((string) $reg->user_id) : null;
-            $progress = $this->placement->progress($attempt, $booking);
-
-            return [
-                'student_id'          => $reg->user_id,
-                'student_name'        => $reg->user?->name ?? $reg->full_name,
-                'student_email'       => $reg->user?->email ?? $reg->email,
-                'enrollment_status'   => strtolower($reg->status),
-                'status_label'        => $this->placement->statusLabel($progress['status']),
-                // Flat IDs — normalizer uses these directly before falling back to nested progress
-                'attempt_id'          => $attempt?->id,
-                'booking_id'          => $booking?->id,
-                // Flat fields so frontend normalizers don't need placement_progress nesting
-                'placement_status'    => $progress['status'],
-                'written_score'       => $progress['written_test']['score'] ?? null,
-                'total_questions'     => $progress['written_test']['total_questions'] ?? null,
-                'percentage'          => $progress['written_test']['percentage'] ?? null,
-                'written_level'       => $progress['written_test']['estimated_level'] ?? null,
-                'oral_booking_at'     => $progress['oral_assessment']['starts_at'] ?? null,
-                'oral_score'          => $progress['oral_assessment']['oral_score'] ?? null,
-                'instructor_notes'    => $progress['oral_assessment']['instructor_notes'] ?? null,
-                'notes'               => $progress['oral_assessment']['instructor_notes'] ?? null,
-                'final_level'         => $progress['oral_assessment']['final_level'] ?? null,
-                'placement_progress'  => $progress,
-            ];
-        });
-
-        $statusCounts = array_fill_keys([
-            PlacementProgressService::STATUS_NOT_STARTED,
-            PlacementProgressService::STATUS_IN_PROGRESS,
-            PlacementProgressService::STATUS_WRITTEN_COMPLETED,
-            PlacementProgressService::STATUS_ORAL_BOOKED,
-            PlacementProgressService::STATUS_ORAL_COMPLETED,
-            PlacementProgressService::STATUS_COMPLETED,
-        ], 0);
-        foreach ($students as $s) {
-            $key = $s['placement_progress']['status'] ?? PlacementProgressService::STATUS_NOT_STARTED;
-            if (isset($statusCounts[$key])) {
-                $statusCounts[$key]++;
-            }
-        }
+        // Same shared source of truth the course-students page uses — this
+        // page and /courses/{course}/students can never disagree on a student.
+        $result = $this->placement->studentsForCourse($course);
+        $rows   = array_map(fn ($row) => $row + ['course_id' => $course->id, 'course_title' => $course->title], $result['students']);
 
         return response()->json([
             'success' => true,
-            'data'    => $students,
-            'meta'    => ['total' => $students->count()] + $statusCounts,
+            'data'    => \App\Http\Resources\InstructorStudentSummaryResource::collection($rows),
+            'meta'    => ['total' => count($result['students'])] + $result['status_counts'],
         ]);
     }
 
@@ -139,6 +83,7 @@ class InstructorPlacementController extends Controller
             'data'    => $bookings->map(function ($b) {
                 $slot = $b->slot;
                 $prog = $this->placement->progress($b->attempt, $b);
+                $bookingTz = config('app.booking_timezone', 'Europe/Amsterdam');
                 return [
                     'id'                   => $b->id,
                     'course_id'            => $b->course_id,
@@ -146,9 +91,9 @@ class InstructorPlacementController extends Controller
                     'student_id'           => $b->user_id,
                     'student_name'         => $b->user?->name,
                     'student_email'        => $b->user?->email,
-                    'formatted_date'       => $slot?->starts_at->format('d/m/Y'),
+                    'formatted_date'       => $slot?->starts_at->copy()->setTimezone($bookingTz)->format('d/m/Y'),
                     'formatted_time'       => $slot
-                        ? $slot->starts_at->format('H:i') . ' - ' . $slot->ends_at->format('H:i')
+                        ? $slot->starts_at->copy()->setTimezone($bookingTz)->format('H:i') . ' - ' . $slot->ends_at->copy()->setTimezone($bookingTz)->format('H:i')
                         : null,
                     'created_at'           => $b->created_at->toIso8601String(),
                     // Flat fields for frontend normalizer compatibility
@@ -181,10 +126,9 @@ class InstructorPlacementController extends Controller
     public function placementTests(Request $request): JsonResponse
     {
         $instructor = Instructor::where('user_id', $request->user()->id)->first();
+        abort_if(! $instructor, 403, 'ليس لديك صلاحية الوصول إلى بيانات الطلاب.');
 
-        $courseIds = $instructor
-            ? Course::where('instructor_id', $instructor->id)->pluck('id')->all()
-            : [];
+        $courseIds = Course::where('instructor_id', $instructor->id)->pluck('id')->all();
 
         if (empty($courseIds)) {
             return response()->json([
@@ -203,21 +147,37 @@ class InstructorPlacementController extends Controller
             ->latest()
             ->paginate($perPage);
 
-        // Load oral bookings in bulk so canonical placement_status is accurate
+        // Load oral bookings in bulk so canonical placement_status is accurate.
+        // Eager-load slot/instructor.user/editedBy so oralAssessmentFullShape()
+        // below can build the rubric/notes/interview shape without N+1 queries.
         $attemptUserIds  = $attempts->pluck('user_id')->filter()->unique()->all();
-        $bookingsByCourseUser = OralAssessmentBooking::whereIn('course_id', $courseIds)
+        $bookingsByCourseUser = OralAssessmentBooking::with(['slot', 'instructor.user', 'editedBy'])
+            ->whereIn('course_id', $courseIds)
             ->whereIn('user_id', $attemptUserIds)
             ->get()
             ->keyBy(fn ($b) => (string) $b->course_id . '_' . (string) $b->user_id);
 
+        // Canonical class-assignment source — same as studentsForCourse()'s, so
+        // this page can never disagree with the course/placement-students
+        // pages about the same student's class. Course-scoped via the related
+        // class_group's course_id, safe for students enrolled in multiple courses.
+        $membershipsByCourseUser = ClassGroupStudent::with(['classGroup.instructor.user', 'assignedBy'])
+            ->whereIn('user_id', $attemptUserIds)
+            ->whereIn('status', ClassGroupStudent::ACTIVE_STATUSES)
+            ->get()
+            ->filter(fn ($cgs) => $cgs->classGroup && in_array($cgs->classGroup->course_id, $courseIds, true))
+            ->keyBy(fn ($cgs) => (string) $cgs->classGroup->course_id . '_' . (string) $cgs->user_id);
+
         return response()->json([
             'success' => true,
-            'data'    => $attempts->map(function ($a) use ($bookingsByCourseUser) {
+            'data'    => \App\Http\Resources\InstructorStudentSummaryResource::collection($attempts->map(function ($a) use ($bookingsByCourseUser, $membershipsByCourseUser) {
                 $levelDetails = ($a->isCompleted() && $a->estimated_level)
                     ? PlacementScoringService::levelFromCode($a->estimated_level)
                     : null;
 
-                $booking = $bookingsByCourseUser->get((string) $a->course_id . '_' . (string) $a->user_id);
+                $key     = (string) $a->course_id . '_' . (string) $a->user_id;
+                $booking = $bookingsByCourseUser->get($key);
+                $cgs     = $membershipsByCourseUser->get($key);
 
                 return [
                     'id'                   => $a->id,
@@ -233,6 +193,11 @@ class InstructorPlacementController extends Controller
                     'total_questions'      => $a->total_questions,
                     'percentage'           => $a->percentage,
                     'estimated_level'      => $a->estimated_level,
+                    // Alias — every other instructor endpoint (studentsForCourse(),
+                    // InstructorStudentController::index()) names this field
+                    // written_level; kept both since this is the one hand-rolled
+                    // shape left that predates the canonical service.
+                    'written_level'        => $a->estimated_level,
                     'estimated_level_code' => $levelDetails ? $levelDetails['code'] : null,
                     'estimated_level_en'   => $levelDetails ? $levelDetails['en']   : null,
                     'estimated_level_ar'   => $levelDetails ? $levelDetails['ar']   : null,
@@ -241,8 +206,15 @@ class InstructorPlacementController extends Controller
                     'oral_score'           => $booking?->oral_score,
                     'final_level'          => $booking?->final_level,
                     'instructor_notes'     => $booking?->instructor_notes,
+                    'is_assigned'          => $cgs !== null && in_array($cgs->status, ClassGroupStudent::ACTIVE_STATUSES, true),
+                    'class_assignment'     => $this->placement->classAssignmentShape($cgs),
+                    // Canonical key name — matches studentsForCourse()'s
+                    // `oral_assessment_full` exactly, so this endpoint and the
+                    // course/placement-students pages can never disagree on
+                    // field naming for the same student's oral detail.
+                    'oral_assessment_full' => $this->placement->oralAssessmentFullShape($booking),
                 ];
-            }),
+            })),
             'meta' => [
                 'total'        => $attempts->total(),
                 'current_page' => $attempts->currentPage(),
@@ -342,6 +314,9 @@ class InstructorPlacementController extends Controller
             'oral_score'          => ['nullable', 'integer', 'min:0', 'max:100'],
             'final_level'         => ['required', 'string', 'in:Starter,A1,A2,B1,B2,C1'],
             'instructor_notes'    => ['nullable', 'string', 'max:2000'],
+            'strengths'           => ['nullable', 'string', 'max:2000'],
+            'weaknesses'          => ['nullable', 'string', 'max:2000'],
+            'recommendations'     => ['nullable', 'string', 'max:2000'],
             'pronunciation_score' => ['nullable', 'integer', 'min:0', 'max:10'],
             'grammar_score'       => ['nullable', 'integer', 'min:0', 'max:10'],
             'vocabulary_score'    => ['nullable', 'integer', 'min:0', 'max:10'],
@@ -354,11 +329,27 @@ class InstructorPlacementController extends Controller
             $rubricFields = ['pronunciation_score', 'grammar_score', 'vocabulary_score',
                              'fluency_score', 'comprehension_score', 'confidence_score'];
 
+            // If this evaluation was already recorded before, this call is an
+            // edit — snapshot the prior score/level so the modal can show
+            // "original vs updated" without a separate history table.
+            $isEdit = $booking->evaluated_at !== null;
+
             $updateData = [
                 'final_level'      => $request->final_level,
                 'instructor_notes' => $request->instructor_notes,
+                'strengths'        => $request->strengths,
+                'weaknesses'       => $request->weaknesses,
+                'recommendations'  => $request->recommendations,
                 'status'           => 'completed',
+                'evaluated_at'     => $booking->evaluated_at ?? now(),
             ];
+
+            if ($isEdit) {
+                $updateData['previous_oral_score']  = $booking->oral_score;
+                $updateData['previous_final_level'] = $booking->final_level;
+                $updateData['edited_by']            = $request->user()->id;
+                $updateData['edited_at']            = now();
+            }
 
             foreach ($rubricFields as $field) {
                 if ($request->has($field)) {
@@ -390,10 +381,25 @@ class InstructorPlacementController extends Controller
             $booking->final_level,
         );
 
+        // Final level approval (this action) is the trigger for automatic class
+        // assignment. If no matching class has room, the student simply stays
+        // unassigned — "waiting for class assignment" — rather than blocking here.
+        $assignment = null;
+        if ($booking->user && $booking->course) {
+            $assignment = $this->classAssignment->autoAssign(
+                $booking->user,
+                $booking->course,
+                $booking->final_level,
+                $booking->placement_test_attempt_id,
+                $booking->id,
+            );
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'تم تسجيل نتيجة المقابلة الشفهية بنجاح.',
             'data'    => new OralAssessmentBookingResource($booking),
+            'class_assignment' => $assignment,
         ]);
     }
 

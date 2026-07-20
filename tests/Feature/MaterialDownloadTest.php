@@ -29,18 +29,21 @@ class MaterialDownloadTest extends TestCase
     {
         parent::setUp();
 
-        Storage::fake('local');
+        // MaterialDownloadController resolves the disk via `$material->disk ?? 'private'`
+        // — fake the same disk the controller actually reads from, not an unrelated one.
+        Storage::fake('private');
 
         $this->course = Course::factory()->free()->create();
 
         $fakefile = UploadedFile::fake()->create('lecture.pdf', 100, 'application/pdf');
-        $path     = Storage::disk('local')->putFileAs('private/materials', $fakefile, 'lecture.pdf');
+        $path     = Storage::disk('private')->putFileAs('materials', $fakefile, 'lecture.pdf');
 
         $this->material = CourseMaterial::create([
             'course_id'  => $this->course->id,
             'title'      => 'Lecture Notes',
             'type'       => 'document',
             'file_path'  => $path,
+            'disk'       => 'private',
             'is_visible' => true,
         ]);
     }
@@ -156,5 +159,63 @@ class MaterialDownloadTest extends TestCase
 
         $this->assertContains($response->getStatusCode(), [403, 404],
             "Invisible material must not be downloadable by students, got {$response->getStatusCode()}");
+    }
+
+    // ─── PDF inline preview ───────────────────────────────────────────────────
+
+    public function test_unauthorized_student_cannot_preview_pdf(): void
+    {
+        $outsider = User::factory()->create(['role' => 'student']);
+        // Not enrolled in $this->course.
+
+        $this->actingAs($outsider, 'sanctum')
+            ->getJson("/api/materials/{$this->material->id}/preview")
+            ->assertStatus(403);
+    }
+
+    public function test_enrolled_student_gets_inline_pdf_preview(): void
+    {
+        $student = User::factory()->create(['role' => 'student']);
+        Registration::factory()->create([
+            'course_id' => $this->course->id, 'user_id' => $student->id,
+            'email' => $student->email, 'status' => 'Registered',
+        ]);
+        $this->material->update(['mime_type' => 'application/pdf']);
+
+        $response = $this->actingAs($student, 'sanctum')
+            ->get("/api/materials/{$this->material->id}/preview");
+
+        $response->assertOk();
+        $response->assertHeader('Content-Type', 'application/pdf');
+        $this->assertStringContainsString('inline', $response->headers->get('Content-Disposition'));
+    }
+
+    public function test_preview_returns_415_for_non_pdf_material(): void
+    {
+        $student = User::factory()->create(['role' => 'student']);
+        Registration::factory()->create([
+            'course_id' => $this->course->id, 'user_id' => $student->id,
+            'email' => $student->email, 'status' => 'Registered',
+        ]);
+        $this->material->update(['mime_type' => 'application/msword']);
+
+        $this->actingAs($student, 'sanctum')
+            ->getJson("/api/materials/{$this->material->id}/preview")
+            ->assertStatus(415);
+    }
+
+    public function test_preview_response_never_leaks_raw_storage_path(): void
+    {
+        $student = User::factory()->create(['role' => 'student']);
+        Registration::factory()->create([
+            'course_id' => $this->course->id, 'user_id' => $student->id,
+            'email' => $student->email, 'status' => 'Registered',
+        ]);
+        $this->material->update(['mime_type' => 'application/pdf']);
+
+        $response = $this->actingAs($student, 'sanctum')
+            ->get("/api/materials/{$this->material->id}/preview");
+
+        $this->assertStringNotContainsString($this->material->file_path, (string) $response->headers);
     }
 }

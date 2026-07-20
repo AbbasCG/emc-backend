@@ -3,15 +3,83 @@
 namespace App\Http\Controllers\Student;
 
 use App\Http\Controllers\Controller;
+use App\Http\Resources\LmsSessionResource;
 use App\Models\CourseSession;
 use App\Models\LmsSession;
 use App\Models\SessionLinkOpen;
+use App\Policies\LmsSessionPolicy;
 use App\Services\LmsEnrollmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 
 class StudentSessionController extends Controller
 {
+    /**
+     * GET /api/student/sessions/{session}
+     *
+     * Canonical live-session detail for a student — class-scoped via
+     * LmsSessionPolicy::view() (active membership required for class-scoped
+     * sessions; another class in the same course, or a removed member, is
+     * denied with 403/404 rather than an empty 200).
+     */
+    public function show(Request $request, LmsSession $session): JsonResponse
+    {
+        $user = $request->user();
+        if (! (new LmsSessionPolicy())->view($user, $session)) {
+            abort(404);
+        }
+
+        $session->load(['course', 'classGroup', 'instructor', 'attendances' => fn ($q) => $q->where('user_id', $user->id)]);
+
+        return response()->json([
+            'success' => true,
+            'data'    => LmsSessionResource::make($session),
+        ]);
+    }
+
+    /**
+     * GET /api/student/sessions/calendar?from=...&to=...
+     *
+     * Bounded-range calendar of live sessions the student is eligible to see
+     * (class-scoped exactly like index(), never the whole course's history).
+     */
+    public function calendar(Request $request, LmsEnrollmentService $enrollment): JsonResponse
+    {
+        $data = $request->validate([
+            'from' => ['required', 'date'],
+            'to'   => ['required', 'date', 'after_or_equal:from'],
+        ]);
+
+        $user = $request->user();
+        $courseIds = $enrollment->enrolledCourseIds($user);
+        $myClassGroupIds = $enrollment->classGroupIdsByCourse($user)->values();
+
+        if ($courseIds->isEmpty()) {
+            return response()->json(['data' => [], 'meta' => ['from' => $data['from'], 'to' => $data['to']]]);
+        }
+
+        $sessions = LmsSession::with(['course', 'classGroup', 'instructor'])
+            ->whereIn('course_id', $courseIds)
+            ->visibleToClassGroupIn($myClassGroupIds)
+            ->whereBetween('session_date', [
+                Carbon::parse($data['from'])->toDateString(),
+                Carbon::parse($data['to'])->toDateString(),
+            ])
+            ->whereNotIn('status', ['cancelled', 'archived'])
+            ->orderBy('session_date')->orderBy('start_time')
+            ->get();
+
+        return response()->json([
+            'data' => LmsSessionResource::collection($sessions),
+            'meta' => [
+                'from'     => $data['from'],
+                'to'       => $data['to'],
+                'timezone' => config('app.booking_timezone', 'Europe/Amsterdam'),
+            ],
+        ]);
+    }
+
     /**
      * GET /api/student/sessions
      * GET /api/student/upcoming-sessions
@@ -34,6 +102,12 @@ class StudentSessionController extends Controller
             ]);
         }
 
+        // The class groups this student is actively assigned to, across all
+        // their courses. class_group_id is a single global PK (never re-used
+        // across courses), so "unscoped OR in this set" is exactly equivalent
+        // to per-course matching, without needing to join back through course_id.
+        $myClassGroupIds = $enrollment->classGroupIdsByCourse($user)->values();
+
         $statusFilter = $request->query('status');
 
         // ── 1. LMS Sessions (live / recorded) ────────────────────────────────
@@ -42,6 +116,7 @@ class StudentSessionController extends Controller
                 $q->whereIn('course_id', $courseIds)
                     ->orWhereHas('workshop', fn ($w) => $w->whereIn('course_id', $courseIds));
             })
+            ->visibleToClassGroupIn($myClassGroupIds)
             ->when($statusFilter, fn ($q) => $q->where('status', $statusFilter))
             ->when(! $statusFilter, fn ($q) => $q->whereNotIn('status', ['cancelled', 'archived']))
             ->get()
@@ -50,6 +125,7 @@ class StudentSessionController extends Controller
         // ── 2. Course Sessions (planned content sessions) ─────────────────────
         $courseSessions = CourseSession::with(['course:id,title,slug'])
             ->whereIn('course_id', $courseIds)
+            ->visibleToClassGroupIn($myClassGroupIds)
             ->where('is_visible', true)
             ->when($statusFilter, fn ($q) => $q->where('status', $statusFilter))
             ->when(! $statusFilter, fn ($q) => $q->whereNotIn('status', ['cancelled', 'archived']))

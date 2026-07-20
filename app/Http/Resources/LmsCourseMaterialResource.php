@@ -20,6 +20,7 @@ class LmsCourseMaterialResource extends JsonResource
             'id'          => $this->id,
             'course_id'   => $this->course_id,
             'module_id'   => $this->module_id,
+            'lesson_id'   => $this->lesson_id,
             'session_id'  => $this->session_id,
             'course_session_id' => $this->course_session_id,
             'workshop_id' => $this->workshop_id,

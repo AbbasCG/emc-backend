@@ -3,6 +3,8 @@
 namespace App\Http\Requests;
 
 use App\Enums\MaterialType;
+use App\Services\LearningContentEligibilityService;
+use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -22,7 +24,9 @@ class StoreMaterialRequest extends FormRequest
 
         return [
             'course_id'        => ['nullable', 'exists:courses,id'],
+            'class_group_id'   => ['nullable', 'exists:class_groups,id'],
             'module_id'        => ['nullable', 'exists:course_modules,id'],
+            'lesson_id'        => ['nullable', 'exists:lessons,id'],
             'session_id'       => ['nullable', 'exists:lms_sessions,id'],
             'course_session_id'=> ['nullable', 'exists:course_sessions,id'],
             'title'            => ['required', 'string', 'max:255'],
@@ -44,6 +48,23 @@ class StoreMaterialRequest extends FormRequest
                     "mimes:{$mimes}",
                 ],
         ];
+    }
+
+    public function withValidator(Validator $validator): void
+    {
+        $validator->after(function (Validator $validator) {
+            $errors = app(LearningContentEligibilityService::class)->materialScopeErrors([
+                'course_id'         => $this->input('course_id'),
+                'class_group_id'    => $this->input('class_group_id'),
+                'module_id'         => $this->input('module_id'),
+                'lesson_id'         => $this->input('lesson_id'),
+                'session_id'        => $this->input('session_id'),
+                'course_session_id' => $this->input('course_session_id'),
+            ]);
+            foreach ($errors as $field => $message) {
+                $validator->errors()->add($field, $message);
+            }
+        });
     }
 
     public function messages(): array

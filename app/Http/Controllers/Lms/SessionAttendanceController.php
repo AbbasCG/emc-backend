@@ -11,7 +11,10 @@ use App\Models\Course;
 use App\Models\CourseSession;
 use App\Models\LmsSession;
 use App\Models\Registration;
+use App\Services\AttendanceSettingsService;
+use App\Services\AttendanceStatisticsService;
 use App\Services\NotificationService;
+use App\Support\AttendanceStatus;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -167,7 +170,29 @@ class SessionAttendanceController extends Controller
     {
         $this->authorizeSession($request, $session);
 
-        [, $sessionId, $courseSessionId] = $this->sessionMeta($session);
+        if ($session->status === 'cancelled') {
+            return response()->json([
+                'success' => false,
+                'message' => 'لا يمكن تسجيل الحضور لجلسة ملغاة.',
+            ], 422);
+        }
+
+        // Ticket 1 class-status gating: a draft class isn't ready for
+        // students yet, and completed/archived/cancelled classes are
+        // historical — attendance shouldn't be recordable in either state.
+        // ClassGroup::canPerformTeachingActions() is the single source of
+        // truth for this rule (also enforced on session creation).
+        if ($session->class_group_id && $session->relationLoaded('classGroup') === false) {
+            $session->load('classGroup');
+        }
+        if ($session->class_group_id && $session->classGroup && ! $session->classGroup->canPerformTeachingActions()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'لا يمكن تسجيل الحضور لهذا الصف في حالته الحالية (' . $session->classGroup->status . ').',
+            ], 422);
+        }
+
+        [$courseId, $sessionId, $courseSessionId] = $this->sessionMeta($session);
 
         // Instructors cannot re-edit once locked; admins bypass.
         $user = $request->user();
@@ -200,11 +225,67 @@ class SessionAttendanceController extends Controller
         $validated = $request->validate([
             'rows'            => ['required', 'array', 'min:1'],
             'rows.*.user_id'  => ['required', 'exists:users,id'],
-            'rows.*.status'   => ['required', 'in:present,absent,late,excused'],
+            'rows.*.status'   => ['required', 'in:' . implode(',', AttendanceStatus::ALL)],
             'rows.*.notes'    => ['nullable', 'string', 'max:2000'],
         ]);
 
-        DB::transaction(function () use ($session, $validated, $sessionId, $courseSessionId) {
+        // Reject rows for users who aren't actively enrolled in this session's
+        // course — same roster show() already restricts to, previously
+        // unenforced here so any existing user_id was silently accepted.
+        $enrolledUserIds = $courseId
+            ? Registration::where('course_id', $courseId)
+                ->whereIn('status', RegistrationStatus::activeEnrollment())
+                ->whereNotNull('user_id')
+                ->pluck('user_id')
+                ->all()
+            : [];
+
+        $invalidRows = collect($validated['rows'])->reject(fn ($row) => in_array($row['user_id'], $enrolledUserIds, true));
+        if ($invalidRows->isNotEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'بعض الطلاب غير مسجلين في هذه الدورة.',
+                'invalid_user_ids' => $invalidRows->pluck('user_id')->values(),
+            ], 422);
+        }
+
+        $classGroupId = $session->class_group_id;
+
+        // Recovery gap closed: course enrollment alone isn't enough for a
+        // class-scoped session — a student enrolled in the course but a
+        // member of a DIFFERENT class group must not be markable for this
+        // session. Mirrors the same class-membership check already applied
+        // to assignments/materials elsewhere in this codebase.
+        if ($classGroupId) {
+            $activeClassMemberIds = \App\Models\ClassGroupStudent::where('class_group_id', $classGroupId)
+                ->whereIn('status', \App\Models\ClassGroupStudent::ACTIVE_STATUSES)
+                ->pluck('user_id')
+                ->all();
+
+            $outOfClassRows = collect($validated['rows'])
+                ->reject(fn ($row) => in_array($row['user_id'], $activeClassMemberIds, true));
+
+            if ($outOfClassRows->isNotEmpty()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'بعض الطلاب ليسوا أعضاء نشطين في هذا الصف.',
+                    'invalid_user_ids' => $outOfClassRows->pluck('user_id')->values(),
+                ], 422);
+            }
+        }
+
+        // Snapshot each affected student's attendance % BEFORE this save
+        // writes anything, so the notification loop below can detect an
+        // actual threshold crossing rather than just the current state.
+        $attendanceStatsBefore = [];
+        if ($courseId) {
+            $statsService = app(AttendanceStatisticsService::class);
+            foreach ($validated['rows'] as $row) {
+                $attendanceStatsBefore[$row['user_id']] = $statsService->forStudent((int) $row['user_id'], $courseId);
+            }
+        }
+
+        DB::transaction(function () use ($session, $validated, $sessionId, $courseSessionId, $classGroupId) {
             foreach ($validated['rows'] as $row) {
                 $match = ['user_id' => $row['user_id']];
 
@@ -219,9 +300,10 @@ class SessionAttendanceController extends Controller
                     [
                         'session_id'        => $sessionId,
                         'course_session_id' => $courseSessionId,
+                        'class_group_id'    => $classGroupId,
                         'status'            => $row['status'],
                         'notes'             => $row['notes'] ?? null,
-                        'checked_in_at'     => in_array($row['status'], ['present', 'late'], true)
+                        'checked_in_at'     => in_array($row['status'], [AttendanceStatus::PRESENT, AttendanceStatus::LATE], true)
                             ? now()
                             : null,
                     ]
@@ -231,6 +313,7 @@ class SessionAttendanceController extends Controller
 
         // Create lock on first save (instructors cannot re-edit; admins skip lock creation too).
         $lock = $this->findLock($sessionId, $courseSessionId);
+        $justFinalized = ! $lock;
         if (! $lock) {
             $lock = AttendanceLock::create([
                 'session_id'        => $sessionId,
@@ -242,7 +325,6 @@ class SessionAttendanceController extends Controller
         }
 
         // Notify each student of their recorded attendance status.
-        [$courseId] = $this->sessionMeta($session);
         $courseTitle  = $session->course?->title ?? 'الدورة';
         $sessionTitle = $session->title ?? 'الجلسة';
 
@@ -254,6 +336,70 @@ class SessionAttendanceController extends Controller
                 status:        $row['status'],
                 courseId:      $courseId ?? 0,
             );
+
+            if (! $courseId) {
+                continue;
+            }
+
+            // Ticket 6: repeated-absence — fires exactly when the trailing
+            // streak FIRST reaches the configured threshold N (not on every
+            // absence beyond that), by checking the (N+1)-th-most-recent
+            // row wasn't also absent. N is read from AttendanceSettingsService,
+            // not hardcoded — defaults to 3 when no settings row exists.
+            if ($row['status'] === AttendanceStatus::ABSENT) {
+                $threshold = app(AttendanceSettingsService::class)->get('repeated_absence_threshold');
+                $recentStatuses = Attendance::where('user_id', $row['user_id'])
+                    ->where(function ($q) use ($courseId) {
+                        $q->whereHas('session', fn ($q2) => $q2->where('course_id', $courseId))
+                            ->orWhereHas('courseSession', fn ($q2) => $q2->where('course_id', $courseId));
+                    })
+                    ->latest('created_at')
+                    ->limit($threshold + 1)
+                    ->pluck('status');
+
+                $lastN = $recentStatuses->take($threshold);
+                $nPlus1WasAlsoAbsent = $recentStatuses->count() === $threshold + 1 && $recentStatuses->get($threshold) === AttendanceStatus::ABSENT;
+
+                if ($lastN->count() === $threshold && $lastN->every(fn ($s) => $s === AttendanceStatus::ABSENT) && ! $nPlus1WasAlsoAbsent) {
+                    NotificationService::repeatedAbsence($row['user_id'], $courseTitle, $threshold, $courseId);
+                }
+            }
+
+            // Ticket 6: low-attendance / recovered — fires only on an actual
+            // threshold CROSSING (before this row vs. after), never just
+            // because the student is currently below/above the threshold —
+            // otherwise every subsequent save would resend the same warning.
+            // Threshold read from AttendanceSettingsService, not hardcoded.
+            $statsBefore = $attendanceStatsBefore[$row['user_id']] ?? null;
+            if ($statsBefore !== null) {
+                $lowThreshold = app(AttendanceSettingsService::class)->get('low_attendance_notification_threshold');
+                $statsAfter = app(AttendanceStatisticsService::class)->forStudent((int) $row['user_id'], $courseId);
+                $wasBelow = $statsBefore['attendance_percentage'] < $lowThreshold && $statsBefore['total'] > 0;
+                $isBelow  = $statsAfter['attendance_percentage'] < $lowThreshold;
+
+                if (! $wasBelow && $isBelow) {
+                    NotificationService::lowAttendanceWarning($row['user_id'], $courseTitle, $statsAfter['attendance_percentage'], $courseId);
+                } elseif ($wasBelow && ! $isBelow) {
+                    NotificationService::attendanceRecovered($row['user_id'], $courseTitle, $statsAfter['attendance_percentage'], $courseId);
+                }
+            }
+        }
+
+        // Ticket 6: fires exactly once — only on the save that creates the
+        // lock, never on subsequent admin edits of already-finalized attendance.
+        if ($justFinalized && $courseId) {
+            $instructorUserId = $session->course?->instructor?->user_id;
+            if ($instructorUserId) {
+                $finalCounts = Attendance::where(function ($q) use ($sessionId, $courseSessionId) {
+                    if ($sessionId) $q->where('session_id', $sessionId);
+                    if ($courseSessionId) $q->orWhere('course_session_id', $courseSessionId);
+                })->get(['status']);
+                NotificationService::classAttendanceCompleted(
+                    $instructorUserId, $courseTitle, $sessionTitle,
+                    $finalCounts->where('status', AttendanceStatus::PRESENT)->count(),
+                    $finalCounts->count(), $courseId,
+                );
+            }
         }
 
         $attendances = Attendance::with('user:id,name,email,avatar')
@@ -413,5 +559,304 @@ class SessionAttendanceController extends Controller
             'excused_count'        => $courseSessionAttendances->where('status', 'excused')->count(),
             'attendance_saved'     => $total > 0,
         ];
+    }
+
+    // ─── GET /api/instructor/attendance/dashboard ─────────────────────────────
+
+    /**
+     * Ticket 6: aggregate attendance dashboard — today/week/month counts,
+     * overall status breakdown, at-risk students, and top/worst attendance.
+     * Every value is bulk-queried; never one query per session/student.
+     */
+    public function dashboard(Request $request): JsonResponse
+    {
+        $user    = $request->user();
+        $profile = $user->instructorProfile;
+
+        $courseIds = $profile
+            ? Course::query()->where('instructor_id', $profile->id)->pluck('id')
+            : collect();
+
+        if ($courseIds->isEmpty()) {
+            return response()->json(['success' => true, 'data' => [
+                'today_sessions' => 0, 'today_attendance_marked' => 0,
+                'week_present' => 0, 'week_absent' => 0, 'week_late' => 0, 'week_excused' => 0,
+                'month_present' => 0, 'month_absent' => 0, 'month_late' => 0, 'month_excused' => 0,
+                'current_attendance_percentage' => 0,
+                'at_risk_students' => [], 'top_attendance' => [], 'worst_attendance' => [],
+            ]]);
+        }
+
+        $today = now()->toDateString();
+        $weekStart = now()->startOfWeek()->toDateString();
+        $monthStart = now()->startOfMonth()->toDateString();
+
+        $sessionIdsToday = LmsSession::whereIn('course_id', $courseIds)->whereDate('session_date', $today)->pluck('id');
+        $todaySessions = $sessionIdsToday->count();
+        $todayAttendanceMarked = $sessionIdsToday->isEmpty() ? 0 : Attendance::whereIn('session_id', $sessionIdsToday)->count();
+
+        // All attendance rows for this instructor's courses this month — one
+        // bulk query, sliced in PHP for week/month/status breakdowns rather
+        // than four separate DB round-trips.
+        $lmsSessionIdsThisMonth = LmsSession::whereIn('course_id', $courseIds)->where('session_date', '>=', $monthStart)->pluck('id');
+        $courseSessionIdsThisMonth = CourseSession::whereIn('course_id', $courseIds)->where('start_at', '>=', $monthStart)->pluck('id');
+
+        $monthRows = Attendance::where(function ($q) use ($lmsSessionIdsThisMonth, $courseSessionIdsThisMonth) {
+            $q->whereIn('session_id', $lmsSessionIdsThisMonth)->orWhereIn('course_session_id', $courseSessionIdsThisMonth);
+        })->get(['status', 'created_at']);
+
+        $weekRows = $monthRows->filter(fn ($r) => $r->created_at?->toDateString() >= $weekStart);
+
+        $countBy = fn ($rows, $status) => $rows->where('status', $status)->count();
+
+        // At-risk / top / worst — reuses StudentProgress.attendance_percentage
+        // (already computed by StudentProgressService, never recalculated here).
+        $studentProgress = \App\Models\StudentProgress::whereIn('course_id', $courseIds)
+            ->with('user:id,name,email')
+            ->get(['user_id', 'course_id', 'attendance_percentage']);
+
+        $byStudent = $studentProgress->groupBy('user_id')->map(function ($rows) {
+            $first = $rows->first();
+            return [
+                'user_id' => $first->user_id,
+                'name'    => $first->user?->name,
+                'attendance_percentage' => (int) round($rows->avg('attendance_percentage')),
+            ];
+        })->values();
+
+        $atRiskThreshold = app(AttendanceSettingsService::class)->get('at_risk_percentage');
+        $atRisk = $byStudent->filter(fn ($s) => $s['attendance_percentage'] < $atRiskThreshold)->sortBy('attendance_percentage')->values();
+        $sorted = $byStudent->sortByDesc('attendance_percentage')->values();
+
+        return response()->json(['success' => true, 'data' => [
+            'today_sessions'           => $todaySessions,
+            'today_attendance_marked'  => $todayAttendanceMarked,
+            'week_present'  => $countBy($weekRows, AttendanceStatus::PRESENT),
+            'week_absent'   => $countBy($weekRows, AttendanceStatus::ABSENT),
+            'week_late'     => $countBy($weekRows, AttendanceStatus::LATE),
+            'week_excused'  => $countBy($weekRows, AttendanceStatus::EXCUSED),
+            'month_present' => $countBy($monthRows, AttendanceStatus::PRESENT),
+            'month_absent'  => $countBy($monthRows, AttendanceStatus::ABSENT),
+            'month_late'    => $countBy($monthRows, AttendanceStatus::LATE),
+            'month_excused' => $countBy($monthRows, AttendanceStatus::EXCUSED),
+            'current_attendance_percentage' => $byStudent->isEmpty() ? 0 : (int) round($byStudent->avg('attendance_percentage')),
+            'at_risk_students'  => $atRisk->take(20)->values(),
+            'top_attendance'    => $sorted->take(5)->values(),
+            'worst_attendance'  => $sorted->reverse()->take(5)->values(),
+        ]]);
+    }
+
+    // ─── GET /api/instructor/attendance/export ─────────────────────────────────
+
+    /**
+     * Ticket 6: CSV attendance export, filterable by course/class/date range —
+     * reuses the same instructor-ownership scoping as index()/dashboard().
+     * Streamed, not built in memory, so it stays bounded for large ranges.
+     */
+    /**
+     * Ticket 6: the ONE canonical scoped-and-filtered attendance query,
+     * reused by export() (CSV), exportPdf() (PDF), and reports() — so all
+     * three surfaces can never disagree about what "the same filters"
+     * returns. Never accepts course/class/session/student IDs the acting
+     * instructor doesn't own — courseIds is always derived from the
+     * authenticated instructor's own courses, then narrowed by request
+     * filters, never widened by them.
+     *
+     * @return array{rows: \Illuminate\Support\Collection, from: string, to: string}
+     */
+    private function scopedReportRows(Request $request): array
+    {
+        $user    = $request->user();
+        $profile = $user->instructorProfile;
+
+        $courseIds = $profile
+            ? Course::query()->where('instructor_id', $profile->id)->pluck('id')
+            : collect();
+
+        if (! empty($request->query('course_id'))) {
+            $courseIds = $courseIds->filter(fn ($id) => (int) $id === (int) $request->query('course_id'));
+        }
+
+        $from = $request->query('from') ? \Carbon\Carbon::parse($request->query('from'))->toDateString() : now()->subMonth()->toDateString();
+        $to = $request->query('to') ? \Carbon\Carbon::parse($request->query('to'))->toDateString() : now()->toDateString();
+        if ($request->filled('month') && $request->filled('year')) {
+            $from = \Carbon\Carbon::create((int) $request->query('year'), (int) $request->query('month'), 1)->toDateString();
+            $to = \Carbon\Carbon::create((int) $request->query('year'), (int) $request->query('month'), 1)->endOfMonth()->toDateString();
+        } elseif ($request->filled('year') && ! $request->filled('month')) {
+            $from = \Carbon\Carbon::create((int) $request->query('year'), 1, 1)->toDateString();
+            $to = \Carbon\Carbon::create((int) $request->query('year'), 12, 31)->toDateString();
+        }
+
+        $classGroupId = $request->query('class_group_id');
+        $studentId = $request->query('student_id');
+        $status = $request->query('status');
+
+        $sessionQuery = LmsSession::whereIn('course_id', $courseIds)
+            ->whereBetween('session_date', [$from, $to]);
+        if ($classGroupId) {
+            $sessionQuery->where('class_group_id', $classGroupId);
+        }
+        $sessionIds = $sessionQuery->pluck('id');
+
+        $rowsQuery = Attendance::whereIn('session_id', $sessionIds)
+            ->with(['user:id,name,email', 'session:id,title,session_date,course_id', 'session.course:id,title']);
+
+        if ($studentId) {
+            $rowsQuery->where('user_id', $studentId);
+        }
+        if ($status && AttendanceStatus::isValid($status)) {
+            $rowsQuery->where('status', $status);
+        }
+
+        return ['rows' => $rowsQuery->orderBy('created_at')->get(), 'from' => $from, 'to' => $to];
+    }
+
+    private function statusLabelArabic(string $status): string
+    {
+        return match ($status) {
+            AttendanceStatus::PRESENT => 'حاضر',
+            AttendanceStatus::ABSENT  => 'غائب',
+            AttendanceStatus::LATE    => 'متأخر',
+            AttendanceStatus::EXCUSED => 'معذور',
+            default => $status,
+        };
+    }
+
+    public function export(Request $request)
+    {
+        ['rows' => $rows, 'from' => $from, 'to' => $to] = $this->scopedReportRows($request);
+        $filename = 'attendance-' . $from . '-to-' . $to . '.csv';
+
+        return response()->streamDownload(function () use ($rows) {
+            $out = fopen('php://output', 'w');
+            fputcsv($out, ['الطالب', 'البريد الإلكتروني', 'الدورة', 'الجلسة', 'التاريخ', 'الحالة', 'ملاحظات']);
+            foreach ($rows as $row) {
+                fputcsv($out, [
+                    $row->user?->name, $row->user?->email, $row->session?->course?->title,
+                    $row->session?->title, $row->session?->session_date?->toDateString(),
+                    $this->statusLabelArabic($row->status), $row->notes,
+                ]);
+            }
+            fclose($out);
+        }, $filename, ['Content-Type' => 'text/csv; charset=UTF-8']);
+    }
+
+    /**
+     * GET /api/instructor/attendance/export-pdf
+     *
+     * Reuses barryvdh/laravel-dompdf (already installed and used for
+     * certificates elsewhere) — no new dependency. Same canonical query as
+     * export()/reports(), just a different rendering.
+     */
+    public function exportPdf(Request $request, AttendanceStatisticsService $stats)
+    {
+        ['rows' => $rows, 'from' => $from, 'to' => $to] = $this->scopedReportRows($request);
+
+        $present = $rows->where('status', AttendanceStatus::PRESENT)->count();
+        $absent = $rows->where('status', AttendanceStatus::ABSENT)->count();
+        $late = $rows->where('status', AttendanceStatus::LATE)->count();
+        $excused = $rows->where('status', AttendanceStatus::EXCUSED)->count();
+        $total = $rows->count();
+
+        $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('pdf.attendance-report', [
+            'rows' => $rows, 'from' => $from, 'to' => $to,
+            'generatedAt' => now(), 'total' => $total,
+            'present' => $present, 'absent' => $absent, 'late' => $late, 'excused' => $excused,
+            'percentage' => $total > 0 ? (int) round((($present + $late) / $total) * 100) : 0,
+            'statusLabel' => fn ($s) => $this->statusLabelArabic($s),
+        ]);
+
+        return $pdf->download("attendance-{$from}-to-{$to}.pdf");
+    }
+
+    /**
+     * GET /api/instructor/attendance/export-excel
+     *
+     * Reuses phpoffice/phpspreadsheet (added this pass — no suitable Excel
+     * package existed anywhere in the project or its transitive dependencies).
+     * Same canonical scopedReportRows() query as CSV/PDF/reports — one
+     * filtering implementation, four renderings.
+     */
+    public function exportExcel(Request $request)
+    {
+        ['rows' => $rows, 'from' => $from, 'to' => $to] = $this->scopedReportRows($request);
+
+        $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setRightToLeft(true);
+        $sheet->setTitle('الحضور');
+
+        $headers = ['الطالب', 'البريد الإلكتروني', 'الدورة', 'الجلسة', 'التاريخ', 'الوقت', 'الحالة', 'ملاحظات'];
+        $sheet->fromArray($headers, null, 'A1');
+        $sheet->getStyle('A1:H1')->getFont()->setBold(true);
+
+        $rowNum = 2;
+        foreach ($rows as $row) {
+            $date = $row->session?->session_date;
+            $sheet->fromArray([
+                $row->user?->name,
+                $row->user?->email,
+                $row->session?->course?->title,
+                $row->session?->title,
+                $date ? $date->format('d/m/Y') : null,
+                $row->session?->start_time,
+                $this->statusLabelArabic($row->status),
+                $row->notes,
+            ], null, "A{$rowNum}");
+            $rowNum++;
+        }
+
+        foreach (range('A', 'H') as $col) {
+            $sheet->getColumnDimension($col)->setAutoSize(true);
+        }
+
+        $filename = "attendance-{$from}-to-{$to}.xlsx";
+        $tmpPath = tempnam(sys_get_temp_dir(), 'attendance_xlsx_');
+        $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
+        $writer->save($tmpPath);
+
+        return response()->download($tmpPath, $filename, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ])->deleteFileAfterSend(true);
+    }
+
+    /**
+     * GET /api/instructor/attendance/reports
+     *
+     * Ticket 6: filtered report with backend-computed aggregate KPIs — the
+     * frontend never calculates totals/percentages itself. Same canonical
+     * query and filters (course/class/student/status/date-range/month/year)
+     * as export()/exportPdf().
+     */
+    public function reports(Request $request, AttendanceStatisticsService $stats)
+    {
+        ['rows' => $rows, 'from' => $from, 'to' => $to] = $this->scopedReportRows($request);
+
+        $summary = $stats->computeFromRows($rows);
+
+        $perPage = min((int) $request->query('per_page', 25), 100);
+        $page = max(1, (int) $request->query('page', 1));
+        $paged = $rows->forPage($page, $perPage)->values();
+
+        return response()->json([
+            'success' => true,
+            'summary' => $summary,
+            'data' => $paged->map(fn ($row) => [
+                'id' => $row->id,
+                'student_name' => $row->user?->name,
+                'student_email' => $row->user?->email,
+                'course_title' => $row->session?->course?->title,
+                'session_title' => $row->session?->title,
+                'date' => $row->session?->session_date?->toDateString(),
+                'status' => $row->status,
+                'status_label' => $this->statusLabelArabic($row->status),
+                'notes' => $row->notes,
+            ])->values(),
+            'meta' => [
+                'total' => $rows->count(), 'per_page' => $perPage, 'current_page' => $page,
+                'last_page' => max(1, (int) ceil($rows->count() / $perPage)),
+                'from' => $from, 'to' => $to,
+            ],
+        ]);
     }
 }

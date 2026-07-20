@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\CourseModuleResource;
 use App\Models\CourseModule;
+use App\Support\CourseContentStatus;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class CourseModuleController extends Controller
 {
@@ -27,7 +29,7 @@ class CourseModuleController extends Controller
             'title'       => 'required|string|max:255',
             'description' => 'nullable|string',
             'sort_order'  => 'integer',
-            'status'      => 'in:active,inactive,draft',
+            'status'      => [Rule::in(CourseContentStatus::ALL)],
         ]);
 
         $module = CourseModule::create($data);
@@ -49,7 +51,7 @@ class CourseModuleController extends Controller
             'title'       => 'string|max:255',
             'description' => 'nullable|string',
             'sort_order'  => 'integer',
-            'status'      => 'in:active,inactive,draft',
+            'status'      => [Rule::in(CourseContentStatus::ALL)],
         ]);
 
         $module->update($data);

@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\LessonResource;
 use App\Models\Lesson;
+use App\Support\CourseContentStatus;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class LessonController extends Controller
 {
@@ -29,7 +31,7 @@ class LessonController extends Controller
             'video_url'        => 'nullable|url',
             'duration_minutes' => 'nullable|integer|min:1',
             'sort_order'       => 'integer',
-            'status'           => 'in:active,inactive,draft',
+            'status'           => [Rule::in(CourseContentStatus::ALL)],
         ]);
 
         $lesson = Lesson::create($data);
@@ -51,7 +53,7 @@ class LessonController extends Controller
             'video_url'        => 'nullable|url',
             'duration_minutes' => 'nullable|integer|min:1',
             'sort_order'       => 'integer',
-            'status'           => 'in:active,inactive,draft',
+            'status'           => [Rule::in(CourseContentStatus::ALL)],
         ]);
 
         $lesson->update($data);

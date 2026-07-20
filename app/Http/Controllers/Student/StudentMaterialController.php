@@ -16,6 +16,7 @@ class StudentMaterialController extends Controller
     {
         $user      = $request->user();
         $courseIds = $enrollment->enrolledCourseIds($user);
+        $myClassGroupIds = $enrollment->classGroupIdsByCourse($user)->values();
 
         $query = CourseMaterial::query()
             ->with(['course:id,title'])
@@ -24,6 +25,7 @@ class StudentMaterialController extends Controller
                 $q->whereIn('course_id', $courseIds)
                     ->orWhereHas('workshop', fn ($w) => $w->whereIn('course_id', $courseIds));
             })
+            ->visibleToClassGroupIn($myClassGroupIds)
             // Never surface infected files
             ->where(function ($q) {
                 $q->whereNull('virus_status')->orWhere('virus_status', '!=', 'infected');

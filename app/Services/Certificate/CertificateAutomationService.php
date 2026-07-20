@@ -10,6 +10,7 @@ use App\Models\LearningPath;
 use App\Models\User;
 use App\Models\Workshop;
 use App\Services\ActivityLogger;
+use App\Services\CertificateEligibilityService;
 use App\Services\CertificateService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -25,12 +26,34 @@ class CertificateAutomationService
 {
     public function __construct(
         private readonly CertificateService $certService,
+        private readonly CertificateEligibilityService $classEligibility,
     ) {}
 
     // ── Public entry points ───────────────────────────────────────────────────
 
+    /**
+     * Ticket 1 final blocker: course-completion certificates must respect
+     * the student's resolved ClassGroup status. This gate runs BEFORE any
+     * persistence (certificate row, PDF job, notification, approval record)
+     * — a blocked result creates none of those. Only this entry point is
+     * gated; issueForWorkshopCompletion()/issueForLearningPathCompletion()
+     * are untouched, since ClassGroup never applies to those flows.
+     */
     public function issueForCourseCompletion(User $user, Course $course): AutomationResult
     {
+        $decision = $this->classEligibility->canIssueForClassContext($user->id, $course->id);
+
+        if (! $decision['allowed']) {
+            Log::notice('[CertificateAutomation] Course-completion certificate blocked by class status', [
+                'user_id'   => $user->id,
+                'course_id' => $course->id,
+                'reason'    => $decision['reason'],
+                'class_group_id' => $decision['class_group']['class_group_id'] ?? null,
+            ]);
+
+            return AutomationResult::blocked($decision['reason']);
+        }
+
         $type       = $course->certificate_type ?? 'course_completion';
         $templateId = $this->resolveTemplate($course->certificate_template_id ?? null);
 

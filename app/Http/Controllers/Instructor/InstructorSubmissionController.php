@@ -7,6 +7,8 @@ use App\Http\Resources\InstructorSubmissionResource;
 use App\Models\Assignment;
 use App\Models\AssignmentSubmission;
 use App\Models\Registration;
+use App\Services\AssignmentSubmissionHistoryService;
+use App\Services\AssignmentSubmissionTransitionService;
 use App\Services\InstructorSubmissionScopeService;
 use App\Services\NotificationService;
 use App\Services\StudentProgressService;
@@ -206,15 +208,52 @@ class InstructorSubmissionController extends Controller
     }
 
     /**
+     * GET /api/instructor/submissions/{submission}/history
+     *
+     * Every prior attempt for this submission — the current row (in
+     * `assignment_submissions`) is never overwritten without first being
+     * snapshotted here (see AssignmentSubmissionHistoryService), so this
+     * always reflects the true resubmission history.
+     */
+    public function history(Request $request, AssignmentSubmission $submission): JsonResponse
+    {
+        $this->authorize('review', $submission);
+
+        $attempts = app(AssignmentSubmissionHistoryService::class)->attempts($submission);
+
+        return response()->json([
+            'success' => true,
+            'data' => $attempts->map(fn ($a) => [
+                'attempt_number' => $a->attempt_number,
+                // Historical attempt files are preserved on disk but have no
+                // dedicated per-attempt download route yet — only the
+                // presence of a file is reported, not a (misleading) link to
+                // the CURRENT submission's file.
+                'has_file'       => $a->file_path !== null,
+                'text_answer'    => $a->text_answer,
+                'notes'          => $a->notes,
+                'score'          => $a->score,
+                'feedback'       => $a->feedback,
+                'status'         => $a->status,
+                'submitted_at'   => $a->submitted_at,
+                'reviewed_at'    => $a->reviewed_at,
+            ]),
+        ]);
+    }
+
+    /**
      * PUT /api/instructor/submissions/{submission}/review
      */
     public function review(Request $request, AssignmentSubmission $submission, StudentProgressService $progress): JsonResponse
     {
         $this->authorize('review', $submission);
 
+        $submission->loadMissing('assignment:id,max_score');
+        $maxScore = $submission->assignment?->max_score;
+
         $validated = $request->validate([
-            'score'    => ['nullable', 'numeric', 'min:0'],
-            'grade'    => ['nullable', 'numeric', 'min:0'],
+            'score'    => ['nullable', 'numeric', 'min:0', $maxScore !== null ? "max:{$maxScore}" : 'nullable'],
+            'grade'    => ['nullable', 'numeric', 'min:0', $maxScore !== null ? "max:{$maxScore}" : 'nullable'],
             'feedback' => ['nullable', 'string', 'max:10000'],
             'status'   => ['required', 'in:reviewed,needs_revision,graded,pending_review'],
         ]);
@@ -224,6 +263,14 @@ class InstructorSubmissionController extends Controller
             'needs_revision'     => 'needs_revision',
             default              => 'submitted',
         };
+
+        if ($storedStatus !== $submission->status) {
+            try {
+                app(AssignmentSubmissionTransitionService::class)->assertLegalReviewTransition($submission, $storedStatus);
+            } catch (\Illuminate\Validation\ValidationException $e) {
+                return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+            }
+        }
 
         $requestingResubmission = $storedStatus === 'needs_revision';
 
@@ -291,6 +338,91 @@ class InstructorSubmissionController extends Controller
         InstructorSubmissionResource::$learningPathByCourseId = null;
 
         return $response;
+    }
+
+    /**
+     * PUT /api/instructor/submissions/bulk-review
+     *
+     * Ticket 5: bulk grading — applies the same score/feedback/status to a
+     * list of submission IDs. Every submission is individually authorized
+     * (no owner check is skipped for bulk) and individually transition-
+     * checked; a submission that fails either is skipped and reported, not
+     * silently dropped, and never blocks the rest of the batch.
+     */
+    public function bulkReview(Request $request, StudentProgressService $progress): JsonResponse
+    {
+        $validated = $request->validate([
+            'submission_ids'   => ['required', 'array', 'min:1'],
+            'submission_ids.*' => ['integer', 'exists:assignment_submissions,id'],
+            'score'            => ['nullable', 'numeric', 'min:0'],
+            'feedback'         => ['nullable', 'string', 'max:10000'],
+            'status'           => ['required', 'in:reviewed,needs_revision,graded'],
+        ]);
+
+        $storedStatus = $validated['status'] === 'needs_revision' ? 'needs_revision' : 'graded';
+        $requestingResubmission = $storedStatus === 'needs_revision';
+
+        $updated = [];
+        $skipped = [];
+
+        foreach ($validated['submission_ids'] as $id) {
+            $submission = AssignmentSubmission::with('assignment:id,title,max_score,course_id,workshop_id', 'user:id,name,email')->find($id);
+            if (! $submission || ! $request->user()->can('review', $submission)) {
+                $skipped[] = ['id' => $id, 'reason' => 'unauthorized'];
+                continue;
+            }
+
+            $maxScore = $submission->assignment?->max_score;
+            if ($validated['score'] !== null && $maxScore !== null && $validated['score'] > $maxScore) {
+                $skipped[] = ['id' => $id, 'reason' => 'score_exceeds_max'];
+                continue;
+            }
+
+            if ($storedStatus !== $submission->status) {
+                try {
+                    app(AssignmentSubmissionTransitionService::class)->assertLegalReviewTransition($submission, $storedStatus);
+                } catch (\Illuminate\Validation\ValidationException) {
+                    $skipped[] = ['id' => $id, 'reason' => 'illegal_transition'];
+                    continue;
+                }
+            }
+
+            $submission->update([
+                'score'       => $validated['score'] ?? $submission->score,
+                'feedback'    => $validated['feedback'] ?? $submission->feedback,
+                'status'      => $storedStatus,
+                'reviewed_at' => now(),
+            ]);
+
+            $progress->syncForUser($submission->user);
+
+            $assignment = $submission->assignment;
+            $course = $assignment?->course;
+            if ($submission->user) {
+                if ($requestingResubmission) {
+                    NotificationService::requestedResubmission(
+                        studentUserId: $submission->user->id, courseTitle: $course?->title ?? 'الدورة',
+                        assignmentTitle: $assignment?->title ?? 'الواجب', feedback: $submission->feedback, submissionId: $submission->id,
+                    );
+                } else {
+                    NotificationService::assignmentGraded(
+                        studentUserId: $submission->user->id, courseId: $course?->id ?? 0, courseTitle: $course?->title ?? 'الدورة',
+                        assignmentTitle: $assignment?->title ?? 'الواجب', score: $submission->score,
+                        maxScore: $assignment?->max_score, feedback: $submission->feedback, submissionId: $submission->id,
+                    );
+                }
+            }
+
+            $updated[] = $id;
+        }
+
+        return response()->json([
+            'success' => true,
+            'updated_count' => count($updated),
+            'skipped_count' => count($skipped),
+            'updated' => $updated,
+            'skipped' => $skipped,
+        ]);
     }
 
     private function applyInstructorStatusFilter($query, string $status): void

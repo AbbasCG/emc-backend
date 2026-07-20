@@ -14,6 +14,8 @@ use App\Mail\LearningPathEnrollmentMail;
 use App\Mail\VolunteerApplicationAdminMail;
 use App\Mail\WelcomeMail;
 use App\Models\VolunteerRequest;
+use App\Models\ClassGroupStudent;
+use App\Models\CourseMaterial;
 use App\Models\Department;
 use App\Models\PlatformNotification;
 use App\Models\Registration;
@@ -47,50 +49,23 @@ class NotificationService
             return;
         }
 
-        $entityId  = $extra['entity_id'] ?? null;
-        $windowStart = now()->subSeconds(self::DEDUP_WINDOW_SECONDS);
-
-        // Remove user IDs that already received an identical notification in the
-        // deduplication window. This is a safety net against double-dispatch bugs.
-        if ($entityId !== null) {
-            $alreadyNotified = PlatformNotification::whereIn('user_id', $ids)
-                ->where('type', $type)
-                ->where('entity_id', $entityId)
-                ->where('created_at', '>=', $windowStart)
-                ->pluck('user_id')
-                ->all();
-
-            if (! empty($alreadyNotified)) {
-                $ids = array_values(array_diff($ids, $alreadyNotified));
-            }
-        }
-
-        if (empty($ids)) {
-            return;
-        }
-
-        $now  = now();
-        $base = [
-            'type'        => $type,
-            'title'       => $title,
-            'message'     => $message,
-            'entity_type' => $extra['entity_type'] ?? null,
-            'entity_id'   => $entityId,
-            'action_url'  => $extra['action_url']  ?? null,
-            'icon'        => $extra['icon']         ?? 'bell',
-            'color'       => $extra['color']        ?? 'blue',
-            'is_read'     => false,
-            'created_by'  => $extra['created_by']  ?? null,
-            'created_at'  => $now,
-            'updated_at'  => $now,
-        ];
-
-        $rows = array_map(fn ($uid) => array_merge($base, ['user_id' => $uid]), $ids);
-
-        PlatformNotification::insert($rows);
+        // Off the request thread — see SendPlatformNotificationJob for the
+        // actual dedup + insert logic (moved there verbatim). afterCommit()
+        // ensures the job never runs before a surrounding DB::transaction()
+        // (many callers, including the new content-lifecycle notifications,
+        // call send() from inside one) — without it, a non-sync queue worker
+        // could query for a row the transaction hasn't committed yet. With
+        // QUEUE_CONNECTION=sync (tests, and until a real queue worker is
+        // configured) Laravel still runs afterCommit dispatches synchronously
+        // once any active transaction commits, so existing callers observe
+        // the same PlatformNotification rows right after send() returns —
+        // zero behavior change for the 36+ existing call sites.
+        \App\Jobs\SendPlatformNotificationJob::dispatch($ids, $type, $title, $message, $extra)->afterCommit();
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────
+    // (meta_url sanitization now lives in SendPlatformNotificationJob, next to
+    // the insert it protects.)
 
     private static function adminUserIds(): array
     {
@@ -597,6 +572,71 @@ class NotificationService
         );
     }
 
+    /** Notify a student that their oral assessment booking status changed (cancelled, no-show, etc). */
+    public static function oralAssessmentStatusChanged(
+        int $studentUserId,
+        string $courseTitle,
+        string $statusLabel,
+        ?string $reason = null,
+    ): void {
+        $message = "تم تحديث حالة موعد المقابلة الشفهية لدورة \"{$courseTitle}\" إلى: {$statusLabel}";
+        if ($reason) {
+            $message .= " — {$reason}";
+        }
+        self::send($studentUserId, 'oral_assessment_status_changed',
+            'تحديث حالة موعد المقابلة الشفهية',
+            $message,
+            [
+                'entity_type' => 'course',
+                'action_url'  => '/dashboard/student/courses',
+                'icon'        => 'microphone',
+                'color'       => 'amber',
+            ]
+        );
+    }
+
+    /** Notify a student that their oral assessment has been rescheduled. */
+    public static function oralAssessmentRescheduled(
+        int $studentUserId,
+        string $courseTitle,
+        string $newSlotDatetime,
+    ): void {
+        self::send($studentUserId, 'oral_assessment_rescheduled',
+            'تم تعديل موعد المقابلة الشفهية',
+            "تم نقل موعد مقابلتك الشفهية لدورة \"{$courseTitle}\" إلى: {$newSlotDatetime}",
+            [
+                'entity_type' => 'course',
+                'action_url'  => '/dashboard/student/courses',
+                'icon'        => 'calendar',
+                'color'       => 'blue',
+            ]
+        );
+    }
+
+    /** Deliver a free-text message from the instructor about a specific booking.
+     *  $meetingUrl, when present, is exposed to the student as a clickable
+     *  "open meeting" action — never just left as unlinked text in the body. */
+    public static function oralAssessmentInstructorMessage(
+        int $studentUserId,
+        int $bookingId,
+        string $instructorName,
+        string $body,
+        ?string $meetingUrl = null,
+    ): void {
+        self::send($studentUserId, 'oral_assessment_message',
+            "رسالة من المدرب {$instructorName}",
+            $body,
+            [
+                'entity_type' => 'oral_assessment_booking',
+                'entity_id'   => $bookingId,
+                'action_url'  => '/dashboard/student/courses',
+                'meta_url'    => $meetingUrl,
+                'icon'        => 'chat-bubble-left-right',
+                'color'       => 'blue',
+            ]
+        );
+    }
+
     /** Notify a student that they have been assigned to a class group. */
     public static function classGroupAssigned(
         int $studentUserId,
@@ -633,6 +673,25 @@ class NotificationService
                 'action_url'  => '/dashboard/student/courses',
                 'icon'        => 'users',
                 'color'       => 'green',
+            ]
+        );
+    }
+
+    /** Notify the instructor that a new student was automatically assigned to their class group. */
+    public static function classGroupStudentAssignedInstructor(
+        int $instructorUserId,
+        string $studentName,
+        string $classGroupName,
+        string $courseTitle,
+    ): void {
+        self::send($instructorUserId, 'class_group_student_assigned',
+            'طالب جديد في فصلك',
+            "تم إلحاق الطالب {$studentName} تلقائيًا بفصلك \"{$classGroupName}\" في دورة \"{$courseTitle}\".",
+            [
+                'entity_type' => 'class_group',
+                'action_url'  => '/dashboard/instructor/classes',
+                'icon'        => 'users',
+                'color'       => 'blue',
             ]
         );
     }
@@ -742,6 +801,39 @@ class NotificationService
                 'action_url'  => "/dashboard/student/assignments",
                 'icon'        => 'clipboard-list',
                 'color'       => 'orange',
+            ]
+        );
+    }
+
+    /**
+     * Notify enrolled students that an assignment's deadline changed.
+     * Triggered by: PATCH /api/admin/lms/assignments/{courseAssignment}
+     * (Ticket 5 — distinct from courseDateUpdated, which is about the
+     * course's own date, not a specific assignment's deadline.)
+     */
+    public static function assignmentDeadlineChanged(
+        int $courseId,
+        string $courseTitle,
+        string $assignmentTitle,
+        ?string $newDeadline,
+        int $courseAssignmentId
+    ): void {
+        $recipients = self::enrolledStudentUserIds($courseId);
+        if (empty($recipients)) {
+            return;
+        }
+
+        $dateLabel = $newDeadline ?? 'سيتم تحديده لاحقاً';
+
+        self::send($recipients, 'assignment_deadline_changed',
+            'تغيّر موعد تسليم واجب',
+            "تم تحديث الموعد النهائي لواجب \"{$assignmentTitle}\" في الدورة: {$courseTitle} إلى: {$dateLabel}",
+            [
+                'entity_type' => 'course_assignment',
+                'entity_id'   => $courseAssignmentId,
+                'action_url'  => "/dashboard/student/assignments",
+                'icon'        => 'clipboard-list',
+                'color'       => 'yellow',
             ]
         );
     }
@@ -910,6 +1002,109 @@ class NotificationService
                 'action_url'  => "/dashboard/student/attendance",
                 'icon'        => 'clipboard-check',
                 'color'       => $color,
+            ]
+        );
+    }
+
+    /**
+     * Ticket 6: notify a student after N consecutive absences in a row.
+     * Triggered by: SessionAttendanceController::update() when a save
+     * results in the student's most recent attendance rows all being absent.
+     */
+    public static function repeatedAbsence(int $studentUserId, string $courseTitle, int $consecutiveAbsences, int $courseId): void
+    {
+        self::send($studentUserId, 'attendance_repeated_absence',
+            'غياب متكرر',
+            "لديك {$consecutiveAbsences} غيابات متتالية في الدورة: {$courseTitle}. يرجى التواصل مع المدرّب.",
+            [
+                'entity_type' => 'course', 'entity_id' => $courseId,
+                'action_url'  => '/dashboard/student/attendance',
+                'icon' => 'exclamation-triangle', 'color' => 'red',
+            ]
+        );
+    }
+
+    /**
+     * Ticket 6: notify a student whose attendance percentage has crossed
+     * back up to/above the warning threshold after previously being below
+     * it. Callers must pass the percentage from BEFORE this save and AFTER
+     * this save so this method can detect the actual transition — it never
+     * fires just because attendance is currently fine (that would spam a
+     * student who was never at risk).
+     */
+    public static function attendanceRecovered(int $studentUserId, string $courseTitle, int $newPercentage, int $courseId): void
+    {
+        self::send($studentUserId, 'attendance_recovered',
+            'تحسّنت نسبة حضورك',
+            "عادت نسبة حضورك في الدورة \"{$courseTitle}\" إلى {$newPercentage}%، وهي الآن ضمن الحد المطلوب.",
+            [
+                'entity_type' => 'course', 'entity_id' => $courseId,
+                'action_url'  => '/dashboard/student/attendance',
+                'icon' => 'check-circle', 'color' => 'green',
+            ]
+        );
+    }
+
+    /**
+     * Ticket 6: notify the instructor once a session's attendance has been
+     * finalized (locked) — never fires again for the same session/lock.
+     * Triggered by: SessionAttendanceController::update() only on the FIRST
+     * save that creates the AttendanceLock, not on subsequent admin edits.
+     */
+    public static function classAttendanceCompleted(int $instructorUserId, string $courseTitle, string $sessionTitle, int $presentCount, int $totalCount, int $courseId): void
+    {
+        self::send($instructorUserId, 'class_attendance_completed',
+            'تم إنهاء تسجيل الحضور',
+            "تم إنهاء تسجيل الحضور لجلسة \"{$sessionTitle}\" في الدورة: {$courseTitle} — {$presentCount}/{$totalCount} حاضر.",
+            [
+                'entity_type' => 'course', 'entity_id' => $courseId,
+                'action_url'  => '/dashboard/instructor/attendance',
+                'icon' => 'clipboard-check', 'color' => 'blue',
+            ]
+        );
+    }
+
+    /**
+     * Ticket 6: notify a student whose overall attendance percentage has
+     * dropped below the platform's warning threshold.
+     * Triggered by: SessionAttendanceController::update().
+     */
+    public static function lowAttendanceWarning(int $studentUserId, string $courseTitle, int $attendancePercentage, int $courseId): void
+    {
+        self::send($studentUserId, 'attendance_low_warning',
+            'تحذير: نسبة حضور منخفضة',
+            "نسبة حضورك في الدورة \"{$courseTitle}\" هي {$attendancePercentage}%، وهي أقل من الحد الأدنى المطلوب.",
+            [
+                'entity_type' => 'course', 'entity_id' => $courseId,
+                'action_url'  => '/dashboard/student/attendance',
+                'icon' => 'exclamation-circle', 'color' => 'orange',
+            ]
+        );
+    }
+
+    /**
+     * Notify every active member of a class that a new announcement was
+     * published. $studentUserIds must already be filtered to
+     * ClassGroupStudent::ACTIVE_STATUSES members of the announcement's own
+     * class_group_id — this method does not re-derive eligibility.
+     */
+    public static function classAnnouncementPublished(
+        array $studentUserIds,
+        string $courseTitle,
+        string $className,
+        string $announcementTitle,
+        int $classGroupId,
+        int $announcementId
+    ): void {
+        self::send($studentUserIds, 'class_announcement_published',
+            $announcementTitle,
+            "إعلان جديد في صف \"{$className}\" — الدورة: {$courseTitle}",
+            [
+                'entity_type' => 'class_announcement',
+                'entity_id'   => $announcementId,
+                'action_url'  => "/dashboard/student/classes/{$classGroupId}/announcements",
+                'icon'        => 'megaphone',
+                'color'       => 'blue',
             ]
         );
     }
@@ -1175,6 +1370,102 @@ class NotificationService
                 'action_url'  => "/dashboard/super-admin/ambassador-applications/{$applicationId}",
                 'icon'        => 'refresh-cw',
                 'color'       => 'orange',
+            ]
+        );
+    }
+
+    // ── Ticket 7: content lifecycle ─────────────────────────────────────────
+    // Course-global content (modules/lessons) notifies every enrolled student
+    // via the existing enrolledStudentUserIds() bulk resolver. Class-scoped
+    // materials notify only active members of that class (ClassGroupStudent,
+    // the same ACTIVE_STATUSES filter used everywhere else in this session).
+    // Callers are responsible for transition detection (old status != active,
+    // new status == active) — these methods only send, they never decide.
+
+    public static function moduleActivated(int $courseId, string $courseTitle, string $moduleTitle, int $moduleId): void
+    {
+        $recipients = self::enrolledStudentUserIds($courseId);
+        if (empty($recipients)) {
+            return;
+        }
+
+        self::send($recipients, 'module_activated',
+            'وحدة جديدة متاحة',
+            "أصبحت الوحدة \"{$moduleTitle}\" متاحة الآن في دورة {$courseTitle}",
+            [
+                'entity_type' => 'course_module',
+                'entity_id'   => $moduleId,
+                'action_url'  => "/dashboard/student/courses/{$courseId}/modules",
+                'icon'        => 'layers',
+                'color'       => 'blue',
+            ]
+        );
+    }
+
+    public static function lessonActivated(int $courseId, string $courseTitle, string $lessonTitle, int $lessonId): void
+    {
+        $recipients = self::enrolledStudentUserIds($courseId);
+        if (empty($recipients)) {
+            return;
+        }
+
+        self::send($recipients, 'lesson_activated',
+            'درس جديد متاح',
+            "أصبح الدرس \"{$lessonTitle}\" متاحًا الآن في دورة {$courseTitle}",
+            [
+                'entity_type' => 'lesson',
+                'entity_id'   => $lessonId,
+                'action_url'  => "/dashboard/student/lessons/{$lessonId}",
+                'icon'        => 'book-open',
+                'color'       => 'blue',
+            ]
+        );
+    }
+
+    public static function lessonContentUpdated(int $courseId, string $courseTitle, string $lessonTitle, int $lessonId): void
+    {
+        $recipients = self::enrolledStudentUserIds($courseId);
+        if (empty($recipients)) {
+            return;
+        }
+
+        self::send($recipients, 'lesson_content_updated',
+            'تحديث على درس',
+            "تم تحديث محتوى الدرس \"{$lessonTitle}\" في دورة {$courseTitle}",
+            [
+                'entity_type' => 'lesson',
+                'entity_id'   => $lessonId,
+                'action_url'  => "/dashboard/student/lessons/{$lessonId}",
+                'icon'        => 'refresh-cw',
+                'color'       => 'orange',
+            ]
+        );
+    }
+
+    public static function materialVisible(CourseMaterial $material): void
+    {
+        if ($material->class_group_id) {
+            $recipients = ClassGroupStudent::where('class_group_id', $material->class_group_id)
+                ->whereIn('status', ClassGroupStudent::ACTIVE_STATUSES)
+                ->pluck('user_id')
+                ->all();
+        } else {
+            $recipients = self::enrolledStudentUserIds((int) $material->course_id);
+        }
+
+        if (empty($recipients)) {
+            return;
+        }
+
+        self::send($recipients, 'material_visible',
+            'مادة تعليمية جديدة',
+            "تمت إضافة مادة جديدة: \"{$material->title}\"",
+            [
+                'entity_type' => 'course_material',
+                'entity_id'   => $material->id,
+                'action_url'  => "/dashboard/student/materials",
+                'icon'        => 'file-text',
+                'color'       => 'blue',
             ]
         );
     }

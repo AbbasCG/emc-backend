@@ -11,6 +11,7 @@ use App\Models\PlacementTestAttempt;
 use App\Models\Registration;
 use App\Models\StudentProgress;
 use App\Services\PlacementProgressService;
+use App\Support\CourseComputedStatus;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -59,6 +60,16 @@ class StudentRegistrationsController extends Controller
                 'price'        => (float) $reg->course->price,
                 'start_date'   => $reg->course->start_date?->format('Y-m-d'),
                 'start_time'   => $reg->course->start_time,
+                'end_date'     => $reg->course->end_date?->format('Y-m-d'),
+                'end_time'     => $reg->course->end_time,
+                // Computed lifecycle — never overwrites the stored `status` column;
+                // see CourseComputedStatus for the single source of this logic.
+                'is_ended'         => CourseComputedStatus::isEnded($reg->course),
+                'computed_status'  => CourseComputedStatus::computedStatus($reg->course),
+                'lifecycle_status' => CourseComputedStatus::lifecycleStatus($reg->course),
+                'starts_at'        => CourseComputedStatus::resolveStartDateTime($reg->course)?->toIso8601String(),
+                'ends_at'          => CourseComputedStatus::resolveEndDateTime($reg->course)?->toIso8601String(),
+                'timezone'         => 'Europe/Amsterdam',
                 'location_type'=> $reg->course->location_type,
                 'meeting_link' => $reg->course->meeting_link,
                 'track'        => $reg->course->track
@@ -136,7 +147,7 @@ class StudentRegistrationsController extends Controller
         // Class group assignments for this student
         $classAssignmentMap = ClassGroupStudent::with(['classGroup.instructor.user'])
             ->where('user_id', $user->id)
-            ->whereIn('status', ['assigned', 'completed'])
+            ->whereIn('status', ClassGroupStudent::ACTIVE_STATUSES)
             ->get()
             ->filter(fn ($cgs) => $cgs->classGroup !== null)
             ->keyBy(fn ($cgs) => $cgs->classGroup->course_id);
@@ -166,8 +177,18 @@ class StudentRegistrationsController extends Controller
                 'location_type'            => $course?->location_type,
                 'meeting_link'             => $course?->meeting_link,
                 'start_date'               => $course?->start_date,
+                'start_time'               => $course?->start_time,
                 'end_date'                 => $course?->end_date,
+                'end_time'                 => $course?->end_time,
                 'next_cohort_pending'      => $course?->start_date === null,
+                // Computed lifecycle — stored publication `status` stays untouched;
+                // see CourseComputedStatus for the single source of this logic.
+                'is_ended'                 => $course ? CourseComputedStatus::isEnded($course) : null,
+                'computed_status'          => $course ? CourseComputedStatus::computedStatus($course) : null,
+                'lifecycle_status'         => $course ? CourseComputedStatus::lifecycleStatus($course) : null,
+                'starts_at'                => $course ? CourseComputedStatus::resolveStartDateTime($course)?->toIso8601String() : null,
+                'ends_at'                  => $course ? CourseComputedStatus::resolveEndDateTime($course)?->toIso8601String() : null,
+                'timezone'                 => 'Europe/Amsterdam',
                 'track'                    => $course?->track ? [
                     'id'   => $course->track->id,
                     'name' => $course->track->title,

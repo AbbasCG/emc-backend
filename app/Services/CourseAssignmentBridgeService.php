@@ -72,10 +72,17 @@ class CourseAssignmentBridgeService
     {
         return [
             'course_id'            => $courseAssignment->course_id,
+            // Ticket 5: propagate class/session scoping onto the bridge row
+            // too — previously only course_id was mapped, so a class- or
+            // session-scoped CourseAssignment silently produced a
+            // course-wide bridge Assignment (visible to the whole course).
+            'class_group_id'       => $courseAssignment->class_group_id,
+            'session_id'           => $courseAssignment->session_id,
             'title'                => $courseAssignment->title,
             'description'          => $courseAssignment->description,
             'due_date'             => $courseAssignment->deadline,
             'max_score'            => $courseAssignment->max_points,
+            'max_attempts'         => $courseAssignment->max_attempts,
             'status'               => in_array($courseAssignment->status, ['published', 'active'], true) ? 'active' : 'archived',
             'is_visible'           => (bool) $courseAssignment->is_visible,
             'resubmission_allowed' => (bool) $courseAssignment->resubmission_allowed,

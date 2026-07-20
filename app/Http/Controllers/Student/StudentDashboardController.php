@@ -81,7 +81,7 @@ class StudentDashboardController extends Controller
         // ── Class assignment map ──────────────────────────────────────────────
         $classAssignmentMap = ClassGroupStudent::with(['classGroup.instructor.user'])
             ->where('user_id', $user->id)
-            ->whereIn('status', ['assigned', 'completed'])
+            ->whereIn('status', ClassGroupStudent::ACTIVE_STATUSES)
             ->get()
             ->filter(fn ($cgs) => $cgs->classGroup !== null)
             ->keyBy(fn ($cgs) => $cgs->classGroup->course_id);

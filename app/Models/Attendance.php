@@ -2,14 +2,18 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToClassGroup;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Attendance extends Model
 {
+    use BelongsToClassGroup;
+
     protected $fillable = [
         'session_id',
         'course_session_id',
+        'class_group_id',
         'user_id',
         'status',
         'checked_in_at',

@@ -7,12 +7,14 @@ use App\Http\Requests\StoreMaterialRequest;
 use App\Http\Resources\LmsCourseMaterialResource;
 use App\Models\CourseMaterial;
 use App\Models\MaterialAuditLog;
+use App\Services\LearningContentEligibilityService;
 use App\Services\Material\MaterialUploadService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AdminLmsMaterialController extends Controller
@@ -101,10 +103,24 @@ class AdminLmsMaterialController extends Controller
             'is_visible'       => ['nullable', 'boolean'],
             'external_url'     => ['nullable', 'url', 'max:2000'],
             'course_id'        => ['sometimes', 'nullable', 'exists:courses,id'],
+            'class_group_id'   => ['sometimes', 'nullable', 'exists:class_groups,id'],
             'module_id'        => ['sometimes', 'nullable', 'exists:course_modules,id'],
+            'lesson_id'        => ['sometimes', 'nullable', 'exists:lessons,id'],
             'session_id'       => ['sometimes', 'nullable', 'exists:lms_sessions,id'],
             'course_session_id'=> ['sometimes', 'nullable', 'exists:course_sessions,id'],
         ]);
+
+        $scopeErrors = app(LearningContentEligibilityService::class)->materialScopeErrors([
+            'course_id'         => $validated['course_id'] ?? $material->course_id,
+            'class_group_id'    => $validated['class_group_id'] ?? $material->class_group_id,
+            'module_id'         => array_key_exists('module_id', $validated) ? $validated['module_id'] : $material->module_id,
+            'lesson_id'         => array_key_exists('lesson_id', $validated) ? $validated['lesson_id'] : $material->lesson_id,
+            'session_id'        => array_key_exists('session_id', $validated) ? $validated['session_id'] : $material->session_id,
+            'course_session_id' => array_key_exists('course_session_id', $validated) ? $validated['course_session_id'] : $material->course_session_id,
+        ]);
+        if ($scopeErrors !== []) {
+            throw ValidationException::withMessages($scopeErrors);
+        }
 
         $user = $request->user();
 

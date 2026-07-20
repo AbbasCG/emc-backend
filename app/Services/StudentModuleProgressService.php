@@ -3,10 +3,12 @@
 namespace App\Services;
 
 use App\Models\AssignmentSubmission;
+use App\Models\Course;
 use App\Models\CourseModule;
 use App\Models\Lesson;
 use App\Models\LessonCompletion;
 use App\Models\User;
+use App\Support\CourseContentStatus;
 use Illuminate\Support\Collection;
 
 class StudentModuleProgressService
@@ -33,9 +35,9 @@ class StudentModuleProgressService
     {
         $lessons = $module->relationLoaded('lessons')
             ? $module->lessons
-            : $module->lessons()->where('status', 'active')->get();
+            : $module->lessons()->where('status', CourseContentStatus::ACTIVE)->get();
 
-        $requiredLessons = $lessons->filter(fn (Lesson $l) => $l->status === 'active');
+        $requiredLessons = $lessons->filter(fn (Lesson $l) => $l->isVisibleToStudents());
         $lessonIds       = $requiredLessons->pluck('id');
 
         $completedLessonIds = $lessonIds->isEmpty()
@@ -108,5 +110,47 @@ class StudentModuleProgressService
             ->map(fn (CourseModule $module) => $this->computeForModule($module, $user))
             ->values()
             ->all();
+    }
+
+    /**
+     * Course-level curriculum progress roll-up (lesson → module → course).
+     *
+     * Formula: completed active lessons across visible/active modules ÷
+     * total active lessons across visible/active modules. Hidden/draft
+     * modules (and their lessons) are excluded entirely from both the
+     * numerator and denominator — not merely from the numerator — since an
+     * unpublished module was never eligible content to begin with.
+     *
+     * This is computed on demand, not persisted: StudentProgress has no
+     * curriculum-percentage column, and adding one plus a write path was
+     * judged riskier than a cheap, always-fresh computed value exposed via
+     * the lesson/module response Resources.
+     *
+     * @return array{modules_count:int, lessons_count:int, completed_lessons_count:int, progress_percentage:int, is_completed:bool}
+     */
+    public function computeForCourse(Course $course, User $user): array
+    {
+        $modules = $course->relationLoaded('modules')
+            ? $course->modules
+            : $course->modules()->with('lessons')->orderBy('sort_order')->get();
+
+        $visibleModules = $modules->filter(fn (CourseModule $m) => $m->isVisibleToStudents());
+
+        $perModule = $this->computeForModules($visibleModules, $user);
+
+        $lessonsCount          = array_sum(array_column($perModule, 'lessons_count'));
+        $completedLessonsCount = array_sum(array_column($perModule, 'completed_lessons_count'));
+
+        $progressPercentage = $lessonsCount > 0
+            ? (int) round(($completedLessonsCount / $lessonsCount) * 100)
+            : 0;
+
+        return [
+            'modules_count'           => $visibleModules->count(),
+            'lessons_count'           => $lessonsCount,
+            'completed_lessons_count' => $completedLessonsCount,
+            'progress_percentage'     => min(100, $progressPercentage),
+            'is_completed'            => $lessonsCount > 0 && $completedLessonsCount >= $lessonsCount,
+        ];
     }
 }

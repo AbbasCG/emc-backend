@@ -14,12 +14,15 @@ use App\Models\CourseMaterial;
 use App\Models\CourseModule;
 use App\Models\CourseSession;
 use App\Models\Lesson;
+use App\Services\ContentReorderService;
 use App\Services\CourseAssignmentBridgeService;
 use App\Services\NotificationService;
+use App\Support\CourseContentStatus;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rule;
 
 class InstructorCourseContentController extends Controller
 {
@@ -147,7 +150,7 @@ class InstructorCourseContentController extends Controller
             'title'       => 'required|string|max:255',
             'description' => 'nullable|string',
             'sort_order'  => 'nullable|integer|min:0',
-            'status'      => 'nullable|in:active,inactive,draft',
+            'status'      => ['nullable', Rule::in(CourseContentStatus::ALL)],
             'is_active'   => 'nullable|boolean',
         ]);
 
@@ -181,16 +184,23 @@ class InstructorCourseContentController extends Controller
             'title'       => 'sometimes|string|max:255',
             'description' => 'nullable|string',
             'sort_order'  => 'nullable|integer|min:0',
-            'status'      => 'nullable|in:active,inactive,draft',
+            'status'      => ['nullable', Rule::in(CourseContentStatus::ALL)],
             'is_active'   => 'nullable|boolean',
         ]);
 
+        $wasActive = $module->status === CourseContentStatus::ACTIVE;
         $module->update($data);
+        $fresh = $module->fresh();
+
+        if (! $wasActive && $fresh->status === CourseContentStatus::ACTIVE) {
+            $fresh->loadMissing('course');
+            NotificationService::moduleActivated($fresh->course_id, $fresh->course?->title ?? '', $fresh->title, $fresh->id);
+        }
 
         return response()->json([
             'success' => true,
             'message' => 'تم الحفظ بنجاح',
-            'data'    => new CourseModuleResource($module->fresh()),
+            'data'    => new CourseModuleResource($fresh),
         ]);
     }
 
@@ -282,6 +292,9 @@ class InstructorCourseContentController extends Controller
         $this->authorise($request, $course);
 
         $data = $this->validateMaterial($request);
+        $data['course_id'] = $course->id;
+        $this->assertInstructorOwnsMaterialClassScope($request, $data);
+        $this->assertMaterialScopeConsistent($data);
 
         if ($request->hasFile('file')) {
             $path              = $request->file('file')->store('course-materials', 'local');
@@ -289,12 +302,15 @@ class InstructorCourseContentController extends Controller
             $data['file_url']  = null;
         }
 
-        $data['course_id']  = $course->id;
         $data['sort_order'] = $data['sort_order']
             ?? (int) CourseMaterial::where('course_id', $course->id)->max('sort_order') + 1;
         unset($data['file']);
 
         $material = CourseMaterial::create($data);
+
+        if ($material->is_visible) {
+            NotificationService::materialVisible($material);
+        }
 
         return response()->json([
             'success' => true,
@@ -314,6 +330,16 @@ class InstructorCourseContentController extends Controller
         $this->authoriseByCourse($request, $mat->course_id);
 
         $data = $this->validateMaterial($request, required: false);
+        $scopeCheck = array_merge([
+            'course_id'         => $mat->course_id,
+            'class_group_id'    => $mat->class_group_id,
+            'module_id'         => $mat->module_id,
+            'lesson_id'         => $mat->lesson_id,
+            'session_id'        => $mat->session_id,
+            'course_session_id' => $mat->course_session_id,
+        ], $data);
+        $this->assertInstructorOwnsMaterialClassScope($request, $scopeCheck);
+        $this->assertMaterialScopeConsistent($scopeCheck);
 
         if ($request->hasFile('file')) {
             if ($mat->file_path) {
@@ -325,12 +351,18 @@ class InstructorCourseContentController extends Controller
         }
 
         unset($data['file']);
+        $wasVisible = $mat->is_visible;
         $mat->update($data);
+        $fresh = $mat->fresh();
+
+        if (! $wasVisible && $fresh->is_visible) {
+            NotificationService::materialVisible($fresh);
+        }
 
         return response()->json([
             'success' => true,
             'message' => 'تم الحفظ بنجاح',
-            'data'    => new CourseMaterialResource($mat->fresh()),
+            'data'    => new CourseMaterialResource($fresh),
         ]);
     }
 
@@ -442,18 +474,34 @@ class InstructorCourseContentController extends Controller
 
     public function updateLesson(Request $request): JsonResponse
     {
-        $lesson = Lesson::with('module')->findOrFail($this->routeId($request, 'lesson'));
+        $lesson = Lesson::with('module.course')->findOrFail($this->routeId($request, 'lesson'));
         $this->enforceCourseScope($request, $lesson->module?->course_id);
         $this->authoriseByCourse($request, $lesson->module?->course_id);
 
         $data = $this->validateLesson($request, required: false);
         unset($data['module_id']); // module cannot be changed
+
+        $wasActive = $lesson->status === CourseContentStatus::ACTIVE;
+        $contentFieldsChanged = collect(['title', 'content', 'video_url'])
+            ->contains(fn ($field) => array_key_exists($field, $data) && $data[$field] !== $lesson->$field);
+
         $lesson->update($data);
+        $fresh = $lesson->fresh();
+        $courseId = $lesson->module?->course_id;
+        $courseTitle = $lesson->module?->course?->title ?? '';
+
+        if ($courseId) {
+            if (! $wasActive && $fresh->status === CourseContentStatus::ACTIVE) {
+                NotificationService::lessonActivated($courseId, $courseTitle, $fresh->title, $fresh->id);
+            } elseif ($wasActive && $fresh->status === CourseContentStatus::ACTIVE && $contentFieldsChanged) {
+                NotificationService::lessonContentUpdated($courseId, $courseTitle, $fresh->title, $fresh->id);
+            }
+        }
 
         return response()->json([
             'success' => true,
             'message' => 'تم الحفظ بنجاح',
-            'data'    => new LessonResource($lesson->fresh()),
+            'data'    => new LessonResource($fresh),
         ]);
     }
 
@@ -479,13 +527,36 @@ class InstructorCourseContentController extends Controller
             'module_ids'  => 'sometimes|array',
         ]);
 
-        $orderedIds = $data['ids'] ?? $data['ordered_ids'] ?? $data['module_ids'] ?? [];
+        $orderedIds = array_map('intval', $data['ids'] ?? $data['ordered_ids'] ?? $data['module_ids'] ?? []);
 
-        foreach ($orderedIds as $position => $id) {
-            CourseModule::where('id', $id)
-                ->where('course_id', $course->id)
-                ->update(['sort_order' => $position]);
-        }
+        app(ContentReorderService::class)->reorder(
+            CourseModule::query()->where('course_id', $course->id),
+            $orderedIds
+        );
+
+        return response()->json(['success' => true, 'message' => 'تم حفظ الترتيب']);
+    }
+
+    /**
+     * POST /instructor/courses/{course}/modules/{module}/lessons/reorder
+     */
+    public function reorderLessons(Request $request, Course $course, CourseModule $module): JsonResponse
+    {
+        $this->authorise($request, $course);
+        abort_if((int) $module->course_id !== (int) $course->id, 404, 'Module not found in this course.');
+
+        $data = $request->validate([
+            'ids'         => 'sometimes|array',
+            'ordered_ids' => 'sometimes|array',
+            'lesson_ids'  => 'sometimes|array',
+        ]);
+
+        $orderedIds = array_map('intval', $data['ids'] ?? $data['ordered_ids'] ?? $data['lesson_ids'] ?? []);
+
+        app(ContentReorderService::class)->reorder(
+            Lesson::query()->where('module_id', $module->id),
+            $orderedIds
+        );
 
         return response()->json(['success' => true, 'message' => 'تم حفظ الترتيب']);
     }
@@ -567,6 +638,49 @@ class InstructorCourseContentController extends Controller
         abort_if(! $ownsCourse, 403, 'You can only manage your own courses.');
     }
 
+    /**
+     * When a material declares class_group_id, the class must belong to the
+     * material's own course AND the authenticated instructor must own that
+     * class (Course.instructor_id match) — admins bypass, matching every
+     * other ownership check in this controller. Closes the material-scope
+     * gap named in the Ticket 7 audit: this endpoint previously had no way
+     * to set class_group_id at all, so instructor-created materials could
+     * never be class-scoped through the API.
+     */
+    private function assertInstructorOwnsMaterialClassScope(Request $request, array $data): void
+    {
+        if (empty($data['class_group_id'])) {
+            return;
+        }
+
+        if (in_array($request->user()->role, ['admin', 'super_admin'], true)) {
+            return;
+        }
+
+        $profile = $request->user()->instructorProfile;
+        abort_if(! $profile, 403, 'You can only manage your own courses.');
+
+        $owns = \App\Models\ClassGroup::where('id', $data['class_group_id'])
+            ->where('course_id', $data['course_id'] ?? null)
+            ->where('instructor_id', $profile->id)
+            ->exists();
+
+        abort_unless($owns, 403, 'You can only scope materials to a class you own within this course.');
+    }
+
+    /**
+     * Delegates to the canonical LearningContentEligibilityService — no
+     * duplicated scope-consistency logic between the admin and instructor
+     * material endpoints.
+     */
+    private function assertMaterialScopeConsistent(array $data): void
+    {
+        $errors = app(\App\Services\LearningContentEligibilityService::class)->materialScopeErrors($data);
+        if ($errors !== []) {
+            throw \Illuminate\Validation\ValidationException::withMessages($errors);
+        }
+    }
+
     private function deleteFile(string $path): void
     {
         if (Storage::disk('local')->exists($path)) {
@@ -625,7 +739,10 @@ class InstructorCourseContentController extends Controller
     {
         $data = $request->validate([
             'module_id'         => 'nullable|exists:course_modules,id',
+            'lesson_id'         => 'nullable|exists:lessons,id',
+            'session_id'        => 'nullable|exists:lms_sessions,id',
             'course_session_id' => 'nullable|exists:course_sessions,id',
+            'class_group_id'    => 'nullable|exists:class_groups,id',
             'title'             => ($required ? 'required' : 'sometimes') . '|string|max:255',
             'description'       => 'nullable|string',
             'type'              => 'nullable|in:pdf,video,link,file,image,audio,other,slides,document',
@@ -663,7 +780,7 @@ class InstructorCourseContentController extends Controller
             'video_url'        => 'nullable|url|max:500',
             'duration_minutes' => 'nullable|integer|min:1',
             'sort_order'       => 'nullable|integer|min:0',
-            'status'           => 'nullable|in:active,inactive,draft',
+            'status'           => ['nullable', Rule::in(CourseContentStatus::ALL)],
         ]);
     }
 
