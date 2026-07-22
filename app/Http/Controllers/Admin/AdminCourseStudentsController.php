@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Services\AuditLogService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 
@@ -176,29 +177,47 @@ class AdminCourseStudentsController extends Controller
 
     public function destroy(Request $request, Course $course, User $user): JsonResponse
     {
-        $registration = Registration::where('course_id', $course->id)
-            ->where('user_id', $user->id)
-            ->whereNotIn('status', [RegistrationStatus::CANCELLED->value])
-            ->first();
+        // Registrations carry payment/financial history (see Payment::registration()),
+        // so removal is a status transition to CANCELLED, never a physical delete —
+        // this keeps the financial audit trail intact while making the student stop
+        // counting as enrolled/registered everywhere else in the system, since every
+        // access-eligibility check in this codebase (Registration::scopeActiveEnrollment,
+        // RegistrationStatus::activeEnrollment()) already excludes CANCELLED.
+        $result = DB::transaction(function () use ($course, $user) {
+            $registration = Registration::where('course_id', $course->id)
+                ->where('user_id', $user->id)
+                ->whereNotIn('status', [RegistrationStatus::CANCELLED->value])
+                ->lockForUpdate()
+                ->first();
 
-        if (! $registration) {
+            if (! $registration) {
+                return null;
+            }
+
+            $previousStatus = $registration->status;
+            $registration->update(['status' => RegistrationStatus::CANCELLED->value]);
+
+            // Mark progress as cancelled — preserve history, scoped to this course only.
+            StudentProgress::where('user_id', $user->id)
+                ->where('course_id', $course->id)
+                ->update(['status' => 'cancelled']);
+
+            return $previousStatus;
+        });
+
+        if ($result === null) {
+            // Already removed/cancelled (or never registered) — a controlled,
+            // idempotent response rather than a partial or inconsistent state.
             return response()->json([
                 'success' => false,
                 'message' => 'التسجيل غير موجود أو ملغى بالفعل.',
             ], 404);
         }
 
-        $registration->update(['status' => RegistrationStatus::CANCELLED->value]);
-
-        // Mark progress as cancelled — preserve history
-        StudentProgress::where('user_id', $user->id)
-            ->where('course_id', $course->id)
-            ->update(['status' => 'cancelled']);
-
         AuditLogService::log(
             'student_unenrolled',
             'Course', $course->id, $course->title,
-            ['user_id' => $user->id, 'status' => 'registered'],
+            ['user_id' => $user->id, 'status' => $result],
             ['status' => 'cancelled'],
             null,
             $request
@@ -206,7 +225,7 @@ class AdminCourseStudentsController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'تم إلغاء تسجيل الطالب من الدورة. السجل محفوظ.',
+            'message' => 'تمت إزالة الطالب من الدورة وإلغاء تسجيله بنجاح',
         ]);
     }
 

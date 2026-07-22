@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Enums\RegistrationStatus;
 use App\Models\Course;
+use App\Models\ManualPayment;
 use App\Models\OralAssessmentBooking;
 use App\Models\PlacementTestAttempt;
 use App\Models\Registration;
@@ -77,7 +78,25 @@ class CourseAccessEligibilityService
         );
 
         $lastPayment = $registration?->payments?->last();
-        $paymentStatus = $lastPayment?->status
+
+        // A manual payment submitted for admin review (bank transfer, etc.) has
+        // no Payment row yet — ManualPaymentConfirmationService only creates one
+        // once an admin confirms it (see ManualPaymentController::confirm()).
+        // Until then the real, most current truth is the ManualPayment's own
+        // 'pending_review' status (an existing value in that domain, not a new
+        // one invented here), so the student sees "under review" rather than a
+        // generic "payment pending" while their proof is actually being checked.
+        $pendingManualPayment = $isPaidCourse
+            ? ManualPayment::where('student_id', $user->id)
+                ->where('purchasable_type', Course::class)
+                ->where('purchasable_id', $course->id)
+                ->where('status', 'pending_review')
+                ->latest()
+                ->first()
+            : null;
+
+        $paymentStatus = $pendingManualPayment?->status
+            ?? $lastPayment?->status
             ?? (! $isPaidCourse ? 'free' : null);
 
         $paymentCompleted = ! $isPaidCourse || $viaLearningPath || $enrollmentActive;
@@ -86,6 +105,7 @@ class CourseAccessEligibilityService
             $blockReason = match (true) {
                 $registration === null => 'no_registration',
                 $paymentStatus === RegistrationStatus::PENDING_PAYMENT->value => 'payment_pending',
+                $paymentStatus === 'pending_review' => 'payment_pending',
                 $paymentStatus === 'payment_failed' => 'payment_failed',
                 $registration->status === RegistrationStatus::CANCELLED->value => 'registration_cancelled',
                 default => 'payment_required',

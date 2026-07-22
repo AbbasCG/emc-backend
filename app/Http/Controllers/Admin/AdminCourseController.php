@@ -38,7 +38,7 @@ class AdminCourseController extends Controller
     public function index(Request $request): JsonResponse
     {
         $query = Course::with(['instructor.user', 'track', 'department'])
-            ->withCount('registrations');
+            ->withCount(['registrations', 'activeRegistrations']);
 
         if ($request->filled('status')) {
             $query->where('status', $request->query('status'));
@@ -305,7 +305,7 @@ class AdminCourseController extends Controller
             'instructor.user', 'track', 'features', 'department',
             'createdBy', 'updatedBy', 'assignedBy',
             'financeApproval.submitter', 'financeApproval.reviewer',
-        ])->loadCount(['registrations', 'sessions', 'assignments', 'materials']);
+        ])->loadCount(['registrations', 'activeRegistrations', 'sessions', 'assignments', 'materials']);
 
         $lpItem = LearningPathItem::with('learningPath')->where('course_id', $course->id)->first();
         $lpEnrollCount = $lpItem ? LearningPathEnrollment::where('learning_path_id', $lpItem->learning_path_id)
@@ -927,12 +927,19 @@ class AdminCourseController extends Controller
                 ? $this->formatFinanceApproval($course->financeApproval)
                 : null,
             'registrations_count'      => $course->registrations_count ?? 0,
+            // Registrations that genuinely count as enrolled (Registration::scopeActiveEnrollment):
+            // excludes pending_payment, cancelled, and no_show rows. This — not the raw
+            // registrations_count above — is the correct "تسجيلات" figure for a paid course,
+            // since registrations_count includes rows still awaiting/failed payment.
+            'active_registrations_count' => $course->active_registrations_count ?? 0,
             // For LP-owned courses students enroll via the learning path, not directly,
             // so the direct registrations_count is 0. effective_enrollment_count returns
             // the LP enrollment count instead (the true number of enrolled students).
+            // Otherwise it's the scoped active_registrations_count — never the raw,
+            // payment-status-agnostic registrations_count.
             'effective_enrollment_count' => $isActiveLp && $lpEnrollmentCount !== null
                 ? $lpEnrollmentCount
-                : ($course->registrations_count ?? 0),
+                : ($course->active_registrations_count ?? 0),
             'features'            => $course->features?->pluck('title')->all() ?? [],
             'whatsapp_community_url' => $course->whatsapp_community_url,
             'created_at'          => $course->created_at,

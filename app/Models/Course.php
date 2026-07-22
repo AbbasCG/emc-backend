@@ -183,6 +183,18 @@ class Course extends Model
         return $this->hasMany(Registration::class);
     }
 
+    /**
+     * Registrations that genuinely count as enrolled — canonical eligibility
+     * per Registration::scopeActiveEnrollment() (paid-course rows still on
+     * pending_payment, or any cancelled/no_show row, are excluded). Use this
+     * — not the raw registrations() count — anywhere a "تسجيلات" style
+     * enrollment count must reflect real completed registrations.
+     */
+    public function activeRegistrations(): HasMany
+    {
+        return $this->registrations()->activeEnrollment();
+    }
+
     public function modules(): HasMany
     {
         return $this->hasMany(CourseModule::class)->orderBy('sort_order');
