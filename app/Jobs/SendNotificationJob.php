@@ -10,9 +10,22 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
 /**
- * Dispatch in-app and optional email notification to a user.
+ * @deprecated Ticket 8 canonical-architecture pass. Writes to Laravel's
+ * built-in `notifications` table, a second in-app notification store that
+ * is disjoint from the canonical `platform_notifications` table used by the
+ * Notification Center, notification preferences, dedup, and every other
+ * live notification code path. As of this pass it has **zero live
+ * callers** (verified by grepping the full codebase for
+ * `SendNotificationJob::dispatch`) — its only two former callers
+ * (`GenerateReportJob`, `IssueCertificateJob`) were themselves dead code
+ * and have both been migrated to `NotificationService::reportReady()` /
+ * `NotificationService::certificateIssued()`. Do not add new callers — use
+ * `NotificationService::send()` (or a scenario method) instead. Kept,
+ * rather than deleted, only because the built-in `notifications` table and
+ * this job's queue-retry semantics may still be referenced by out-of-repo
+ * tooling; see docs/architecture/ADR_NOTIFICATION_ARCHITECTURE.md.
  *
- * Usage:
+ * Usage (do not use for new code):
  *   SendNotificationJob::dispatch($user, 'certificate_issued', [
  *       'title'   => 'Your certificate is ready',
  *       'message' => 'Download your certificate from the dashboard.',

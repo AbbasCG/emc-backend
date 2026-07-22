@@ -14,19 +14,25 @@ class PlatformNotification extends Model
         'message',
         'entity_type',
         'entity_id',
+        'idempotency_key',
+        'legacy_source_id',
         'action_url',
         'meta_url',
         'icon',
         'color',
         'is_read',
         'read_at',
+        'pinned',
+        'archived_at',
         'created_by',
     ];
 
     protected $casts = [
-        'is_read'   => 'boolean',
-        'read_at'   => 'datetime',
-        'entity_id' => 'integer',
+        'is_read'     => 'boolean',
+        'read_at'     => 'datetime',
+        'entity_id'   => 'integer',
+        'pinned'      => 'boolean',
+        'archived_at' => 'datetime',
     ];
 
     public function user(): BelongsTo

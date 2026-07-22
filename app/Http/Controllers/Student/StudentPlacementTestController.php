@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Student;
 
+use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\PlacementTestAttemptResource;
 use App\Http\Resources\PlacementTestResource;
@@ -312,14 +313,29 @@ class StudentPlacementTestController extends Controller
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
+    /**
+     * Production hotfix: this previously used a hand-rolled
+     * `whereNotIn('status', ['Rejected', 'Cancelled'])` check — 'Rejected'
+     * isn't even a real RegistrationStatus value, so in practice almost
+     * any status (including `pending_payment`, the status a paid-course
+     * registration holds until payment is confirmed — see
+     * RegistrationController::store()) passed this check. That let a
+     * student who registered for a paid course but never paid start and
+     * submit the placement test. Now uses the same canonical
+     * RegistrationStatus::activeEnrollment() allowlist every other
+     * student-facing controller already uses as the single source of
+     * truth for "this registration grants access" — payment-pending
+     * registrations are excluded because PENDING_PAYMENT is not in that
+     * list.
+     */
     private function requireEnrollment(Request $request, Course $course): void
     {
         $enrolled = Registration::where('user_id', $request->user()->id)
             ->where('course_id', $course->id)
-            ->whereNotIn('status', ['Rejected', 'Cancelled'])
+            ->whereIn('status', RegistrationStatus::activeEnrollment())
             ->exists();
 
-        abort_unless($enrolled, 403, 'يجب التسجيل في الدورة أولاً للوصول إلى هذه الميزة.');
+        abort_unless($enrolled, 403, 'يجب إكمال التسجيل والدفع للدورة أولاً للوصول إلى هذه الميزة.');
     }
 
     private function requireCoursePlacement(Course $course): void

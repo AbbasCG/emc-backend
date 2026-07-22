@@ -9,6 +9,7 @@ use App\Http\Resources\RegistrationResource;
 use App\Models\CalendarEvent;
 use App\Models\Certificate;
 use App\Models\LmsSession;
+use App\Models\PlatformNotification;
 use App\Models\Registration;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -175,33 +176,52 @@ class MobileController extends Controller
 
     /**
      * GET /api/mobile/notifications
+     *
+     * Ticket 8 canonical-architecture pass: previously read from Laravel's
+     * built-in `notifications` table, which — per the notification
+     * call-graph audit — had zero live writers (the only two producers,
+     * `SendNotificationJob` and `NotificationDispatcher::dispatchInApp`,
+     * were themselves unreachable dead code), so this endpoint always
+     * returned an empty list in practice. Now reads the canonical
+     * `platform_notifications` store — the same rows the web Notification
+     * Center shows — through a response-shape adapter that keeps the
+     * pre-existing `{id, type, notifiable_type, notifiable_id, data:
+     * {type, title, message, url}, read_at, created_at}` item contract, so
+     * an existing mobile client parsing this shape keeps working.
      */
     public function notifications(Request $request): JsonResponse
     {
-        $notifications = $request->user()
-            ->notifications()
+        $userId = $request->user()->id;
+
+        $notifications = PlatformNotification::query()
+            ->where('user_id', $userId)
+            ->whereNull('archived_at')
             ->latest()
             ->paginate(20);
 
         return response()->json([
             'success' => true,
-            'data'    => $notifications->items(),
+            'data'    => collect($notifications->items())->map(fn (PlatformNotification $n) => $this->notificationToMobileShape($n))->all(),
             'meta'    => [
                 'current_page' => $notifications->currentPage(),
                 'last_page'    => $notifications->lastPage(),
                 'total'        => $notifications->total(),
-                'unread'       => $request->user()->unreadNotifications()->count(),
+                'unread'       => PlatformNotification::where('user_id', $userId)->where('is_read', false)->count(),
             ],
         ]);
     }
 
     /**
      * PUT /api/mobile/notifications/{id}/read
+     *
+     * `{id}` is now the numeric `platform_notifications.id` (previously a
+     * UUID from the built-in table) — ownership-scoped via `user_id`, so a
+     * forged/foreign id returns 404 rather than mutating another user's row.
      */
     public function markNotificationRead(Request $request, string $id): JsonResponse
     {
-        $notification = $request->user()
-            ->notifications()
+        $notification = PlatformNotification::query()
+            ->where('user_id', $request->user()->id)
             ->where('id', $id)
             ->first();
 
@@ -209,9 +229,27 @@ class MobileController extends Controller
             return response()->json(['success' => false, 'message' => 'Notification not found.'], 404);
         }
 
-        $notification->markAsRead();
+        $notification->update(['is_read' => true, 'read_at' => $notification->read_at ?? now()]);
 
         return response()->json(['success' => true, 'message' => 'Marked as read.']);
+    }
+
+    private function notificationToMobileShape(PlatformNotification $n): array
+    {
+        return [
+            'id'              => (string) $n->id,
+            'type'            => $n->type,
+            'notifiable_type' => \App\Models\User::class,
+            'notifiable_id'   => $n->user_id,
+            'data'            => [
+                'type'    => $n->type,
+                'title'   => $n->title,
+                'message' => $n->message,
+                'url'     => $n->meta_url ?? $n->action_url,
+            ],
+            'read_at'    => optional($n->read_at)->toJSON(),
+            'created_at' => optional($n->created_at)->toJSON(),
+        ];
     }
 
     /**

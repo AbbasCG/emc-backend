@@ -283,6 +283,15 @@ Route::get(
     [\App\Http\Controllers\SubmissionDownloadController::class, 'instructorFile']
 )->name('instructor.submissions.file');
 
+// ─── Realtime broadcasting auth (Ticket 8 completion pass) ─────────────────────
+// The framework auto-registers GET/POST /broadcasting/auth under the "web"
+// (session-cookie) middleware group via bootstrap/app.php's `channels:`
+// routing entry — useless for this Bearer-token-only SPA/API. This exposes
+// the same channel-authorization logic (routes/channels.php) at
+// /api/broadcasting/auth under auth:sanctum instead, which the frontend
+// Echo client is configured to call with its Authorization header.
+\Illuminate\Support\Facades\Broadcast::routes(['middleware' => ['auth:sanctum'], 'guards' => ['sanctum']]);
+
 // ─── Notifications (auth:sanctum, any role) ───────────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/notifications',                   [NotificationController::class, 'index']);
@@ -290,6 +299,20 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/notifications/read-all',          [NotificationController::class, 'markAllRead']);
     Route::put('/notifications/{id}/read',         [NotificationController::class, 'markRead']);
     Route::delete('/notifications/{id}',           [NotificationController::class, 'delete']);
+    Route::post('/notifications/bulk',             [NotificationController::class, 'bulk']);
+    Route::put('/notifications/{id}/pin',          [NotificationController::class, 'pin']);
+    Route::put('/notifications/{id}/unpin',        [NotificationController::class, 'unpin']);
+    Route::put('/notifications/{id}/archive',      [NotificationController::class, 'archive']);
+    Route::put('/notifications/{id}/unarchive',    [NotificationController::class, 'unarchive']);
+
+    // ─── Push subscriptions (Ticket 8 completion pass) ─────────────────────────
+    Route::get('/push-subscriptions',    [\App\Http\Controllers\PushSubscriptionController::class, 'index']);
+    Route::post('/push-subscriptions',   [\App\Http\Controllers\PushSubscriptionController::class, 'store']);
+    Route::delete('/push-subscriptions', [\App\Http\Controllers\PushSubscriptionController::class, 'destroy']);
+
+    // ─── Notification quiet hours (Ticket 8 completion pass) ───────────────────
+    Route::get('/notifications/quiet-hours', [\App\Http\Controllers\NotificationPreferenceController::class, 'quietHours']);
+    Route::put('/notifications/quiet-hours', [\App\Http\Controllers\NotificationPreferenceController::class, 'updateQuietHours']);
 
     // Documents (auth:sanctum, any role; visibility enforced in controller)
     Route::get('/documents',  [DocumentController::class, 'index']);

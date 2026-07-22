@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Certificate;
 use App\Models\User;
+use App\Services\NotificationService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -19,6 +20,18 @@ use Illuminate\Support\Facades\Log;
  *
  * Usage:
  *   IssueCertificateJob::dispatch($certificate);
+ *
+ * Ticket 8 canonical-architecture audit note: as of this pass, no live code
+ * path dispatches this job (verified via a full-codebase grep for
+ * `IssueCertificateJob::dispatch` — only this docblock references it; the
+ * actual live certificate-issuance notification path is
+ * `CertificateService`/`CertificateAutomationService` calling
+ * `NotificationService::certificateIssued()` directly). Kept for any future
+ * caller, updated to route its own notification through the canonical
+ * `NotificationService::certificateIssued()` scenario rather than the
+ * deprecated `SendNotificationJob` (which wrote to the disjoint, unused
+ * Laravel built-in `notifications` table) — see
+ * docs/architecture/ADR_NOTIFICATION_ARCHITECTURE.md.
  */
 class IssueCertificateJob implements ShouldQueue
 {
@@ -48,11 +61,12 @@ class IssueCertificateJob implements ShouldQueue
 
             $user = $this->certificate->user;
             if ($user) {
-                SendNotificationJob::dispatch($user, 'certificate_issued', [
-                    'title'      => 'Your certificate is ready',
-                    'message'    => 'Congratulations! Your certificate has been issued.',
-                    'send_email' => true,
-                ]);
+                NotificationService::certificateIssued(
+                    $user->id,
+                    $this->certificate->id,
+                    $this->certificate->course?->title ?? '',
+                    $this->certificate->verification_code ?? '',
+                );
             }
 
             Log::info('[Certificate] IssueCertificateJob: issued', [

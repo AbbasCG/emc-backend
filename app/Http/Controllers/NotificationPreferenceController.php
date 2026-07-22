@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\NotificationPreference;
+use App\Models\NotificationQuietHours;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -65,5 +66,49 @@ class NotificationPreferenceController extends Controller
     {
         NotificationPreference::where('user_id', $request->user()->id)->delete();
         return response()->json(['success' => true, 'message' => 'Preferences reset to defaults.']);
+    }
+
+    /** GET /api/notifications/quiet-hours */
+    public function quietHours(Request $request): JsonResponse
+    {
+        $settings = NotificationQuietHours::where('user_id', $request->user()->id)->first();
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'enabled'    => $settings?->enabled ?? false,
+                'start_time' => $settings?->start_time,
+                'end_time'   => $settings?->end_time,
+                'timezone'   => $settings?->timezone ?? 'UTC',
+            ],
+        ]);
+    }
+
+    /**
+     * PUT /api/notifications/quiet-hours
+     *
+     * Body: { "enabled": true, "start_time": "22:00", "end_time": "07:00", "timezone": "Asia/Riyadh" }
+     * Overnight ranges (start > end) are valid and supported — see QuietHoursService.
+     */
+    public function updateQuietHours(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'enabled'    => 'required|boolean',
+            'start_time' => 'required_if:enabled,true|nullable|date_format:H:i',
+            'end_time'   => 'required_if:enabled,true|nullable|date_format:H:i',
+            'timezone'   => 'required_if:enabled,true|nullable|timezone',
+        ]);
+
+        NotificationQuietHours::updateOrCreate(
+            ['user_id' => $request->user()->id],
+            [
+                'enabled'    => $data['enabled'],
+                'start_time' => $data['start_time'] ?? null,
+                'end_time'   => $data['end_time'] ?? null,
+                'timezone'   => $data['timezone'] ?? 'UTC',
+            ],
+        );
+
+        return response()->json(['success' => true, 'message' => 'Quiet hours updated.']);
     }
 }

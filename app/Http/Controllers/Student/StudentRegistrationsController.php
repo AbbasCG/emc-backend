@@ -10,6 +10,7 @@ use App\Models\OralAssessmentBooking;
 use App\Models\PlacementTestAttempt;
 use App\Models\Registration;
 use App\Models\StudentProgress;
+use App\Services\CourseAccessEligibilityService;
 use App\Services\PlacementProgressService;
 use App\Support\CourseComputedStatus;
 use Illuminate\Http\JsonResponse;
@@ -17,7 +18,10 @@ use Illuminate\Http\Request;
 
 class StudentRegistrationsController extends Controller
 {
-    public function __construct(private readonly PlacementProgressService $placement) {}
+    public function __construct(
+        private readonly PlacementProgressService $placement,
+        private readonly CourseAccessEligibilityService $eligibility,
+    ) {}
 
     /**
      * GET /api/student/registrations
@@ -51,6 +55,12 @@ class StudentRegistrationsController extends Controller
                 ?? ($reg->course?->type === 'free' ? 'free' : null),
             'registered_at'  => $reg->created_at,
             'next_session'   => $nextSessionsMap[$reg->course_id] ?? null,
+            // Production hotfix — canonical payment/placement access block.
+            // Never absent: the "pending" tab renders straight off registrations
+            // regardless of status, so every row (including pending_payment
+            // ones) needs an honest, backend-derived eligibility answer, not a
+            // frontend guess based on the registration existing.
+            'access'         => $reg->course ? $this->eligibility->forUserAndCourse($user, $reg->course) : null,
             'course'         => $reg->course ? [
                 'id'           => $reg->course->id,
                 'title'        => $reg->course->title,
@@ -153,7 +163,7 @@ class StudentRegistrationsController extends Controller
             ->keyBy(fn ($cgs) => $cgs->classGroup->course_id);
 
         $data = $registrations->map(function ($reg) use (
-            $progressMap, $certificateMap, $nextSessionsMap, $attemptMap, $bookingMap, $classAssignmentMap
+            $user, $progressMap, $certificateMap, $nextSessionsMap, $attemptMap, $bookingMap, $classAssignmentMap
         ) {
             $course  = $reg->course;
             $attempt = $attemptMap->get($reg->course_id);
@@ -218,6 +228,11 @@ class StudentRegistrationsController extends Controller
                 'requires_placement_test' => $requiresPlacement,
                 'placement_progress'      => $placementProgress,
                 'can_start_learning'      => $canStartLearning,
+                // Production hotfix — same canonical access block as
+                // index(); always enrollment_active here since this
+                // endpoint is already scoped to activeEnrollment(), but
+                // exposed for a single, uniform frontend contract.
+                'access'                  => $course ? $this->eligibility->forUserAndCourse($user, $course) : null,
                 // Class group assignment (null until instructor assigns)
                 'class_assignment'        => $cg ? [
                     'class_group_id'  => $cg->id,

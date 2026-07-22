@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Student;
 
+use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\OralAssessmentBookingResource;
 use App\Models\Course;
@@ -139,14 +140,21 @@ class StudentOralAssessmentController extends Controller
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
+    /**
+     * Production hotfix — same root cause and fix as
+     * StudentPlacementTestController::requireEnrollment(): the previous
+     * hand-rolled Rejected/Cancelled check let a payment-pending
+     * registration count as enrolled. Now uses the canonical
+     * RegistrationStatus::activeEnrollment() allowlist.
+     */
     private function requireEnrollment(Request $request, Course $course): void
     {
         $enrolled = Registration::where('user_id', $request->user()->id)
             ->where('course_id', $course->id)
-            ->whereNotIn('status', ['Rejected', 'Cancelled'])
+            ->whereIn('status', RegistrationStatus::activeEnrollment())
             ->exists();
 
-        abort_unless($enrolled, 403, 'يجب التسجيل في الدورة أولاً.');
+        abort_unless($enrolled, 403, 'يجب إكمال التسجيل والدفع للدورة أولاً.');
     }
 
     /** Returns the completed attempt or aborts 422. */

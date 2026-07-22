@@ -18,6 +18,8 @@ class PlatformNotificationResource extends JsonResource
             'color'       => $this->color,
             'is_read'     => (bool) $this->is_read,
             'read_at'     => $this->read_at,
+            'pinned'      => (bool) $this->pinned,
+            'archived_at' => $this->archived_at,
             'action_url'  => $this->action_url,
             // External action link (e.g. a meeting URL) — always validated to
             // http(s) at write time in NotificationService, never raw HTML.

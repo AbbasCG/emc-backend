@@ -11,6 +11,7 @@ use App\Models\ClassGroupStudent;
 use App\Models\Course;
 use App\Models\LearningPathEnrollment;
 use App\Models\Registration;
+use App\Services\CourseAccessEligibilityService;
 use App\Services\CourseAssignmentBridgeService;
 use App\Services\StudentModuleProgressService;
 use App\Support\AssignmentSubmissionStatus;
@@ -31,6 +32,7 @@ class StudentLearnController extends Controller
         int $courseId,
         CourseAssignmentBridgeService $bridge,
         StudentModuleProgressService $progressSvc,
+        CourseAccessEligibilityService $eligibility,
     ): JsonResponse {
         $user = $request->user();
 
@@ -50,9 +52,19 @@ class StudentLearnController extends Controller
         }
 
         if (! $enrolled) {
+            // Production hotfix: distinguish "never registered" from
+            // "registered but payment not confirmed" so the frontend can
+            // show the correct payment-required view instead of a generic
+            // "not enrolled" message for a student who did register but
+            // hasn't paid yet.
+            $course = Course::find($courseId);
+            $access = $course ? $eligibility->forUserAndCourse($user, $course) : null;
+
             return response()->json([
-                'success' => false,
-                'message' => 'You are not enrolled in this course.',
+                'success'          => false,
+                'message'          => 'You are not enrolled in this course.',
+                'placement_status' => $access['block_reason'] ?? 'no_registration',
+                'access'           => $access,
             ], 403);
         }
 

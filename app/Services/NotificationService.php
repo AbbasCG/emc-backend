@@ -30,11 +30,28 @@ class NotificationService
      * If a notification with the same (type, entity_id, user_id) was created
      * within this many seconds, the new one is silently skipped.
      * Prevents double-sends caused by mis-configured double event registration.
+     *
+     * Referenced by SendPlatformNotificationJob (the actual dedup check lives
+     * there) — this is the single source of truth for the window value.
+     * Previously declared but unused: the job hardcoded its own literal `10`.
      */
-    private const DEDUP_WINDOW_SECONDS = 10;
+    public const DEDUP_WINDOW_SECONDS = 10;
+
+    /** The channel key NotificationPreference rows use for in-app PlatformNotification delivery. */
+    public const IN_APP_CHANNEL = 'in_app';
 
     // ── Core send ────────────────────────────────────────────────────────────
 
+    /**
+     * @param  array  $extra  Recognized keys include (all optional): entity_type, entity_id,
+     *   action_url, meta_url, icon, color, created_by, and idempotency_key. `idempotency_key`
+     *   is an explicit opt-in deterministic dedup key (Step 11 of the canonical-architecture
+     *   pass) — when supplied, SendPlatformNotificationJob dedups by (user_id, type,
+     *   idempotency_key) instead of the legacy time-window check, so the same semantic event
+     *   can never double-insert regardless of timing, while a distinct key for a legitimate
+     *   repeat event (e.g. a later assignment resubmission) still creates a new row. Callers
+     *   that omit it keep the original, unchanged time-window+lock dedup behavior.
+     */
     public static function send(
         int|array $userIds,
         string $type,
@@ -110,6 +127,7 @@ class NotificationService
             [
                 'entity_type' => 'course',
                 'entity_id'   => $courseId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('course_created', $courseId),
                 'action_url'  => "/admin/courses/{$courseId}",
                 'icon'        => 'book-open',
                 'color'       => 'green',
@@ -126,6 +144,9 @@ class NotificationService
             [
                 'entity_type' => 'course',
                 'entity_id'   => $courseId,
+                // Recipient (instructorUserId) is already isolated by the
+                // dedup query's own user_id filter — not embedded in the key.
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('instructor_assigned', $courseId),
                 'action_url'  => "/instructor/courses/{$courseId}",
                 'icon'        => 'user-check',
                 'color'       => 'blue',
@@ -142,6 +163,7 @@ class NotificationService
             [
                 'entity_type' => 'workshop',
                 'entity_id'   => $workshopId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('workshop_instructor_assigned', $workshopId),
                 'action_url'  => "/instructor/workshops/{$workshopId}",
                 'icon'        => 'clipboard-list',
                 'color'       => 'indigo',
@@ -164,6 +186,9 @@ class NotificationService
             [
                 'entity_type' => 'course',
                 'entity_id'   => $courseId,
+                // Class C — a genuinely new date is a new, real event; a
+                // retry of the same update dedups via the normalized date.
+                'idempotency_key' => NotificationIdempotencyKey::forScheduleChange('course_date_updated', $courseId, $newDate),
                 'action_url'  => "/courses/{$courseId}",
                 'icon'        => 'calendar',
                 'color'       => 'yellow',
@@ -181,6 +206,7 @@ class NotificationService
             [
                 'entity_type' => 'course',
                 'entity_id'   => $courseId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('registration_opened', $courseId),
                 'action_url'  => "/admin/courses/{$courseId}",
                 'icon'        => 'lock-open',
                 'color'       => 'green',
@@ -256,6 +282,7 @@ class NotificationService
             [
                 'entity_type' => 'registration',
                 'entity_id'   => $registrationId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('registration_confirmed', $registrationId),
                 'action_url'  => "/student/registrations/{$registrationId}",
                 'icon'        => 'badge-check',
                 'color'       => 'green',
@@ -271,6 +298,7 @@ class NotificationService
             [
                 'entity_type' => 'workshop_request',
                 'entity_id'   => $requestId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('workshop_request_submitted', $requestId),
                 'action_url'  => "/admin/workshop-requests/{$requestId}",
                 'icon'        => 'inbox',
                 'color'       => 'purple',
@@ -307,6 +335,9 @@ class NotificationService
             [
                 'entity_type' => 'workshop_request',
                 'entity_id'   => $requestId,
+                // Class C — the same request legitimately moves through
+                // several steps; each step number is a distinct real event.
+                'idempotency_key' => NotificationIdempotencyKey::forEntityWithComponent('workshop_request_step', $requestId, $stepNumber),
                 'action_url'  => "/dashboard/admin/workshop-requests/{$requestId}",
                 'icon'        => 'clipboard-check',
                 'color'       => 'blue',
@@ -326,6 +357,7 @@ class NotificationService
             [
                 'entity_type' => 'workshop_request',
                 'entity_id'   => $requestId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('workshop_request_rejected', $requestId),
                 'action_url'  => "/dashboard/admin/workshop-requests/{$requestId}",
                 'icon'        => 'x-circle',
                 'color'       => 'red',
@@ -346,6 +378,7 @@ class NotificationService
             [
                 'entity_type' => 'course',
                 'entity_id'   => $courseId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('course_cancelled', $courseId),
                 'action_url'  => "/courses/{$courseId}",
                 'icon'        => 'x-circle',
                 'color'       => 'red',
@@ -366,6 +399,7 @@ class NotificationService
             [
                 'entity_type' => 'course',
                 'entity_id'   => $courseId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('course_completed', $courseId),
                 'action_url'  => "/courses/{$courseId}",
                 'icon'        => 'academic-cap',
                 'color'       => 'green',
@@ -381,6 +415,7 @@ class NotificationService
             [
                 'entity_type' => 'user',
                 'entity_id'   => $userId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('account_created', $userId),
                 'action_url'  => '/profile',
                 'icon'        => 'user',
                 'color'       => 'blue',
@@ -441,6 +476,7 @@ class NotificationService
             [
                 'entity_type' => 'volunteer_request',
                 'entity_id'   => $requestId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('volunteer_request_submitted', $requestId),
                 'action_url'  => "/dashboard/super-admin/volunteer-requests/{$requestId}",
                 'icon'        => 'hand-raised',
                 'color'       => 'green',
@@ -488,6 +524,7 @@ class NotificationService
             [
                 'entity_type' => 'team_profile',
                 'entity_id'   => $memberId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('volunteer_converted', $requestId),
                 'action_url'  => "/dashboard/super-admin/volunteer-requests/{$requestId}",
                 'icon'        => 'user-plus',
                 'color'       => 'blue',
@@ -512,6 +549,16 @@ class NotificationService
             [
                 'entity_type' => 'course',
                 'entity_id'   => $courseId,
+                // Class C in principle (a later re-assignment to a
+                // different instructor is a real, distinct event), but the
+                // method receives no distinguishing value beyond courseId
+                // (its sole caller, InstructorAssignedListener, does not
+                // pass one) — keyed on courseId alone. Known, accepted
+                // limitation: two instructor re-assignments for the same
+                // course within the 10s-equivalent window would dedup;
+                // extremely rare in practice and not worth a signature
+                // change for this pass.
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('course_schedule_updated', $courseId),
                 'action_url'  => '/dashboard/student/courses',
                 'icon'        => 'calendar',
                 'color'       => 'blue',
@@ -535,6 +582,13 @@ class NotificationService
             [
                 'entity_type' => 'course',
                 'entity_id'   => $courseId,
+                // No attempt/student id is passed to this method (only the
+                // display name) — best available deterministic identity is
+                // course + student name. Known limitation: two students
+                // sharing an identical display name in the same course
+                // would collide; judged acceptable rather than widening
+                // this method's signature for this pass.
+                'idempotency_key' => NotificationIdempotencyKey::fromComponents('placement_test_completed', [$courseId, $studentName]),
                 'action_url'  => "/dashboard/instructor/courses/{$courseId}/placement-students",
                 'icon'        => 'academic-cap',
                 'color'       => 'purple',
@@ -565,6 +619,12 @@ class NotificationService
             "تم إكمال تقييمك الشفهي لدورة \"{$courseTitle}\" ومستواك المحدد هو: {$finalLevel}",
             [
                 'entity_type' => 'course',
+                // No entity id is passed to this method — course title is
+                // the only stable-enough distinguishing value available; a
+                // student re-taking an oral assessment for the exact same
+                // course title would dedup (in this platform's flow, one
+                // oral assessment per course is the expected occurrence).
+                'idempotency_key' => NotificationIdempotencyKey::fromComponents('oral_assessment_completed', [$courseTitle]),
                 'action_url'  => '/dashboard/student/courses',
                 'icon'        => 'check-circle',
                 'color'       => 'green',
@@ -588,6 +648,9 @@ class NotificationService
             $message,
             [
                 'entity_type' => 'course',
+                // Class C — a genuinely new status is a new event; a retry
+                // of the same status change dedups.
+                'idempotency_key' => NotificationIdempotencyKey::fromComponents('oral_assessment_status_changed', [$courseTitle, $statusLabel]),
                 'action_url'  => '/dashboard/student/courses',
                 'icon'        => 'microphone',
                 'color'       => 'amber',
@@ -606,6 +669,9 @@ class NotificationService
             "تم نقل موعد مقابلتك الشفهية لدورة \"{$courseTitle}\" إلى: {$newSlotDatetime}",
             [
                 'entity_type' => 'course',
+                // Class C — a genuinely new slot is a new event; a retry of
+                // the same reschedule to the same slot dedups.
+                'idempotency_key' => NotificationIdempotencyKey::fromComponents('oral_assessment_rescheduled', [$courseTitle, $newSlotDatetime]),
                 'action_url'  => '/dashboard/student/courses',
                 'icon'        => 'calendar',
                 'color'       => 'blue',
@@ -670,6 +736,12 @@ class NotificationService
             $message,
             [
                 'entity_type' => 'class_group',
+                // No class_group_id is passed to this method — class name +
+                // course title is the best available deterministic
+                // identity. Known limitation: two identically-named class
+                // groups in the same course would collide; not expected in
+                // practice (class names are chosen to be distinct).
+                'idempotency_key' => NotificationIdempotencyKey::fromComponents('class_group_assigned', [$classGroupName, $courseTitle]),
                 'action_url'  => '/dashboard/student/courses',
                 'icon'        => 'users',
                 'color'       => 'green',
@@ -689,6 +761,7 @@ class NotificationService
             "تم إلحاق الطالب {$studentName} تلقائيًا بفصلك \"{$classGroupName}\" في دورة \"{$courseTitle}\".",
             [
                 'entity_type' => 'class_group',
+                'idempotency_key' => NotificationIdempotencyKey::fromComponents('class_group_student_assigned', [$classGroupName, $studentName]),
                 'action_url'  => '/dashboard/instructor/classes',
                 'icon'        => 'users',
                 'color'       => 'blue',
@@ -727,6 +800,16 @@ class NotificationService
             [
                 'entity_type' => 'assignment_submission',
                 'entity_id'   => $submissionId,
+                // Class C (occurrence-specific) — the same submission can
+                // legitimately be re-graded (a resubmission cycle, or an
+                // instructor correcting a score), and each distinct score
+                // is a real, separate notification-worthy event; keying on
+                // score alone (not a review/version id, which the schema
+                // does not currently track) is an approximation — two
+                // re-grades that happen to land on the identical score
+                // would still dedup. Documented, not silently claimed as a
+                // perfect key.
+                'idempotency_key' => "assignment_graded:{$submissionId}:{$scoreLabel}",
                 'action_url'  => "/dashboard/student/assignments/{$submissionId}",
                 'icon'        => 'academic-cap',
                 'color'       => 'green',
@@ -764,9 +847,37 @@ class NotificationService
             [
                 'entity_type' => 'certificate',
                 'entity_id'   => $certificateId,
+                // Class A (deterministically idempotent) — a given certificate
+                // is issued once; the key is stable per-certificate forever.
+                'idempotency_key' => "certificate_issued:{$certificateId}",
                 'action_url'  => "/dashboard/student/certificates",
                 'icon'        => 'badge-check',
                 'color'       => 'yellow',
+            ]
+        );
+    }
+
+    /**
+     * Notify a user that a report they requested has finished generating.
+     * Triggered by: GenerateReportJob::handle() — the canonical replacement
+     * for that job's prior direct SendNotificationJob call (Ticket 8
+     * canonical-architecture pass; report_ready now writes to
+     * platform_notifications like every other scenario, not the disjoint
+     * built-in `notifications` table).
+     */
+    public static function reportReady(int $userId, int $reportId): void
+    {
+        self::send($userId, 'report_ready',
+            'تقريرك جاهز',
+            "تم إنشاء التقرير رقم #{$reportId} بنجاح.",
+            [
+                'entity_type' => 'report',
+                'entity_id'   => $reportId,
+                // Class A — a given report finishes generating once.
+                'idempotency_key' => "report_ready:{$reportId}",
+                'action_url'  => '/dashboard/reports',
+                'icon'        => 'file-text',
+                'color'       => 'blue',
             ]
         );
     }
@@ -798,6 +909,8 @@ class NotificationService
             [
                 'entity_type' => 'course_assignment',
                 'entity_id'   => $courseAssignmentId,
+                // Class A — a given course assignment is created once.
+                'idempotency_key' => "assignment_created:{$courseAssignmentId}",
                 'action_url'  => "/dashboard/student/assignments",
                 'icon'        => 'clipboard-list',
                 'color'       => 'orange',
@@ -831,6 +944,9 @@ class NotificationService
             [
                 'entity_type' => 'course_assignment',
                 'entity_id'   => $courseAssignmentId,
+                // Class C — a genuinely new deadline is a new event; a
+                // retry of the same deadline change dedups.
+                'idempotency_key' => NotificationIdempotencyKey::forScheduleChange('assignment_deadline_changed', $courseAssignmentId, $newDeadline),
                 'action_url'  => "/dashboard/student/assignments",
                 'icon'        => 'clipboard-list',
                 'color'       => 'yellow',
@@ -959,6 +1075,14 @@ class NotificationService
             [
                 'entity_type' => 'course',
                 'entity_id'   => $courseId,
+                // Class C — a course can legitimately schedule many sessions,
+                // and an update to the same session's time is itself a
+                // separate notification-worthy event; keying on the actual
+                // new start time (plus create-vs-update) means a genuinely
+                // new session or a genuine reschedule always gets its own
+                // key, while a duplicate dispatch of the exact same
+                // create/update event still dedups.
+                'idempotency_key' => "session_scheduled:{$courseId}:" . ($startsAt ?? 'unscheduled') . ':' . ($isUpdate ? 'update' : 'create'),
                 'action_url'  => "/dashboard/student/sessions",
                 'icon'        => 'video-camera',
                 'color'       => 'indigo',
@@ -1102,6 +1226,7 @@ class NotificationService
             [
                 'entity_type' => 'class_announcement',
                 'entity_id'   => $announcementId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('class_announcement_published', $announcementId),
                 'action_url'  => "/dashboard/student/classes/{$classGroupId}/announcements",
                 'icon'        => 'megaphone',
                 'color'       => 'blue',
@@ -1201,6 +1326,7 @@ class NotificationService
             [
                 'entity_type' => 'learning_path',
                 'entity_id'   => $pathId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('learning_path_enrolled', $pathId),
                 'action_url'  => "/dashboard/student/learning-paths/{$pathId}",
                 'icon'        => 'map',
                 'color'       => 'green',
@@ -1234,6 +1360,7 @@ class NotificationService
             [
                 'entity_type' => 'learning_path',
                 'entity_id'   => $pathId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('learning_path_completed', $pathId),
                 'action_url'  => "/dashboard/student/certificates",
                 'icon'        => 'trophy',
                 'color'       => 'yellow',
@@ -1266,6 +1393,7 @@ class NotificationService
             [
                 'entity_type' => 'course',
                 'entity_id'   => $courseId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('course_student_completed', $courseId),
                 'action_url'  => "/dashboard/student/certificates",
                 'icon'        => 'academic-cap',
                 'color'       => 'green',
@@ -1315,6 +1443,7 @@ class NotificationService
             [
                 'entity_type' => 'ambassador_application',
                 'entity_id'   => $applicationId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('ambassador_application_submitted', $applicationId),
                 'action_url'  => "/dashboard/super-admin/ambassador-applications/{$applicationId}",
                 'icon'        => 'star',
                 'color'       => 'blue',
@@ -1367,6 +1496,9 @@ class NotificationService
             [
                 'entity_type' => 'ambassador_application',
                 'entity_id'   => $applicationId,
+                // Class C — a genuinely new status is a new event; a retry
+                // of the same transition dedups.
+                'idempotency_key' => NotificationIdempotencyKey::forStatusTransition('ambassador_status_changed', $applicationId, $newStatus),
                 'action_url'  => "/dashboard/super-admin/ambassador-applications/{$applicationId}",
                 'icon'        => 'refresh-cw',
                 'color'       => 'orange',
@@ -1395,6 +1527,16 @@ class NotificationService
             [
                 'entity_type' => 'course_module',
                 'entity_id'   => $moduleId,
+                // Class A for its first activation. Deactivate-then-later-
+                // reactivate is an explicit product decision this pass does
+                // not make on its own: the key below means only the FIRST
+                // activation notifies a given recipient — a later
+                // reactivation of the same module is treated as the same
+                // occurrence and stays deduplicated, not re-notified. If a
+                // future product decision wants reactivation to notify
+                // again, the key needs a real activation-version/timestamp
+                // component, which the schema does not currently track.
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('module_activated', $moduleId),
                 'action_url'  => "/dashboard/student/courses/{$courseId}/modules",
                 'icon'        => 'layers',
                 'color'       => 'blue',
@@ -1415,6 +1557,9 @@ class NotificationService
             [
                 'entity_type' => 'lesson',
                 'entity_id'   => $lessonId,
+                // Same explicit only-first-activation decision as
+                // moduleActivated() above — see its comment.
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('lesson_activated', $lessonId),
                 'action_url'  => "/dashboard/student/lessons/{$lessonId}",
                 'icon'        => 'book-open',
                 'color'       => 'blue',
@@ -1463,6 +1608,8 @@ class NotificationService
             [
                 'entity_type' => 'course_material',
                 'entity_id'   => $material->id,
+                // Class A — a given material becoming visible is a single event.
+                'idempotency_key' => "material_visible:{$material->id}",
                 'action_url'  => "/dashboard/student/materials",
                 'icon'        => 'file-text',
                 'color'       => 'blue',

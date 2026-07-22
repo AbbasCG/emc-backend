@@ -48,9 +48,18 @@ class CourseSessionResource extends JsonResource
             // Aliases
             'starts_at'     => $startAt?->toISOString(),
             'ends_at'       => $endAt?->toISOString(),
-            'session_date'  => $startAt?->setTimezone('Europe/Amsterdam')->toDateString(),
-            'start_time'    => $startAt?->setTimezone('Europe/Amsterdam')->format('H:i'),
-            'end_time'      => $endAt?->setTimezone('Europe/Amsterdam')->format('H:i'),
+            // session_date/start_time/end_time are wall-clock values: the
+            // controller builds start_at/end_at as a naive "{date} {time}:00"
+            // string with no real timezone conversion (see store()/update()),
+            // so Carbon's own components already ARE the entered Amsterdam
+            // wall-clock time. Calling ->setTimezone('Europe/Amsterdam') here
+            // re-interpreted that naive value as a UTC instant (app.timezone
+            // is UTC) and shifted it by the DST offset — the actual root
+            // cause of the admin session card's +2-hour display bug. Do not
+            // reintroduce a timezone conversion on these three fields.
+            'session_date'  => $startAt?->toDateString(),
+            'start_time'    => $startAt?->format('H:i'),
+            'end_time'      => $endAt?->format('H:i'),
             // Location
             'location_type' => $this->location_type,
             'location'      => $this->location,

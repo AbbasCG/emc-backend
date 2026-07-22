@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Report;
 use App\Models\User;
+use App\Services\NotificationService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -19,6 +20,14 @@ use Illuminate\Support\Facades\Log;
  *
  * Usage:
  *   GenerateReportJob::dispatch($report, $requestedBy);
+ *
+ * Ticket 8 canonical-architecture audit note: as of this pass, no live code
+ * path dispatches this job (verified via a full-codebase grep for
+ * `GenerateReportJob::dispatch` — only this docblock references it). Kept
+ * for any future caller, updated to route its own notification through the
+ * new canonical `NotificationService::reportReady()` scenario rather than
+ * the deprecated `SendNotificationJob` — see
+ * docs/architecture/ADR_NOTIFICATION_ARCHITECTURE.md.
  */
 class GenerateReportJob implements ShouldQueue
 {
@@ -50,10 +59,7 @@ class GenerateReportJob implements ShouldQueue
             }
 
             if ($this->requestedBy) {
-                SendNotificationJob::dispatch($this->requestedBy, 'report_ready', [
-                    'title'   => 'Report ready',
-                    'message' => "Report #{$this->report->id} has been generated.",
-                ]);
+                NotificationService::reportReady($this->requestedBy->id, $this->report->id);
             }
         } catch (\Throwable $e) {
             Log::error('GenerateReportJob failed', [

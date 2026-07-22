@@ -60,23 +60,28 @@ class NotificationDispatcher
         };
     }
 
+    /**
+     * Ticket 8 canonical-architecture pass: previously wrote directly to
+     * Laravel's built-in `notifications` table — a second, disjoint in-app
+     * notification store, invisible to the Notification Center, dedup,
+     * preferences, and pin/archive/search/bulk actions. Now routes through
+     * the one canonical write path (`NotificationService::send()` →
+     * `SendPlatformNotificationJob` → `platform_notifications`), so an
+     * automation-triggered in-app notification is indistinguishable from
+     * every other scenario's notification once created — same store, same
+     * preference enforcement, same dedup, same Notification Center UI.
+     */
     private function dispatchInApp(User $user, string $type, array $variables): void
     {
         $rendered = NotificationTemplate::render($type, 'in_app', $variables)
             ?? ['subject' => null, 'content' => $type];
 
-        // Write directly to the notifications table (fast, no queue needed for in-app)
-        $user->notifications()->create([
-            'id'              => \Illuminate\Support\Str::uuid(),
-            'type'            => $type,
-            'notifiable_type' => User::class,
-            'notifiable_id'   => $user->id,
-            'data'            => [
-                'type'    => $type,
-                'title'   => $rendered['subject'] ?? $type,
-                'message' => $rendered['content'],
-            ],
-        ]);
+        \App\Services\NotificationService::send(
+            $user->id,
+            $type,
+            $rendered['subject'] ?? $type,
+            $rendered['content'] ?? $type,
+        );
     }
 
     private function dispatchEmail(User $user, string $type, array $variables): void
