@@ -50,6 +50,11 @@ class EmailSetting extends Model
             // Certificate
             'certificate_ready', 'certificate_rejected', 'certificate_revoked',
             'certificate_needs_approval', 'certificate_pdf_failed',
+            // Applications (Ambassador)
+            'ambassador_confirmation', 'ambassador_admin_notification', 'ambassador_status_changed',
+            // Oral Assessment
+            'oral_assessment_booking_confirmed', 'oral_assessment_meeting_link_updated',
+            'oral_assessment_instructor_message',
         ];
         foreach ($keys as $key) {
             Cache::forget("email_setting_{$key}");

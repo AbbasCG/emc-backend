@@ -1253,6 +1253,40 @@ class NotificationService
         );
     }
 
+    /**
+     * Notify a student that the instructor added, changed, or removed the
+     * meeting link for their already-booked oral assessment. Keyed so a
+     * distinct notification is kept per (booking, link value) — a genuine
+     * link change is a new, real event, not a retry of the same one.
+     */
+    public static function oralAssessmentMeetingLinkUpdated(
+        int $studentUserId,
+        string $courseTitle,
+        int $bookingId,
+        ?string $meetingLink,
+    ): void {
+        $message = $meetingLink
+            ? "تم تحديث رابط اجتماع مقابلتك الشفهية لدورة \"{$courseTitle}\"."
+            : "تمت إزالة رابط اجتماع مقابلتك الشفهية لدورة \"{$courseTitle}\" مؤقتًا. سيتم إضافته قريبًا.";
+
+        self::send($studentUserId, 'oral_assessment_meeting_link_updated',
+            'تحديث رابط الاجتماع',
+            $message,
+            [
+                'entity_type' => 'oral_assessment_booking',
+                'entity_id'   => $bookingId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntityWithComponent(
+                    'oral_assessment_meeting_link_updated',
+                    $bookingId,
+                    $meetingLink ?? 'removed',
+                ),
+                'action_url' => '/dashboard/student/courses',
+                'icon'       => 'link',
+                'color'      => 'blue',
+            ]
+        );
+    }
+
     // Maps a workflow department key to platform roles for notification fallback.
     private static function rolesForWorkflowDepartment(string $departmentKey): array
     {

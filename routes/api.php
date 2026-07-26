@@ -435,6 +435,7 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:instructor,admin'
     // ── Oral-interview booking detail & post-booking actions ──────────────────
     Route::get(  '/oral-bookings/{booking}',              [InstructorOralBookingController::class, 'show']);
     Route::patch('/oral-bookings/{booking}/status',        [InstructorOralBookingController::class, 'updateStatus']);
+    Route::patch('/oral-bookings/{booking}/meeting-link',  [InstructorOralBookingController::class, 'updateMeetingLink']);
     Route::post( '/oral-bookings/{booking}/message',        [InstructorOralBookingController::class, 'sendMessage']);
     Route::post( '/oral-bookings/{booking}/reschedule',      [InstructorOralBookingController::class, 'reschedule']);
 
@@ -887,9 +888,9 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::delete('api-tokens/{id}',                 [ApiTokenController::class, 'destroy']);
 
     // ── Email settings & logs ─────────────────────────────────────────────────
+    // Read-only for the broader admin group above; modifying settings is
+    // restricted below to super_admin/executive_admin only.
     Route::get('email-settings',            [EmailSettingsController::class, 'index']);
-    Route::put('email-settings',            [EmailSettingsController::class, 'update']);
-    Route::post('email-settings/test',      [EmailSettingsController::class, 'test']);
     Route::get('email-logs',                [EmailLogsController::class, 'index']);
     Route::get('email-logs/stats',          [EmailLogsController::class, 'stats']);
     Route::get('email-logs/chart',          [EmailLogsController::class, 'chart']);
@@ -1711,4 +1712,12 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,marketing_
     Route::patch('product-updates/{productUpdate}',             [ProductUpdateController::class, 'update']);
     Route::delete('product-updates/{productUpdate}',            [ProductUpdateController::class, 'destroy']);
     Route::post('product-updates/{productUpdate}/publish',      [ProductUpdateController::class, 'publish']);
+});
+
+// ─── Email Automation Center — write access restricted to Super Admin / ─────
+// Executive Admin only; broader admin roles keep GET (read-only) access via
+// the 'admin,super_admin,tech_admin' group above.
+Route::middleware(['auth:sanctum', 'role:super_admin,executive_admin'])->prefix('admin')->group(function () {
+    Route::put('email-settings',            [EmailSettingsController::class, 'update']);
+    Route::post('email-settings/test',      [EmailSettingsController::class, 'test']);
 });

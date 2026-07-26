@@ -11,12 +11,17 @@ use App\Models\OralAssessmentSlot;
 use App\Models\PlacementTestAttempt;
 use App\Models\Registration;
 use App\Services\NotificationService;
+use App\Services\OralAssessmentSchedulingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class StudentOralAssessmentController extends Controller
 {
+    public function __construct(private readonly OralAssessmentSchedulingService $scheduling)
+    {
+    }
+
     // ─── GET /api/student/courses/{course}/oral-assessment/slots ─────────────
     //
     // Returns future available slots scoped to the course's assigned instructor.
@@ -130,6 +135,11 @@ class StudentOralAssessmentController extends Controller
                 $slotDatetime,
             );
         }
+
+        // Calendar events (student + instructor), confirmation emails with
+        // ICS attached, and Google Calendar sync — all via the existing
+        // CalendarService/EmailService/queue, never a second scheduling system.
+        $this->scheduling->bookingConfirmed($booking);
 
         return response()->json([
             'success' => true,

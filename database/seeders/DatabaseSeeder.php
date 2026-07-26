@@ -24,6 +24,11 @@ class DatabaseSeeder extends Seeder
             DemoUserSeeder::class,
         ]);
 
+        // ── Finance: system-managed payment-gateway accounts (idempotent) ──────
+        $this->call([
+            FinanceSystemAccountsSeeder::class,
+        ]);
+
         // ── Users ────────────────────────────────────────────────────────────
         $admin = User::where('email', 'admin@emc.test')->first()
             ?? User::where('role', 'admin')->first();

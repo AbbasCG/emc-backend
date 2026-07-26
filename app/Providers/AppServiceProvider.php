@@ -99,6 +99,13 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(\App\AI\Services\AiInsightService::class, function ($app) {
             return new \App\AI\Services\AiInsightService($app->make(\App\AI\AiManager::class));
         });
+
+        // Bound (not `new`'d ad hoc) so tests can swap in a fake without a
+        // real Stripe network call — see StripePaymentMethodResolver.
+        $this->app->singleton(\Stripe\StripeClient::class, function () {
+            return new \Stripe\StripeClient((string) config('services.stripe.secret'));
+        });
+        $this->app->singleton(\App\Services\Payments\StripePaymentMethodResolver::class);
     }
 
     public function boot(): void

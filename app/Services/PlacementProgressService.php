@@ -130,16 +130,26 @@ class PlacementProgressService
         $slot       = $booking->relationLoaded('slot')       ? $booking->slot       : null;
         $instructor = $booking->relationLoaded('instructor') ? $booking->instructor : null;
 
+        // Reuses the same CalendarEvent row OralAssessmentSchedulingService
+        // creates on booking — lets the frontend offer an ICS download
+        // without a new endpoint, matching the polymorphic eventable lookup
+        // pattern used everywhere else calendar events are queried.
+        $calendarEventId = \App\Models\CalendarEvent::where('eventable_type', OralAssessmentBooking::class)
+            ->where('eventable_id', $booking->id)
+            ->where('user_id', $booking->user_id)
+            ->value('id');
+
         return [
-            'id'               => $booking->id,
-            'status'           => $booking->status,
-            'starts_at'        => $slot?->starts_at->toIso8601String(),
-            'ends_at'          => $slot?->ends_at->toIso8601String(),
-            'meeting_link'     => $slot?->meeting_link,
-            'instructor_name'  => $instructor?->user?->name ?? $instructor?->name,
-            'final_level'      => $booking->final_level,
-            'oral_score'       => $booking->oral_score,
-            'instructor_notes' => $booking->instructor_notes,
+            'id'                => $booking->id,
+            'status'            => $booking->status,
+            'starts_at'         => $slot?->starts_at->toIso8601String(),
+            'ends_at'           => $slot?->ends_at->toIso8601String(),
+            'meeting_link'      => $slot?->meeting_link,
+            'instructor_name'   => $instructor?->user?->name ?? $instructor?->name,
+            'final_level'       => $booking->final_level,
+            'oral_score'        => $booking->oral_score,
+            'instructor_notes'  => $booking->instructor_notes,
+            'calendar_event_id' => $calendarEventId,
         ];
     }
 

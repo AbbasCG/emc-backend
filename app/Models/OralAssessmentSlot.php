@@ -17,6 +17,7 @@ class OralAssessmentSlot extends Model
         'booked_by',
         'booking_status',
         'meeting_link',
+        'meeting_provider',
         'notes',
     ];
 

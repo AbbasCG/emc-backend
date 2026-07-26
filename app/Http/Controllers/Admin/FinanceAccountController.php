@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Exceptions\ProtectedFinanceAccountException;
 use App\Http\Controllers\Controller;
 use App\Models\FinanceAccount;
 use App\Models\FinanceAccountTransaction;
@@ -84,7 +85,12 @@ class FinanceAccountController extends Controller
 
         $old = $account->toArray();
         $data['updated_by'] = $request->user()?->id;
-        $account->update($data);
+
+        try {
+            $account->update($data);
+        } catch (ProtectedFinanceAccountException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
 
         AuditLogService::log('finance_account.updated', 'FinanceAccount', $account->id, $account->name, $old, $account->fresh()->toArray());
 
@@ -94,9 +100,21 @@ class FinanceAccountController extends Controller
     // DELETE /finance/accounts/{account}
     public function destroy(Request $request, FinanceAccount $account): JsonResponse
     {
+        if (! $account->is_deletable) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This account is linked to a payment gateway and cannot be deleted.',
+            ], 422);
+        }
+
         $old = $account->toArray();
         $account->update(['updated_by' => $request->user()?->id]);
-        $account->delete();
+
+        try {
+            $account->delete();
+        } catch (ProtectedFinanceAccountException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
 
         AuditLogService::log('finance_account.deleted', 'FinanceAccount', $account->id, $account->name, $old, null);
 
@@ -218,13 +236,18 @@ class FinanceAccountController extends Controller
     {
         return [
             'id'               => $a->id,
+            'code'             => $a->code,
             'name'             => $a->name,
             'type'             => $a->type,
+            'provider'         => $a->provider,
+            'payment_method'   => $a->payment_method,
             'currency'         => $a->currency,
             'opening_balance'  => (float) $a->opening_balance,
             'current_balance'  => (float) $a->current_balance,
             'notes'            => $a->notes,
             'is_active'        => $a->is_active,
+            'is_system'        => $a->is_system,
+            'is_deletable'     => $a->is_deletable,
             'bank_name'        => $a->bank_name,
             'account_holder'   => $a->account_holder,
             'iban'             => $a->iban,

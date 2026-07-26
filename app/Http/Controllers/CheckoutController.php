@@ -79,14 +79,20 @@ class CheckoutController extends Controller
                 $successUrl  = $frontendUrl . '/dashboard/student/payment-success?session_id={CHECKOUT_SESSION_ID}';
                 $cancelUrl   = $frontendUrl . '/courses/' . $course->slug . '?payment=cancelled';
 
+                $checkoutCurrency = strtolower($course->currency ?? 'eur');
+
                 $session = $stripe->checkout->sessions->create([
                     'mode'        => 'payment',
                     'success_url' => $successUrl,
                     'cancel_url'  => $cancelUrl,
+                    // iDEAL is EUR-only per Stripe's own requirements — offering it
+                    // for a non-EUR course price would fail at Stripe's side, so it
+                    // stays card-only there rather than guessing a conversion.
+                    'payment_method_types' => $checkoutCurrency === 'eur' ? ['card', 'ideal'] : ['card'],
                     'line_items'  => [[
                         'quantity'   => 1,
                         'price_data' => [
-                            'currency'     => strtolower($course->currency ?? 'eur'),
+                            'currency'     => $checkoutCurrency,
                             'product_data' => ['name' => $course->title],
                             'unit_amount'  => (int) round(((float) $course->price) * 100),
                         ],

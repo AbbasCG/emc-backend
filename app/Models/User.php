@@ -276,6 +276,14 @@ class User extends Authenticatable
 
     public function sendPasswordResetNotification($token): void
     {
+        // This Notification's toMail() bypasses EmailService::dispatch()
+        // (Laravel's notify() sends it directly) — gated here so the
+        // 'password_reset' toggle in the admin Email Settings page actually
+        // has an effect, matching every other configurable email.
+        if (! EmailSetting::isEnabled('password_reset')) {
+            return;
+        }
+
         $this->notify(new ResetPasswordNotification($token));
     }
 }

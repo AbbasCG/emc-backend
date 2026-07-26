@@ -9,7 +9,9 @@ use App\Models\OralAssessmentBooking;
 use App\Models\OralAssessmentSlot;
 use App\Services\EmailService;
 use App\Services\NotificationService;
+use App\Services\OralAssessmentSchedulingService;
 use App\Services\OralBookingPresenter;
+use App\Support\MeetingProvider;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -22,6 +24,10 @@ use Illuminate\Support\Facades\DB;
  */
 class InstructorOralBookingController extends Controller
 {
+    public function __construct(private readonly OralAssessmentSchedulingService $scheduling)
+    {
+    }
+
     private const TERMINAL_STATUSES = [
         OralAssessmentBooking::STATUS_COMPLETED,
         OralAssessmentBooking::STATUS_CANCELLED_BY_STUDENT,
@@ -119,10 +125,65 @@ class InstructorOralBookingController extends Controller
             );
         }
 
+        if ($newStatus === OralAssessmentBooking::STATUS_CANCELLED_BY_INSTRUCTOR) {
+            $this->scheduling->bookingCancelled($booking);
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'تم تحديث حالة الموعد بنجاح.',
             'data'    => OralBookingPresenter::present($booking->fresh(['user', 'course', 'attempt'])),
+        ]);
+    }
+
+    // ─── PATCH /api/instructor/oral-bookings/{booking}/meeting-link ───────────
+    //
+    // Body: meeting_link (nullable, string|url), meeting_provider (nullable, one of MeetingProvider)
+    // Add / edit / replace: send a non-empty meeting_link. Remove: send meeting_link=null.
+
+    public function updateMeetingLink(Request $request, OralAssessmentBooking $booking): JsonResponse
+    {
+        $this->authorizeInstructor($request, $booking);
+
+        $request->validate([
+            'meeting_link'     => ['nullable', 'string', 'url', 'max:500'],
+            'meeting_provider' => ['nullable', 'string', 'in:' . implode(',', MeetingProvider::values())],
+        ]);
+
+        $slot = $booking->slot;
+        if (! $slot) {
+            return response()->json(['success' => false, 'message' => 'لا يوجد موعد مرتبط بهذا الحجز.'], 422);
+        }
+
+        $newLink = $request->filled('meeting_link') ? $request->string('meeting_link')->toString() : null;
+
+        $slot->update([
+            'meeting_link'     => $newLink,
+            'meeting_provider' => $newLink ? ($request->input('meeting_provider') ?? MeetingProvider::CUSTOM_URL->value) : null,
+        ]);
+
+        $booking->load(['user', 'course', 'slot']);
+
+        if ($booking->user_id) {
+            NotificationService::oralAssessmentMeetingLinkUpdated(
+                $booking->user_id,
+                $booking->course?->title ?? '',
+                $booking->id,
+                $newLink,
+            );
+        }
+
+        // Keeps both calendar events + the student's copy of the ICS in sync,
+        // and emails the student the new link — see OralAssessmentSchedulingService.
+        $this->scheduling->meetingLinkUpdated($booking);
+
+        return response()->json([
+            'success' => true,
+            'message' => $newLink ? 'تم تحديث رابط الاجتماع بنجاح.' : 'تمت إزالة رابط الاجتماع.',
+            'data'    => [
+                'meeting_link'     => $slot->fresh()->meeting_link,
+                'meeting_provider' => $slot->fresh()->meeting_provider,
+            ],
         ]);
     }
 
@@ -270,6 +331,9 @@ class InstructorOralBookingController extends Controller
                 $newStart->format('Y-m-d H:i') . ' - ' . $newEnd->format('H:i'),
             );
         }
+
+        // Both calendar events must reflect the new time/link, not the old one.
+        $this->scheduling->bookingRescheduled($booking);
 
         return response()->json([
             'success' => true,

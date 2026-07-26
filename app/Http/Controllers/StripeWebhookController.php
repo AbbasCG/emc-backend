@@ -13,6 +13,7 @@ use App\Models\Registration;
 use App\Models\StudentProgress;
 use App\Services\AuditLogService;
 use App\Services\EmailService;
+use App\Services\Payments\StripePaymentMethodResolver;
 use App\Support\PaymentStatuses;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -24,6 +25,10 @@ use Throwable;
 
 class StripeWebhookController extends Controller
 {
+    public function __construct(private readonly StripePaymentMethodResolver $paymentMethodResolver)
+    {
+    }
+
     /**
      * Convert Stripe metadata (StripeObject, ArrayObject, array, or plain object)
      * to a plain PHP associative array.
@@ -242,12 +247,36 @@ class StripeWebhookController extends Controller
                 return;
             }
 
+            // ── Resolve the ACTUAL payment method used (never the frontend's
+            //    selection, never the session's offered `payment_method_types`
+            //    list — only the confirmed PaymentIntent knows what the
+            //    customer actually chose) ────────────────────────────────────
+            $paymentIntentId    = $session->payment_intent ?? null;
+            $resolvedMethodType = $paymentIntentId
+                ? $this->paymentMethodResolver->resolve((string) $paymentIntentId)
+                : null;
+
+            $financeAccountCode = match ($resolvedMethodType) {
+                'ideal'  => FinanceAccount::CODE_STRIPE_IDEAL,
+                'card'   => FinanceAccount::CODE_STRIPE_CARD,
+                default  => FinanceAccount::CODE_STRIPE_CARD, // unresolved/unrecognized — safe default, never blocks the payment
+            };
+            if ($resolvedMethodType !== null && ! in_array($resolvedMethodType, ['card', 'ideal'], true)) {
+                Log::warning('Stripe webhook: unrecognized payment method type — defaulted to STRIPE_CARD account', [
+                    'payment_method_type' => $resolvedMethodType,
+                    'payment_intent_id'   => $paymentIntentId,
+                    'session_id'          => $sessionId,
+                ]);
+            }
+            $storedPaymentMethod = $resolvedMethodType ?? 'card';
+
             // ── Update payment ────────────────────────────────────────────────
             $payment->update([
                 'status'              => PaymentStatuses::CONFIRMED,
                 'confirmed_at'        => now(),
                 'provider_payment_id' => $sessionId,
                 'receipt_url'         => $session->receipt_url ?? null,
+                'payment_method'      => $storedPaymentMethod,
             ]);
 
             // ── Update registration ───────────────────────────────────────────
@@ -300,8 +329,10 @@ class StripeWebhookController extends Controller
                 ->exists();
 
             if (! $ledgerExists) {
-                $txCurrency    = strtoupper($order?->currency ?? 'EUR');
-                $stripeAccount = FinanceAccount::forProvider('stripe', $txCurrency);
+                // Resolved by the payment's actual method (STRIPE_CARD vs
+                // STRIPE_IDEAL) — never a single shared "stripe" account, so
+                // card and iDEAL income are never mixed together.
+                $stripeAccount = FinanceAccount::forCode($financeAccountCode);
 
                 if ($stripeAccount) {
                     FinanceAccountTransaction::create([
@@ -312,7 +343,7 @@ class StripeWebhookController extends Controller
                         'currency'           => $stripeAccount->currency,
                         'status'             => 'confirmed',
                         'description'        => 'Stripe — ' . ($order?->order_number ?? $sessionId),
-                        'payment_method'     => 'stripe',
+                        'payment_method'     => $storedPaymentMethod,
                         'reference_type'     => 'payment',
                         'reference_id'       => $payment->id,
                         'external_reference' => $sessionId,
@@ -321,7 +352,7 @@ class StripeWebhookController extends Controller
                     ]);
                     $stripeAccount->increment('current_balance', (float) $payment->amount);
                 } else {
-                    Log::warning('Stripe webhook: no active finance account configured for provider=stripe, currency=' . $txCurrency . '. Ledger entry skipped — run finance:reconcile to detect gaps.', [
+                    Log::warning('Stripe webhook: system finance account not found for code=' . $financeAccountCode . '. Ledger entry skipped — run finance:ensure-system-accounts.', [
                         'payment_id' => $payment->id,
                         'session_id' => $sessionId,
                     ]);

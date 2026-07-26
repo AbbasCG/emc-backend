@@ -35,6 +35,30 @@ class EmailService
         }
 
         if (!EmailSetting::isEnabled($key)) {
+            // Recorded (not silently dropped) so Email Logs can show this
+            // was intentionally skipped rather than pretending it was sent
+            // — no queue dispatch, no mail send, just an audit trail row.
+            try {
+                NotificationLog::create([
+                    'channel'              => 'email',
+                    'type'                 => $key,
+                    'recipient'            => $toEmail,
+                    'recipient_name'       => $toName,
+                    'subject'              => $subject,
+                    'status'               => 'skipped_disabled',
+                    'user_id'              => $userId,
+                    'mail_driver'          => config('mail.default'),
+                    'payload'              => $payload ?: null,
+                    'triggered_by_user_id' => $context['triggered_by_user_id'] ?? null,
+                    'related_course_id'    => $context['related_course_id'] ?? null,
+                    'related_session_id'   => $context['related_session_id'] ?? null,
+                    'related_ticket_id'    => $context['related_ticket_id'] ?? null,
+                    'related_assignment_id' => $context['related_assignment_id'] ?? null,
+                ]);
+            } catch (\Throwable $e) {
+                Log::error('EmailService skipped-disabled logging failed', ['key' => $key, 'error' => $e->getMessage()]);
+            }
+
             return;
         }
 
