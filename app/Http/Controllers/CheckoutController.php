@@ -9,6 +9,7 @@ use App\Models\Payment;
 use App\Models\Registration;
 use App\Services\AuditLogService;
 use App\Support\PaymentStatuses;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -28,6 +29,7 @@ class CheckoutController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'هذه الدورة مجانية ولا تتطلب دفعًا.',
+                'code'    => 'course_not_paid',
             ], 422);
         }
 
@@ -35,6 +37,16 @@ class CheckoutController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'التسجيل مغلق لهذه الدورة.',
+                'code'    => 'registration_closed',
+            ], 422);
+        }
+
+        if ($course->price === null || (float) $course->price <= 0) {
+            Log::error('Checkout blocked: course has no valid price', ['course_id' => $course->id]);
+            return response()->json([
+                'success' => false,
+                'message' => 'تعذر إنشاء جلسة الدفع. حاول مرة أخرى.',
+                'code'    => 'invalid_course_price',
             ], 422);
         }
 
@@ -47,7 +59,17 @@ class CheckoutController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'أنت مسجل بالفعل في هذه الدورة.',
+                'code'    => 'already_enrolled',
             ], 422);
+        }
+
+        if (trim((string) config('services.stripe.secret')) === '') {
+            Log::error('Checkout blocked: Stripe secret key is not configured', ['course_id' => $course->id]);
+            return response()->json([
+                'success' => false,
+                'message' => 'بوابة الدفع غير مُهيأة حالياً. يرجى المحاولة لاحقاً.',
+                'code'    => 'stripe_not_configured',
+            ], 503);
         }
 
         try {
@@ -69,7 +91,10 @@ class CheckoutController extends Controller
                     'user_id'   => $user->id,
                     'course_id' => $course->id,
                     'email'     => $user->email,
-                    'name'      => $user->name,
+                    'full_name' => $user->name,
+                    'phone'     => $user->phone ?? null,
+                    'city'      => $user->city ?? null,
+                    'country'   => $user->country ?? null,
                     'status'    => RegistrationStatus::PENDING_PAYMENT->value,
                 ]);
 
@@ -129,6 +154,7 @@ class CheckoutController extends Controller
             return response()->json([
                 'success'      => true,
                 'checkout_url' => $result['checkout_url'],
+                'code'         => 'checkout_session_created',
             ]);
         } catch (StripeApiException $e) {
             Log::error('Stripe API error during checkout', [
@@ -140,12 +166,30 @@ class CheckoutController extends Controller
                 'success'    => false,
                 'message'    => 'تعذّر الاتصال ببوابة الدفع. تأكد من إعدادات Stripe.',
                 'message_en' => $e->getMessage(),
+                'code'       => 'checkout_session_failed',
             ], 502);
+        } catch (QueryException $e) {
+            // Never leak SQL/column details to the client — logged in full
+            // server-side (this is exactly the shape of error that a schema
+            // drift between code and DB produces, e.g. a NOT NULL column
+            // that Registration::create() forgot to populate).
+            Log::error('Database error during checkout', [
+                'course_id' => $course->id,
+                'user_id'   => $user->id,
+                'sql_state' => $e->getCode(),
+                'message'   => $e->getMessage(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'تعذر إنشاء جلسة الدفع. حاول مرة أخرى.',
+                'code'    => 'checkout_session_failed',
+            ], 500);
         } catch (Throwable $e) {
             report($e);
             return response()->json([
                 'success' => false,
                 'message' => 'تعذر إنشاء جلسة الدفع. حاول مرة أخرى.',
+                'code'    => 'checkout_session_failed',
             ], 500);
         }
     }
