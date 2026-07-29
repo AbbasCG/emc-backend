@@ -277,6 +277,14 @@ Route::middleware('auth:sanctum')->get(
     [\App\Http\Controllers\SubmissionDownloadController::class, 'download']
 )->name('submissions.download');
 
+// ─── HR Staffing Requests (طلبات الاحتياج الوظيفي بين الإدارات و HR والإدارة العليا) ────────
+Route::middleware('auth:sanctum')->prefix('admin')->group(function () {
+    Route::post('/hr-requests',                        [\App\Http\Controllers\Hr\HrRequestController::class, 'store']);
+    Route::get('/hr-requests/my',                      [\App\Http\Controllers\Hr\HrRequestController::class, 'myRequests']);
+    Route::get('/hr-requests/incoming',                [\App\Http\Controllers\Hr\HrRequestController::class, 'incomingRequests']);
+    Route::patch('/hr-requests/{hrRequest}/status',    [\App\Http\Controllers\Hr\HrRequestController::class, 'updateStatus']);
+});
+
 // ─── Instructor submission file (inline preview or attachment, JSON errors) ────
 Route::get(
     '/instructor/submissions/{submission}/file',
