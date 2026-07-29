@@ -123,8 +123,22 @@ return new class extends Migration
 
     private function indexExists(string $table, string $index): bool
     {
-        return collect(\Illuminate\Support\Facades\DB::select(
-            "SHOW INDEX FROM `{$table}` WHERE Key_name = ?", [$index]
-        ))->isNotEmpty();
+        try {
+            $driver = \Illuminate\Support\Facades\DB::getDriverName();
+            if ($driver === 'sqlite') {
+                $indexes = \Illuminate\Support\Facades\DB::select("PRAGMA index_list(`{$table}`)");
+                foreach ($indexes as $i) {
+                    if ($i->name === $index) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            return collect(\Illuminate\Support\Facades\DB::select(
+                "SHOW INDEX FROM `{$table}` WHERE Key_name = ?", [$index]
+            ))->isNotEmpty();
+        } catch (\Throwable) {
+            return false;
+        }
     }
 };

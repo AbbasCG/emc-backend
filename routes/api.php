@@ -841,6 +841,14 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::get('finance/payments',         [FinanceController::class, 'payments']);
     Route::get('finance/revenue-by-course',[FinanceController::class, 'revenueByCourse']);
 
+    // Chart of Accounts (CoA - شجرة الحسابات)
+    Route::get('finance/chart-of-accounts',               [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'tree']);
+    Route::get('finance/chart-of-accounts/suggest-code',  [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'suggestCode']);
+    Route::get('finance/accounts',                         [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'index']);
+    Route::post('finance/accounts',                        [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'store']);
+    Route::put('finance/accounts/{id}',                    [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'update']);
+    Route::delete('finance/accounts/{id}',                 [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'destroy']);
+
     // Program Finance Approval routes are registered below with finance_manager access
 
     // ── Phase 4: Quality ─────────────────────────────────────────────────────
