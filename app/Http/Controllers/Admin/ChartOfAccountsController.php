@@ -2,11 +2,12 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Exceptions\ProtectedChartOfAccountException;
 use App\Http\Controllers\Controller;
 use App\Models\Account;
+use App\Services\AuditLogService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class ChartOfAccountsController extends Controller
 {
@@ -79,6 +80,9 @@ class ChartOfAccountsController extends Controller
             }
         }
 
+        // New accounts are always ordinary (never system-protected) — the
+        // is_system/is_deletable flags are only ever set by trusted seeders,
+        // never accepted from the request payload.
         $account = Account::create([
             'code'          => $validated['code'],
             'name_ar'       => $validated['name_ar'],
@@ -86,7 +90,12 @@ class ChartOfAccountsController extends Controller
             'type'          => $type,
             'parent_id'     => $validated['parent_id'] ?? null,
             'is_selectable' => $validated['is_selectable'] ?? true,
+            'is_system'     => false,
+            'is_deletable'  => true,
+            'created_by'    => $request->user()?->id,
         ]);
+
+        AuditLogService::logCreate($account, "أنشأ حساباً محاسبياً جديداً: ({$account->code}) {$account->name_ar}");
 
         return response()->json([
             'success' => true,
@@ -96,11 +105,15 @@ class ChartOfAccountsController extends Controller
     }
 
     /**
-     * Update account details.
+     * Update account details. Code/type are intentionally not editable here
+     * at all (not just for system accounts) — changing either after
+     * creation would corrupt any transactions already posted against this
+     * account's stable code/nature, whether or not it's a "system" account.
      */
     public function update(Request $request, int $id): JsonResponse
     {
         $account = Account::findOrFail($id);
+        $old = $account->toArray();
 
         $validated = $request->validate([
             'name_ar'       => ['required', 'string', 'max:255'],
@@ -108,11 +121,22 @@ class ChartOfAccountsController extends Controller
             'is_selectable' => ['required', 'boolean'],
         ]);
 
-        $account->update([
-            'name_ar'       => $validated['name_ar'],
-            'name_en'       => $validated['name_en'] ?? null,
-            'is_selectable' => $validated['is_selectable'],
-        ]);
+        try {
+            $account->update([
+                'name_ar'       => $validated['name_ar'],
+                'name_en'       => $validated['name_en'] ?? null,
+                'is_selectable' => $validated['is_selectable'],
+                'updated_by'    => $request->user()?->id,
+            ]);
+        } catch (ProtectedChartOfAccountException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+                'code'    => 'finance_account_protected',
+            ], 422);
+        }
+
+        AuditLogService::logUpdate($account, $old, $account->fresh()->toArray(), "عدّل بيانات الحساب المحاسبي ({$account->code})");
 
         return response()->json([
             'success' => true,
@@ -122,35 +146,26 @@ class ChartOfAccountsController extends Controller
     }
 
     /**
-     * Delete account with safety checks (fails if children exist or journal entries exist).
+     * Delete account with safety checks — enforced centrally in
+     * Account::booted()'s `deleting` hook (system/non-deletable, children,
+     * linked transactions), never trusted to the frontend.
      */
     public function destroy(int $id): JsonResponse
     {
         $account = Account::findOrFail($id);
+        $old = $account->toArray();
 
-        // 1. Check if account has children
-        if ($account->children()->count() > 0) {
+        try {
+            $account->delete();
+        } catch (ProtectedChartOfAccountException $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'لا يمكن حذف هذا الحساب لأنه يحتوي على حسابات فرعية متفرعة منه.',
+                'message' => $e->getMessage(),
+                'code'    => 'finance_account_protected',
             ], 422);
         }
 
-        // 2. Check if account is referenced in financial transactions if table exists
-        if (Schema::hasTable('financial_transactions')) {
-            $hasTransactions = DB::table('financial_transactions')
-                ->where('account_id', $id)
-                ->exists();
-
-            if ($hasTransactions) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'لا يمكن حذف هذا الحساب لوجود حركات مالية وقيود مسجلة عليه.',
-                ], 422);
-            }
-        }
-
-        $account->delete();
+        AuditLogService::logDelete($account, "حذف الحساب المحاسبي ({$old['code']}) {$old['name_ar']}");
 
         return response()->json([
             'success' => true,

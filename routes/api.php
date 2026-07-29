@@ -849,13 +849,9 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::get('finance/payments',         [FinanceController::class, 'payments']);
     Route::get('finance/revenue-by-course',[FinanceController::class, 'revenueByCourse']);
 
-    // Chart of Accounts (CoA - شجرة الحسابات)
-    Route::get('finance/chart-of-accounts',               [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'tree']);
-    Route::get('finance/chart-of-accounts/suggest-code',  [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'suggestCode']);
-    Route::get('finance/accounts',                         [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'index']);
-    Route::post('finance/accounts',                        [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'store']);
-    Route::put('finance/accounts/{id}',                    [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'update']);
-    Route::delete('finance/accounts/{id}',                 [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'destroy']);
+    // Chart of Accounts (CoA - شجرة الحسابات) — moved to a dedicated
+    // admin/finance-prefixed group further down (with finance_manager
+    // access) so this broad admin-only group doesn't need to widen.
 
     // Program Finance Approval routes are registered below with finance_manager access
 
@@ -1172,6 +1168,27 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_ma
     Route::get('accounts/{account}',                                 [FinanceAccountController::class, 'show']);
     Route::post('accounts/{account}/recalculate',                    [FinanceAccountController::class, 'recalculate']);
 });
+
+// ─── Chart of Accounts (CoA) — dedicated group, finance_manager included ─────
+// Deliberately NOT part of the broad role:admin,super_admin,tech_admin group
+// above (routes/api.php ~709) — that group covers unrelated admin-only
+// surfaces (departments, tasks, meetings, ambassador applications, ...) that
+// finance_manager has no business touching. Scoped narrowly to just the six
+// Chart of Accounts endpoints the frontend (chartOfAccountsApi.ts) actually
+// calls. Kept on `/admin/finance/...` (not `/finance/...`) because that
+// prefix is already the ChartOfAccountsController's live API contract — the
+// sibling `/finance/accounts` group above is a different accounting concept
+// (FinanceAccountController — cash/payment-gateway accounts), not this one.
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_manager'])
+    ->prefix('admin/finance')
+    ->group(function () {
+        Route::get('chart-of-accounts',               [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'tree']);
+        Route::get('chart-of-accounts/suggest-code',  [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'suggestCode']);
+        Route::get('accounts',                        [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'index']);
+        Route::post('accounts',                       [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'store']);
+        Route::put('accounts/{id}',                   [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'update']);
+        Route::delete('accounts/{id}',                [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'destroy']);
+    });
 
 // ─── KPI unified endpoint (?tab=overview|education|finance|…) ────────────────
 // finance_manager, quality_manager, and programs_manager have VIEW_KPI permission
