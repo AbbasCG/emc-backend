@@ -62,8 +62,16 @@ return new class extends Migration
 
     private function existingIndexNames(): array
     {
-        $rows = DB::select('SHOW INDEX FROM audit_logs');
-
-        return array_unique(array_map(fn ($r) => $r->Key_name, $rows));
+        try {
+            $driver = DB::getDriverName();
+            if ($driver === 'sqlite') {
+                $rows = DB::select('PRAGMA index_list(`audit_logs`)');
+                return array_unique(array_map(fn ($r) => $r->name, $rows));
+            }
+            $rows = DB::select('SHOW INDEX FROM audit_logs');
+            return array_unique(array_map(fn ($r) => $r->Key_name, $rows));
+        } catch (\Throwable) {
+            return [];
+        }
     }
 };

@@ -24,9 +24,10 @@ class DatabaseSeeder extends Seeder
             DemoUserSeeder::class,
         ]);
 
-        // ── Finance: system-managed payment-gateway accounts (idempotent) ──────
+        // ── Finance: system-managed payment-gateway accounts & Chart of Accounts ──
         $this->call([
             FinanceSystemAccountsSeeder::class,
+            AccountsSeeder::class,
         ]);
 
         // ── Users ────────────────────────────────────────────────────────────

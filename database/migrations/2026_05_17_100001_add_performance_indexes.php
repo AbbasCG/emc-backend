@@ -186,6 +186,16 @@ return new class extends Migration
     private function hasIndex(string $table, string $indexName): bool
     {
         try {
+            $driver = \Illuminate\Support\Facades\DB::getDriverName();
+            if ($driver === 'sqlite') {
+                $indexes = \Illuminate\Support\Facades\DB::select("PRAGMA index_list(`{$table}`)");
+                foreach ($indexes as $index) {
+                    if ($index->name === $indexName) {
+                        return true;
+                    }
+                }
+                return false;
+            }
             $indexes = \Illuminate\Support\Facades\DB::select("SHOW INDEX FROM `{$table}` WHERE Key_name = ?", [$indexName]);
 
             return count($indexes) > 0;

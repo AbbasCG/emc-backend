@@ -93,9 +93,27 @@ return new class extends Migration
 
     private function addIndexIfMissing(string $table, string $indexName, string $column): void
     {
-        $indexes = DB::select("SHOW INDEX FROM `{$table}` WHERE Key_name = ?", [$indexName]);
-        if (empty($indexes)) {
-            Schema::table($table, fn (Blueprint $t) => $t->index([$column], $indexName));
+        try {
+            $driver = DB::getDriverName();
+            if ($driver === 'sqlite') {
+                $indexes = DB::select("PRAGMA index_list(`{$table}`)");
+                $exists = false;
+                foreach ($indexes as $i) {
+                    if ($i->name === $indexName) {
+                        $exists = true;
+                        break;
+                    }
+                }
+                if (! $exists) {
+                    Schema::table($table, fn (Blueprint $t) => $t->index([$column], $indexName));
+                }
+                return;
+            }
+            $indexes = DB::select("SHOW INDEX FROM `{$table}` WHERE Key_name = ?", [$indexName]);
+            if (empty($indexes)) {
+                Schema::table($table, fn (Blueprint $t) => $t->index([$column], $indexName));
+            }
+        } catch (\Throwable) {
         }
     }
 };

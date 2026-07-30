@@ -9,8 +9,7 @@ return new class extends Migration
 {
     public function up(): void
     {
-        // Disable FK checks so we can alter the column cleanly
-        DB::statement('SET FOREIGN_KEY_CHECKS=0');
+        Schema::disableForeignKeyConstraints();
 
         Schema::table('attendances', function (Blueprint $table) {
             // Make session_id nullable so CourseSession-only attendance rows
@@ -29,12 +28,12 @@ return new class extends Migration
             }
         });
 
-        DB::statement('SET FOREIGN_KEY_CHECKS=1');
+        Schema::enableForeignKeyConstraints();
     }
 
     public function down(): void
     {
-        DB::statement('SET FOREIGN_KEY_CHECKS=0');
+        Schema::disableForeignKeyConstraints();
 
         Schema::table('attendances', function (Blueprint $table) {
             if (Schema::hasColumn('attendances', 'course_session_id')) {
@@ -47,6 +46,6 @@ return new class extends Migration
             }
         });
 
-        DB::statement('SET FOREIGN_KEY_CHECKS=1');
+        Schema::enableForeignKeyConstraints();
     }
 };
