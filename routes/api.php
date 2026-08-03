@@ -540,7 +540,12 @@ Route::post('/courses/{course}/register', [RegistrationController::class, 'store
 
 // Paid course checkout — student only
 Route::post('/courses/{course}/checkout', [CheckoutController::class, 'checkout'])
-    ->middleware(['auth:sanctum', 'role:student']);
+    ->middleware(['auth:sanctum', 'role:student', 'throttle:payments']);
+
+// Coupon preview — validates and previews pricing only, never consumes usage.
+// throttle:payments (10/min/user) reused to blunt brute-force code enumeration.
+Route::post('/courses/{course}/coupon/validate', [\App\Http\Controllers\Student\CouponController::class, 'validate'])
+    ->middleware(['auth:sanctum', 'role:student', 'throttle:payments']);
 
 // ─── Workshop Request Submission (throttle:workshop — 5 req/min per IP) ──────
 Route::post('/workshop-requests', [WorkshopRequestController::class, 'store'])
@@ -1140,7 +1145,10 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_ma
     Route::patch('scholarships/{scholarship}/reject',  [ScholarshipController::class, 'reject']);
     Route::get('coupons',                 [CouponController::class,     'index']);
     Route::post('coupons',                [CouponController::class,     'store']);
+    Route::get('coupons/{coupon}',        [CouponController::class,     'show']);
     Route::patch('coupons/{coupon}',      [CouponController::class,     'update']);
+    Route::delete('coupons/{coupon}',     [CouponController::class,     'destroy']);
+    Route::post('coupons/validate',       [CouponController::class,     'validate']);
 
     // Finance accounts & manual transactions
     Route::get('accounts',                                           [FinanceAccountController::class, 'index']);

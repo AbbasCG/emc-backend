@@ -9,7 +9,13 @@ class PartnershipRequest extends Model
 {
     protected $fillable = [
         'partner_name', 'contact_name', 'email', 'phone',
-        'type', 'message', 'status', 'reviewed_by',
+        'country', 'city', 'website',
+        'type', 'type_other', 'partnership_type', 'partnership_type_other',
+        'message', 'privacy_accepted', 'status', 'reviewed_by',
+    ];
+
+    protected $casts = [
+        'privacy_accepted' => 'boolean',
     ];
 
     public function reviewedBy(): BelongsTo
