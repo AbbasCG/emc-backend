@@ -29,6 +29,7 @@ class Registration extends Model
         'gender',
         'notes',
         'status',
+        'levels_purchased',
     ];
 
     public function course()

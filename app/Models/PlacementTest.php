@@ -16,6 +16,7 @@ class PlacementTest extends Model
         'duration_minutes',
         'total_questions',
         'is_active',
+        'is_institute',
     ];
 
     protected function casts(): array
@@ -24,6 +25,7 @@ class PlacementTest extends Model
             'is_active'        => 'boolean',
             'duration_minutes' => 'integer',
             'total_questions'  => 'integer',
+            'is_institute'     => 'boolean',
         ];
     }
 

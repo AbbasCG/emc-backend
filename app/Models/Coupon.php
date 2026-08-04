@@ -10,13 +10,14 @@ class Coupon extends Model
     protected $fillable = [
         'code', 'name', 'description', 'discount_type', 'discount_value',
         'max_uses', 'used_count', 'starts_at', 'expires_at', 'status',
-        'applies_to_type', 'applies_to_id',
+        'applies_to_type', 'applies_to_id', 'is_institute',
     ];
 
     protected $casts = [
         'starts_at'      => 'datetime',
         'expires_at'     => 'datetime',
         'discount_value' => 'decimal:2',
+        'is_institute'   => 'boolean',
     ];
 
     public function appliesTo(): MorphTo

@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class ClassGroup extends Model
 {
@@ -22,16 +23,23 @@ class ClassGroup extends Model
         'meeting_link',
         'status',
         'created_by',
+        'is_institute',
     ];
 
     protected $casts = [
         'start_date' => 'date',
         'capacity'   => 'integer',
+        'is_institute' => 'boolean',
     ];
 
     public function course(): BelongsTo
     {
         return $this->belongsTo(Course::class);
+    }
+
+    public function courses(): BelongsToMany
+    {
+        return $this->belongsToMany(Course::class);
     }
 
     public function instructor(): BelongsTo
