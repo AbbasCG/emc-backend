@@ -164,4 +164,78 @@ class CheckoutControllerTest extends TestCase
         $this->assertSame(0, Registration::where('course_id', $course->id)->count());
         $this->assertDatabaseCount('orders', 0);
     }
+
+    // ── Retry-checkout regression: a student with an abandoned/failed/cancelled
+    // registration must be able to re-initiate checkout. `registrations` has a
+    // DB-level UNIQUE constraint on (user_id, course_id), so retry must reuse
+    // the existing row rather than insert a second one (which would previously
+    // have blown up with a QueryException, or been blocked outright by the
+    // over-broad already_enrolled guard). ──────────────────────────────────
+
+    public function test_student_with_pending_payment_registration_can_retry_checkout_without_already_enrolled_block(): void
+    {
+        config(['services.stripe.secret' => '']); // force the controlled 503 path so we don't hit the real Stripe API
+
+        $user   = $this->student();
+        $course = $this->paidCourse();
+        $registration = Registration::create([
+            'user_id' => $user->id, 'course_id' => $course->id, 'email' => $user->email,
+            'full_name' => $user->name, 'status' => RegistrationStatus::PENDING_PAYMENT->value,
+        ]);
+
+        $response = $this->actingAs($user, 'sanctum')->postJson("/api/courses/{$course->id}/checkout");
+
+        // Must reach past the already_enrolled guard onto the next guard (stripe_not_configured),
+        // never returning already_enrolled for a merely-pending registration.
+        $response->assertStatus(503)->assertJson(['code' => 'stripe_not_configured']);
+        $this->assertSame(1, Registration::where('user_id', $user->id)->where('course_id', $course->id)->count());
+        $this->assertSame($registration->id, Registration::where('user_id', $user->id)->where('course_id', $course->id)->first()->id);
+    }
+
+    public function test_student_with_cancelled_registration_can_retry_checkout(): void
+    {
+        config(['services.stripe.secret' => '']);
+
+        $user   = $this->student();
+        $course = $this->paidCourse();
+        Registration::create([
+            'user_id' => $user->id, 'course_id' => $course->id, 'email' => $user->email,
+            'full_name' => $user->name, 'status' => RegistrationStatus::CANCELLED->value,
+        ]);
+
+        $response = $this->actingAs($user, 'sanctum')->postJson("/api/courses/{$course->id}/checkout");
+
+        $response->assertStatus(503)->assertJson(['code' => 'stripe_not_configured']);
+    }
+
+    public function test_student_with_active_enrollment_is_still_blocked_from_retry_checkout(): void
+    {
+        $user   = $this->student();
+        $course = $this->paidCourse();
+        Registration::create([
+            'user_id' => $user->id, 'course_id' => $course->id, 'email' => $user->email,
+            'full_name' => $user->name, 'status' => RegistrationStatus::PAYMENT_CONFIRMED->value,
+        ]);
+
+        $response = $this->actingAs($user, 'sanctum')->postJson("/api/courses/{$course->id}/checkout");
+
+        $response->assertStatus(422)->assertJson(['success' => false, 'code' => 'already_enrolled']);
+    }
+
+    public function test_retry_checkout_reuses_the_existing_registration_row_never_inserts_a_second_one(): void
+    {
+        $user   = $this->student();
+        $course = $this->paidCourse();
+        $registration = Registration::create([
+            'user_id' => $user->id, 'course_id' => $course->id, 'email' => $user->email,
+            'full_name' => $user->name, 'status' => RegistrationStatus::PENDING_PAYMENT->value,
+        ]);
+
+        $this->actingAs($user, 'sanctum')->postJson("/api/courses/{$course->id}/checkout");
+
+        // No QueryException from the registrations_user_course_unique constraint,
+        // and still exactly one registration row for this (user, course) pair.
+        $this->assertSame(1, Registration::where('user_id', $user->id)->where('course_id', $course->id)->count());
+        $this->assertDatabaseHas('registrations', ['id' => $registration->id, 'user_id' => $user->id, 'course_id' => $course->id]);
+    }
 }

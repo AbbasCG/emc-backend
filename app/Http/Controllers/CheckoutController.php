@@ -58,12 +58,16 @@ class CheckoutController extends Controller
             ], 422);
         }
 
-        $alreadyEnrolled = Registration::where('user_id', $user->id)
+        // Only a truly ACTIVE enrollment blocks checkout — a student stuck in
+        // pending_payment (abandoned/expired Stripe session), payment_failed,
+        // or cancelled must be able to retry. `registrations` has a DB-level
+        // UNIQUE constraint on (user_id, course_id), so retrying never creates
+        // a second row below — the existing row is reused/updated instead.
+        $existingRegistration = Registration::where('user_id', $user->id)
             ->where('course_id', $course->id)
-            ->whereNotIn('status', [RegistrationStatus::CANCELLED->value])
-            ->exists();
+            ->first();
 
-        if ($alreadyEnrolled) {
+        if ($existingRegistration && in_array($existingRegistration->status, RegistrationStatus::activeEnrollment(), true)) {
             return response()->json([
                 'success' => false,
                 'message' => 'أنت مسجل بالفعل في هذه الدورة.',
@@ -104,7 +108,7 @@ class CheckoutController extends Controller
         try {
             $couponRaceLost = false;
 
-            $result = DB::transaction(function () use ($user, $course, $coupon, $pricing, &$couponRaceLost) {
+            $result = DB::transaction(function () use ($user, $course, $coupon, $pricing, $existingRegistration, &$couponRaceLost) {
                 // Re-check the coupon's usage limit under a row lock, inside
                 // the same transaction that will create the reservation —
                 // this is what makes the "last remaining use, two concurrent
@@ -151,9 +155,12 @@ class CheckoutController extends Controller
                     'paid_at'                  => $finalAmount <= 0 ? now() : null,
                 ]);
 
-                $registration = Registration::create([
-                    'user_id'   => $user->id,
-                    'course_id' => $course->id,
+                // `registrations` has a UNIQUE constraint on (user_id, course_id) —
+                // a retried checkout must reuse this student's existing row for
+                // this course (abandoned pending_payment, payment_failed, or a
+                // previously cancelled registration) rather than inserting a
+                // second one, which would throw a QueryException.
+                $registrationAttrs = [
                     'email'     => $user->email,
                     'full_name' => $user->name,
                     'phone'     => $user->phone ?? null,
@@ -162,7 +169,27 @@ class CheckoutController extends Controller
                     'status'    => $finalAmount <= 0
                         ? RegistrationStatus::REGISTERED->value
                         : RegistrationStatus::PENDING_PAYMENT->value,
-                ]);
+                ];
+
+                if ($existingRegistration) {
+                    $existingRegistration->update($registrationAttrs);
+                    $registration = $existingRegistration;
+
+                    // Any earlier pending order/payment/coupon-reservation tied
+                    // to the abandoned attempt is superseded — cancel it so it
+                    // doesn't linger as a phantom reserved coupon usage or a
+                    // second "pending" order for the same registration.
+                    Order::where('user_id', $user->id)->where('course_id', $course->id)
+                        ->where('status', 'pending')->update(['status' => 'cancelled']);
+                    CouponUsage::where('registration_id', $registration->id)
+                        ->where('status', CouponUsage::STATUS_RESERVED)
+                        ->update(['status' => CouponUsage::STATUS_CANCELLED]);
+                } else {
+                    $registration = Registration::create(array_merge($registrationAttrs, [
+                        'user_id'   => $user->id,
+                        'course_id' => $course->id,
+                    ]));
+                }
 
                 // ── Zero-price result (Phase 13): a coupon may reduce the
                 // price to exactly 0 — Stripe cannot create a €0.00 session,
