@@ -1,35 +1,10 @@
 <?php
 
 use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
 
-return new class extends Migration
-{
-    /**
-     * Run the migrations.
-     */
-    public function up(): void
-    {
-        Schema::create('registrations', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('course_id')->constrained('courses')->onDelete('cascade');
-            $table->string('full_name');
-            $table->string('phone');
-            $table->string('email');
-            $table->string('city')->nullable();
-            $table->string('gender')->nullable();
-            $table->text('notes')->nullable();
-            $table->string('status')->default('Registered');
-            $table->timestamps();
-        });
-    }
-
-    /**
-     * Reverse the migrations.
-     */
-    public function down(): void
-    {
-        Schema::dropIfExists('registrations');
-    }
+// Superseded by 2026_05_13_200001_create_registrations_table.php
+// (Moved to resolve FK ordering: tracks and workshops are created after this original timestamp.)
+return new class extends Migration {
+    public function up(): void {}
+    public function down(): void {}
 };

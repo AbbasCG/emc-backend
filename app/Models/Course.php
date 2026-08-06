@@ -2,23 +2,268 @@
 
 namespace App\Models;
 
+use App\Traits\Auditable;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\SoftDeletes;
+use App\Models\Department;
+use App\Models\Instructor;
+use App\Models\CourseFeature;
+use App\Models\User;
 
 class Course extends Model
 {
+    use Auditable, HasFactory, SoftDeletes;
+
     protected $fillable = [
+        'track_id',
+        'instructor_id',
+        'department_id',
+        'created_by',
+        'updated_by',
+        'assigned_by',
         'title',
         'slug',
         'description',
         'short_description',
-        'instructor_name',
         'type',
         'price',
+        'is_free',
+        'program_type',
+        'session_format',
         'location',
+        'location_type',
+        'meeting_link',
         'is_online',
         'start_date',
+        'start_time',
         'end_date',
+        'end_time',
         'capacity',
+        'registration_open',
+        'registration_status',
+        'requires_registration_code',
+        'registration_code',
         'status',
+        'notes',
+        'duration',
+        'training_hours',
+        'target_audience',
+        'language',
+        'level',
+        'study_days',
+        'study_time',
+        'certificate',
+        'certificate_available',
+        'certificate_type',
+        'learning_outcomes',
+        'requirements',
+        'curriculum_topics',
+        'keywords',
+        'course_image',
+        'course_thumbnail',
+        'requires_placement_test',
+        'placement_test_type',
+        'whatsapp_community_url',
+        'is_paid',
+        'currency',
+        'stripe_product_id',
+        'stripe_price_id',
+        'finance_approval_status',
+        'submitted_for_finance_at',
     ];
+
+    protected $casts = [
+        'start_date'            => 'date:Y-m-d',
+        'end_date'              => 'date:Y-m-d',
+        'learning_outcomes'     => 'array',
+        'requirements'          => 'array',
+        'curriculum_topics'     => 'array',
+        'keywords'              => 'array',
+        'is_online'             => 'boolean',
+        'is_free'               => 'boolean',
+        'is_paid'               => 'boolean',
+        'price'                 => 'decimal:2',
+        'registration_open'     => 'boolean',
+        'certificate_available'  => 'boolean',
+        'requires_placement_test'=> 'boolean',
+        'requires_registration_code' => 'boolean',
+        'submitted_for_finance_at'   => 'datetime',
+        'finance_approval_status'    => 'string',
+    ];
+
+    public function instructor()
+    {
+        return $this->belongsTo(Instructor::class);
+    }
+
+    public function track()
+    {
+        return $this->belongsTo(Track::class);
+    }
+
+    public function department()
+    {
+        return $this->belongsTo(Department::class);
+    }
+
+    public function createdBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function creator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function updatedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'updated_by');
+    }
+
+    public function financeApproval()
+    {
+        return $this->morphOne(ProgramFinanceApproval::class, 'approvable');
+    }
+
+    public function isPaid(): bool
+    {
+        return $this->is_paid
+            || $this->type === 'paid'
+            || (float) $this->price > 0;
+    }
+
+    public function isFree(): bool
+    {
+        return ! $this->isPaid();
+    }
+
+    public function requiresFinanceApproval(): bool
+    {
+        return $this->isPaid();
+    }
+
+    public function assignedBy()
+    {
+        return $this->belongsTo(User::class, 'assigned_by');
+    }
+
+    public function features()
+    {
+        return $this->hasMany(CourseFeature::class)->orderBy('sort_order');
+    }
+
+    public function workshops(): HasMany
+    {
+        return $this->hasMany(Workshop::class)->orderBy('sort_order');
+    }
+
+    public function sessions(): HasMany
+    {
+        return $this->hasMany(LmsSession::class, 'course_id');
+    }
+
+    public function assignments(): HasMany
+    {
+        return $this->hasMany(Assignment::class, 'course_id');
+    }
+
+    public function materials(): HasMany
+    {
+        return $this->hasMany(CourseMaterial::class, 'course_id')->orderBy('sort_order');
+    }
+
+    public function registrations(): HasMany
+    {
+        return $this->hasMany(Registration::class);
+    }
+
+    /**
+     * Registrations that genuinely count as enrolled — canonical eligibility
+     * per Registration::scopeActiveEnrollment() (paid-course rows still on
+     * pending_payment, or any cancelled/no_show row, are excluded). Use this
+     * — not the raw registrations() count — anywhere a "تسجيلات" style
+     * enrollment count must reflect real completed registrations.
+     */
+    public function activeRegistrations(): HasMany
+    {
+        return $this->registrations()->activeEnrollment();
+    }
+
+    public function modules(): HasMany
+    {
+        return $this->hasMany(CourseModule::class)->orderBy('sort_order');
+    }
+
+    public function courseSessions(): HasMany
+    {
+        return $this->hasMany(CourseSession::class)->orderBy('sort_order');
+    }
+
+    public function courseAssignments(): HasMany
+    {
+        return $this->hasMany(CourseAssignment::class)->orderBy('sort_order');
+    }
+
+    public function quizzes(): HasMany
+    {
+        return $this->hasMany(Quiz::class);
+    }
+
+    public function placementTestAttempts(): HasMany
+    {
+        return $this->hasMany(PlacementTestAttempt::class);
+    }
+
+    public function oralAssessmentSlots(): HasMany
+    {
+        return $this->hasMany(OralAssessmentSlot::class);
+    }
+
+    public function oralAssessmentBookings(): HasMany
+    {
+        return $this->hasMany(OralAssessmentBooking::class);
+    }
+
+    public function learningPaths(): BelongsToMany
+    {
+        return $this->belongsToMany(LearningPath::class, 'learning_path_items')
+            ->withPivot('sort_order')
+            ->orderBy('learning_path_items.sort_order');
+    }
+
+    public function learningPathItems(): HasMany
+    {
+        return $this->hasMany(LearningPathItem::class);
+    }
+
+    /** Returns the first active/published learning path this course belongs to, or null. */
+    public function activeLearningPath(): ?LearningPath
+    {
+        return $this->learningPaths()
+            ->whereIn('learning_paths.status', ['published', 'active'])
+            ->first();
+    }
+
+    public function requiresPlacement(): bool
+    {
+        return (bool) $this->requires_placement_test;
+    }
+
+    /**
+     * Scope: exclude courses owned by an active/published learning path.
+     * Such courses are only reachable through their learning path's detail page,
+     * never as standalone catalog items.
+     */
+    public function scopePubliclyVisible($query)
+    {
+        return $query->whereDoesntHave('learningPaths', function ($q) {
+            $q->whereIn('learning_paths.status', ['published', 'active']);
+        });
+    }
 }

@@ -1,0 +1,1141 @@
+<?php
+
+namespace App\Http\Controllers\Admin;
+
+use App\Events\CourseCreatedEvent;
+use App\Events\CourseUpdatedEvent;
+use App\Events\InstructorAssignedEvent;
+use App\Http\Controllers\Controller;
+use App\Models\Assignment;
+use App\Models\Attendance;
+use App\Models\Course;
+use App\Models\CourseMaterial;
+use App\Models\CourseSession;
+use App\Models\Instructor;
+use App\Models\LearningPathEnrollment;
+use App\Models\LearningPathItem;
+use App\Models\LmsSession;
+use App\Models\Registration;
+use App\Models\StudentProgress;
+use App\Services\AuditLogService;
+use App\Services\ProgramFinanceApprovalService;
+use App\Support\CourseDisplay;
+use App\Support\CourseComputedStatus;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
+
+class AdminCourseController extends Controller
+{
+    public function __construct(private ProgramFinanceApprovalService $financeService) {}
+
+    // ─── GET /api/admin/courses ───────────────────────────────────────────────
+    public function index(Request $request): JsonResponse
+    {
+        $query = Course::with(['instructor.user', 'track', 'department'])
+            ->withCount(['registrations', 'activeRegistrations']);
+
+        if ($request->filled('status')) {
+            $query->where('status', $request->query('status'));
+        }
+        if ($request->filled('instructor_id')) {
+            $query->where('instructor_id', $request->query('instructor_id'));
+        }
+        if ($request->filled('department_id')) {
+            $query->where('department_id', $request->query('department_id'));
+        }
+        if ($request->filled('track_id')) {
+            $query->where('track_id', $request->query('track_id'));
+        }
+        if ($request->filled('type')) {
+            $query->where('type', $request->query('type'));
+        }
+        if ($request->has('has_date')) {
+            $request->boolean('has_date')
+                ? $query->whereNotNull('start_date')
+                : $query->whereNull('start_date');
+        }
+        if ($request->has('has_instructor')) {
+            $request->boolean('has_instructor')
+                ? $query->whereNotNull('instructor_id')
+                : $query->whereNull('instructor_id');
+        }
+        if ($request->filled('search')) {
+            $q = (string) $request->query('search');
+            $query->where(fn ($sub) => $sub
+                ->where('title', 'like', "%{$q}%")
+                ->orWhere('slug', 'like', "%{$q}%")
+                ->orWhere('description', 'like', "%{$q}%")
+                ->orWhereHas('instructor.user', fn ($u) => $u->where('name', 'like', "%{$q}%"))
+            );
+        }
+
+        // Filter by specific course IDs (multi-chip search)
+        if ($request->has('selected')) {
+            $ids = array_filter(array_map('intval', (array) $request->query('selected')));
+            if (! empty($ids)) {
+                $query->whereIn('id', $ids);
+            }
+        }
+
+        // Program type (course / workshop / program / track)
+        // For 'workshop': include both courses where program_type='workshop' AND
+        // courses that have a linked Workshop entity (parent courses of Workshop records).
+        if ($request->filled('program_type')) {
+            $pt = (string) $request->query('program_type');
+            if ($pt === 'workshop') {
+                $query->where(fn ($q) => $q
+                    ->where('program_type', 'workshop')
+                    ->orWhereHas('workshops')
+                );
+            } else {
+                $query->where('program_type', $pt);
+            }
+        }
+
+        // Delivery mode
+        if ($request->filled('location_type')) {
+            $query->where('location_type', $request->query('location_type'));
+        }
+
+        // Learning path membership
+        if ($request->filled('learning_path_id')) {
+            $lpId = (int) $request->query('learning_path_id');
+            $query->whereHas('learningPathItem', fn ($q) => $q->where('learning_path_id', $lpId));
+        }
+
+        // Ended courses (published + end_date in the past)
+        if ($request->boolean('ended')) {
+            $query->where('status', 'published')->where('end_date', '<', now()->toDateString());
+        }
+
+        // ── Pricing filter ────────────────────────────────────────────────────
+        if ($request->filled('pricing_type')) {
+            match ($request->query('pricing_type')) {
+                'free' => $query->where(fn ($q) => $q->where('is_free', true)
+                    ->orWhere('type', 'free')
+                    ->orWhere(fn ($q2) => $q2->whereNull('price')->orWhere('price', 0))
+                ),
+                'paid' => $query->where(fn ($q) => $q->where('is_paid', true)
+                    ->orWhere('type', 'paid')
+                    ->orWhere('price', '>', 0)
+                ),
+                default => null,
+            };
+        }
+
+        // ── Finance approval status filter ────────────────────────────────────
+        if ($request->filled('finance_approval_status')) {
+            $query->where('finance_approval_status', $request->query('finance_approval_status'));
+        }
+
+        // ── Creator filter ────────────────────────────────────────────────────
+        if ($request->filled('created_by')) {
+            $query->where('created_by', (int) $request->query('created_by'));
+        }
+
+        // Sort
+        match ((string) $request->query('sort', 'latest')) {
+            'title_asc'  => $query->orderBy('title', 'asc'),
+            'title_desc' => $query->orderBy('title', 'desc'),
+            'price_asc'  => $query->orderBy('price', 'asc'),
+            'price_desc' => $query->orderBy('price', 'desc'),
+            'oldest'     => $query->orderBy('created_at', 'asc'),
+            default      => $query->latest(),
+        };
+
+        $perPage = min((int) $request->query('per_page', 24), 100);
+        $courses = $query->paginate($perPage);
+
+        // Batch-load learning path membership (with instructor) for all courses in this page
+        $courseIds = $courses->pluck('id')->all();
+        $lpItemMap = LearningPathItem::with(['learningPath.instructor.user'])
+            ->whereIn('course_id', $courseIds)
+            ->get()
+            ->keyBy('course_id');
+
+        // Batch LP enrollment counts for LP-owned courses
+        $lpIds = $lpItemMap->map(fn ($i) => $i->learning_path_id)->unique()->values()->all();
+        $lpEnrollMap = collect();
+        if ($lpIds) {
+            $lpEnrollMap = LearningPathEnrollment::whereIn('learning_path_id', $lpIds)
+                ->whereIn('status', ['active', 'registered', 'enrolled', 'completed'])
+                ->selectRaw('learning_path_id, count(*) as cnt')
+                ->groupBy('learning_path_id')
+                ->pluck('cnt', 'learning_path_id');
+        }
+
+        // Global summary counts — single aggregation query, always unfiltered
+        $summaryRow = DB::table('courses')
+            ->selectRaw("
+                COUNT(*) as total,
+                SUM(CASE WHEN status='published' THEN 1 ELSE 0 END) as published_count,
+                SUM(CASE WHEN status='draft' THEN 1 ELSE 0 END) as draft_count,
+                SUM(CASE WHEN status='archived' THEN 1 ELSE 0 END) as archived_count,
+                SUM(CASE WHEN start_date IS NULL THEN 1 ELSE 0 END) as no_date_count,
+                SUM(CASE WHEN instructor_id IS NULL THEN 1 ELSE 0 END) as no_instructor_count,
+                SUM(CASE WHEN end_date < CURDATE() AND status='published' THEN 1 ELSE 0 END) as ended_count,
+                SUM(CASE WHEN start_date IS NOT NULL THEN 1 ELSE 0 END) as scheduled_count
+            ")
+            ->first();
+
+        return response()->json([
+            'success' => true,
+            'data'    => $courses->map(function ($c) use ($lpItemMap, $lpEnrollMap) {
+                $lpItem = $lpItemMap->get($c->id);
+                $lpEnrollCount = $lpItem ? (int) $lpEnrollMap->get($lpItem->learning_path_id, 0) : null;
+                return $this->format($c, $lpItem, $lpEnrollCount);
+            }),
+            'meta'    => [
+                'total'        => $courses->total(),
+                'current_page' => $courses->currentPage(),
+                'last_page'    => $courses->lastPage(),
+                'per_page'     => $courses->perPage(),
+            ],
+            'summary' => [
+                'total'         => (int) ($summaryRow->total ?? 0),
+                'published'     => (int) ($summaryRow->published_count ?? 0),
+                'draft'         => (int) ($summaryRow->draft_count ?? 0),
+                'archived'      => (int) ($summaryRow->archived_count ?? 0),
+                'no_date'       => (int) ($summaryRow->no_date_count ?? 0),
+                'no_instructor' => (int) ($summaryRow->no_instructor_count ?? 0),
+                'ended'         => (int) ($summaryRow->ended_count ?? 0),
+                'scheduled'     => (int) ($summaryRow->scheduled_count ?? 0),
+            ],
+        ]);
+    }
+
+    // ─── POST /api/admin/courses ──────────────────────────────────────────────
+    public function store(Request $request): JsonResponse
+    {
+        $logPayload = $request->all();
+        if ($request->hasFile('course_image')) {
+            $logPayload['course_image'] = '[BINARY_FILE]';
+        }
+        if ($request->hasFile('image')) {
+            $logPayload['image'] = '[BINARY_FILE]';
+        }
+        Log::info('admin.course.store', $logPayload);
+
+        $data = $this->validateCourse($request, null);
+
+        $data['slug']       = $data['slug'] ?? $this->uniqueSlug($data['title']);
+        $data['created_by'] = $request->user()->id;
+        $data['updated_by'] = $request->user()->id;
+        $data['status']     = $data['status'] ?? 'draft';
+
+        // Derive type from is_free if type not sent
+        if (empty($data['type'])) {
+            $data['type'] = ($data['is_free'] ?? false) ? 'free' : 'paid';
+        }
+        $data['price'] = ($data['type'] === 'free') ? 0 : ($data['price'] ?? 0);
+
+        // Set initial finance approval status
+        $isPaid = $data['type'] === 'paid' || (float) ($data['price'] ?? 0) > 0;
+        $data['finance_approval_status'] = $isPaid ? 'pending' : 'not_required';
+
+        // ── Finance publish guard (create) ────────────────────────────────────
+        // A paid course can never be created as published — force draft and let
+        // the finance approval workflow unlock publishing later.
+        if ($isPaid && ($data['status'] ?? 'draft') === 'published') {
+            AuditLogService::log('PROGRAM_PUBLISH_BLOCKED', 'Course', null, $data['title'] ?? null,
+                ['reason' => 'finance_approval_required_on_create', 'price' => $data['price'] ?? 0],
+                null, null, $request
+            );
+            $data['status'] = 'draft';
+        }
+
+        // Path string in DB (e.g. courses/abc.jpg) — never the uploaded object
+        $data['course_image'] = $this->handleImageUpload($request, null);
+
+        $features       = $data['features'] ?? [];
+        $learningPathId = $data['learning_path_id'] ?? null;
+        unset($data['features'], $data['learning_path_id']);
+
+        $course = Course::create($data);
+
+        // Auto-submit paid courses for finance review immediately after creation
+        if ($isPaid) {
+            $this->financeService->submit($course, $request->user());
+        }
+
+        foreach ($features as $i => $feat) {
+            $course->features()->create(['title' => $feat, 'sort_order' => $i + 1]);
+        }
+
+        // Assign to learning path if provided
+        if ($learningPathId) {
+            $this->assignCourseToPath((int) $learningPathId, $course->id);
+        }
+
+        event(new CourseCreatedEvent($course, $request->user()->id));
+
+        if ($course->instructor_id) {
+            $instructor = Instructor::find($course->instructor_id);
+            if ($instructor) {
+                event(new InstructorAssignedEvent($course, $instructor, $request->user()->id));
+            }
+        }
+
+        AuditLogService::logModel('created', $course, null,
+            ['title' => $course->title, 'status' => $course->status], null, $request);
+
+        $course->load(['instructor.user', 'track', 'features', 'department']);
+
+        $lpItem = LearningPathItem::with('learningPath')->where('course_id', $course->id)->first();
+        $lpEnrollCount = $lpItem ? LearningPathEnrollment::where('learning_path_id', $lpItem->learning_path_id)
+            ->whereIn('status', ['active', 'registered', 'enrolled', 'completed'])->count() : null;
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم إنشاء الدورة بنجاح.',
+            'data'    => $this->format($course, $lpItem, $lpEnrollCount),
+        ], 201);
+    }
+
+    // ─── GET /api/admin/courses/{course} ─────────────────────────────────────
+    public function show(Course $course): JsonResponse
+    {
+        $course->load([
+            'instructor.user', 'track', 'features', 'department',
+            'createdBy', 'updatedBy', 'assignedBy',
+            'financeApproval.submitter', 'financeApproval.reviewer',
+        ])->loadCount(['registrations', 'activeRegistrations', 'sessions', 'assignments', 'materials']);
+
+        $lpItem = LearningPathItem::with('learningPath')->where('course_id', $course->id)->first();
+        $lpEnrollCount = $lpItem ? LearningPathEnrollment::where('learning_path_id', $lpItem->learning_path_id)
+            ->whereIn('status', ['active', 'registered', 'enrolled', 'completed'])->count() : null;
+
+        $base = $this->format($course, $lpItem, $lpEnrollCount);
+
+        return response()->json([
+            'success' => true,
+            'data'    => array_merge($base, $this->buildDetailContext($course, $lpItem, $lpEnrollCount)),
+        ]);
+    }
+
+    // ─── PUT/PATCH /api/admin/courses/{course} ────────────────────────────────
+    public function update(Request $request, Course $course): JsonResponse
+    {
+        $logPayload = $request->all();
+        if ($request->hasFile('course_image')) {
+            $logPayload['course_image'] = '[BINARY_FILE]';
+        }
+        if ($request->hasFile('image')) {
+            $logPayload['image'] = '[BINARY_FILE]';
+        }
+        Log::info('admin.course.update', ['course_id' => $course->id] + $logPayload);
+
+        $data = $this->validateCourse($request, $course);
+
+        $oldSnap = [
+            'title'         => $course->title,
+            'status'        => $course->status,
+            'instructor_id' => $course->instructor_id,
+            'start_date'    => $this->dateStr($course->start_date),
+        ];
+
+        $dateChanged = array_key_exists('start_date', $data)
+            && ($data['start_date'] !== $this->dateStr($course->start_date));
+        $instructorChanged = array_key_exists('instructor_id', $data)
+            && ((int) $data['instructor_id'] !== (int) $course->instructor_id);
+
+        if (isset($data['slug'])) {
+            $data['slug'] = Str::slug($data['slug']) ?: $data['slug'];
+        } elseif (isset($data['title'])) {
+            $data['slug'] = $course->slug;
+        }
+
+        if (isset($data['type'])) {
+            $data['price'] = $data['type'] === 'free' ? 0 : ($data['price'] ?? $course->price);
+        }
+
+        // Handle image upload (only overwrite if a new file or new string is provided)
+        $newImage = $this->handleImageUpload($request, $course->course_image);
+        if ($newImage !== $course->course_image) {
+            $data['course_image'] = $newImage;
+        }
+
+        $features         = $data['features'] ?? null;
+        $hasLpKey         = array_key_exists('learning_path_id', $data);
+        $learningPathId   = $data['learning_path_id'] ?? null;
+        unset($data['features'], $data['learning_path_id']);
+
+        // ── Finance approval guard ─────────────────────────────────────────────
+        // Detect price/currency changes that would reset an approved status
+        $priceChanged    = array_key_exists('price', $data) && (float) $data['price'] !== (float) $course->price;
+        $typeChanged     = array_key_exists('type', $data) && $data['type'] !== $course->type;
+        $becameFreeToPaid = $typeChanged && $data['type'] === 'paid' && $course->type !== 'paid';
+        $becamePaidToFree = $typeChanged && $data['type'] === 'free' && $course->type === 'paid';
+
+        // Free → paid: requires new finance approval
+        if ($becameFreeToPaid) {
+            $data['finance_approval_status']  = 'pending';
+            $data['submitted_for_finance_at'] = now();
+        }
+        // Paid → free: approval no longer required
+        if ($becamePaidToFree) {
+            $data['finance_approval_status'] = 'not_required';
+            $data['price']                   = 0;
+        }
+
+        // Block publishing a paid program without finance approval
+        $newStatus = $data['status'] ?? null;
+        if ($newStatus === 'published' && $course->isPaid()) {
+            $effectiveApprovalStatus = $data['finance_approval_status'] ?? $course->finance_approval_status;
+            if ($effectiveApprovalStatus !== 'approved') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'يجب اعتماد البرنامج من المدير المالي قبل النشر.',
+                    'code'    => 'FINANCE_APPROVAL_REQUIRED',
+                ], 422);
+            }
+        }
+
+        // Price changed after approval → reset to pending
+        if ($priceChanged && $course->finance_approval_status === 'approved' && $course->isPaid()) {
+            $data['finance_approval_status'] = 'pending';
+            AuditLogService::log('PROGRAM_PRICE_CHANGED', 'Course', $course->id, $course->title,
+                ['old_price' => $course->price, 'new_price' => $data['price'], 'finance_approval_status' => 'reset_to_pending'],
+                null, null, $request
+            );
+        }
+
+        // Track who last updated the record
+        $data['updated_by'] = $request->user()->id;
+
+        // Block archiving/deactivating if linked to an active/published learning path
+        if ($newStatus !== null && $newStatus !== $course->status && in_array($newStatus, ['archived', 'draft'])) {
+            $activeLpItem = LearningPathItem::with('learningPath')
+                ->where('course_id', $course->id)
+                ->whereHas('learningPath', fn ($q) => $q->whereIn('status', ['published', 'active']))
+                ->first();
+            if ($activeLpItem) {
+                $lp = $activeLpItem->learningPath;
+                AuditLogService::log('ACTION_BLOCKED', 'Course', $course->id, $course->title,
+                    ['action' => 'status_change', 'attempted_status' => $newStatus, 'reason' => 'belongs_to_active_learning_path', 'learning_path_id' => $lp->id, 'learning_path_title' => $lp->title],
+                    null, null, $request
+                );
+                return response()->json([
+                    'success'       => false,
+                    'message'       => 'Cannot archive/deactivate course because it belongs to an active learning path.',
+                    'message_ar'    => 'لا يمكن أرشفة أو تعطيل هذه الدورة لأنها مرتبطة بمسار تعليمي نشط. أزل الدورة من المسار أولاً.',
+                    'learning_path' => [
+                        'id'     => $lp->id,
+                        'title'  => $lp->title,
+                        'slug'   => $lp->slug,
+                        'status' => $lp->status,
+                    ],
+                ], 409);
+            }
+        }
+
+        $course->update($data);
+        $fresh = $course->fresh(['instructor.user', 'track', 'features', 'department']);
+
+        if ($features !== null) {
+            $course->features()->delete();
+            foreach ($features as $i => $feat) {
+                $course->features()->create(['title' => $feat, 'sort_order' => $i + 1]);
+            }
+        }
+
+        // Handle learning path assignment: key present + null = remove; key present + int = assign
+        if ($hasLpKey) {
+            if ($learningPathId) {
+                $this->assignCourseToPath((int) $learningPathId, $course->id);
+            } else {
+                LearningPathItem::where('course_id', $course->id)->delete();
+            }
+        }
+
+        if ($instructorChanged && ! empty($data['instructor_id'])) {
+            $instructor = Instructor::find($data['instructor_id']);
+            if ($instructor) {
+                event(new InstructorAssignedEvent($course, $instructor, $request->user()->id));
+            }
+        }
+
+        $changes = [];
+        if ($dateChanged) {
+            $changes['start_date'] = $this->dateStr($fresh->start_date);
+        }
+        if (isset($data['status']) && $data['status'] !== $oldSnap['status']) {
+            $changes['status'] = $data['status'];
+        }
+        if (! empty($data['registration_open'])) {
+            $changes['registration_open'] = true;
+        }
+        if (! empty($changes)) {
+            event(new CourseUpdatedEvent($fresh, $changes));
+        }
+
+        $statusChanged = isset($data['status']) && $data['status'] !== $oldSnap['status'];
+        if ($statusChanged && $data['status'] === 'published') {
+            $action = 'PUBLISH';
+        } elseif ($statusChanged && $oldSnap['status'] === 'published') {
+            $action = 'UNPUBLISH';
+        } elseif ($statusChanged) {
+            $action = 'status_changed';
+        } else {
+            $action = 'updated';
+        }
+        AuditLogService::logModel($action, $fresh, $oldSnap, [
+            'title'      => $fresh->title,
+            'status'     => $fresh->status,
+            'start_date' => $fresh->start_date,
+        ], null, $request);
+
+        $lpItemFresh = LearningPathItem::with('learningPath')->where('course_id', $fresh->id)->first();
+        $lpEnrollCountFresh = $lpItemFresh ? LearningPathEnrollment::where('learning_path_id', $lpItemFresh->learning_path_id)
+            ->whereIn('status', ['active', 'registered', 'enrolled', 'completed'])->count() : null;
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم تحديث الدورة بنجاح.',
+            'data'    => $this->format($fresh, $lpItemFresh, $lpEnrollCountFresh),
+        ]);
+    }
+
+    // ─── DELETE /api/admin/courses/{course} ───────────────────────────────────
+    public function destroy(Request $request, Course $course): JsonResponse
+    {
+        // Block deletion if course belongs to an active/published learning path
+        $activeLpItem = LearningPathItem::with('learningPath')
+            ->where('course_id', $course->id)
+            ->whereHas('learningPath', fn ($q) => $q->whereIn('status', ['published', 'active']))
+            ->first();
+
+        if ($activeLpItem) {
+            $lp = $activeLpItem->learningPath;
+            AuditLogService::log('ACTION_BLOCKED', 'Course', $course->id, $course->title,
+                ['action' => 'delete', 'reason' => 'belongs_to_active_learning_path', 'learning_path_id' => $lp->id, 'learning_path_title' => $lp->title],
+                null, null, $request
+            );
+            return response()->json([
+                'success'       => false,
+                'message'       => 'Cannot delete course because it belongs to an active learning path.',
+                'message_ar'    => 'لا يمكن حذف هذه الدورة لأنها مرتبطة بمسار تعليمي نشط. أزل الدورة من المسار أولاً أو أرشف المسار.',
+                'learning_path' => [
+                    'id'     => $lp->id,
+                    'title'  => $lp->title,
+                    'slug'   => $lp->slug,
+                    'status' => $lp->status,
+                ],
+            ], 409);
+        }
+
+        $snap  = ['title' => $course->title, 'status' => $course->status];
+        $id    = $course->id;
+        $label = $course->title;
+
+        $course->delete();
+
+        AuditLogService::log('deleted', 'Course', $id, $label, $snap, null, null, $request);
+
+        return response()->json(['success' => true, 'message' => 'تم حذف الدورة بنجاح.']);
+    }
+
+    // ─── POST /api/admin/courses/{course}/assign-instructor ───────────────────
+    public function assignInstructor(Request $request, Course $course): JsonResponse
+    {
+        $data = $request->validate([
+            'instructor_id' => ['nullable', 'integer', 'exists:instructors,id'],
+            'user_id'       => ['nullable', 'integer', 'exists:users,id'],
+        ]);
+
+        if (empty($data['instructor_id']) && ! empty($data['user_id'])) {
+            $found = Instructor::where('user_id', $data['user_id'])->first();
+            abort_unless($found, 422, 'المستخدم ليس لديه ملف مدرب.');
+            $data['instructor_id'] = $found->id;
+        }
+
+        abort_unless(! empty($data['instructor_id']), 422, 'instructor_id أو user_id مطلوب.');
+
+        $oldInstructorId = $course->instructor_id;
+
+        $course->update([
+            'instructor_id' => $data['instructor_id'],
+            'assigned_by'   => $request->user()->id,
+        ]);
+
+        $instructor = Instructor::find($data['instructor_id']);
+        if ($instructor) {
+            event(new InstructorAssignedEvent($course, $instructor, $request->user()->id));
+        }
+
+        AuditLogService::log('updated', 'Course', $course->id, $course->title,
+            ['instructor_id' => $oldInstructorId],
+            ['instructor_id' => $data['instructor_id'], 'assigned_by' => $request->user()->id],
+            ['action' => 'assign_instructor'],
+            $request
+        );
+
+        $course->load(['instructor.user', 'track', 'department']);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم تعيين المدرب بنجاح.',
+            'data'    => $this->format($course),
+        ]);
+    }
+
+    // ─── Shared validation ────────────────────────────────────────────────────
+
+    private function validateCourse(Request $request, ?Course $course): array
+    {
+        $isUpdate = $course !== null;
+
+        if ($request->has('session_format')) {
+            $normalized = CourseDisplay::normalizeSessionFormatInput($request->input('session_format'));
+            $request->merge(['session_format' => $normalized]);
+        }
+
+        if ($request->filled('slug')) {
+            $slug = Str::slug((string) $request->input('slug')) ?: (string) $request->input('slug');
+            $request->merge(['slug' => $slug]);
+        } elseif (! $isUpdate && $request->filled('title')) {
+            $slug = Str::slug((string) $request->input('title'));
+            if ($slug !== '') {
+                $request->merge(['slug' => $slug]);
+            }
+        }
+
+        $messages = [
+            'required'               => 'الحقل مطلوب.',
+            'title.required'         => 'الحقل مطلوب.',
+            'status.in'              => 'حالة النشر غير صحيحة.',
+            'learning_outcomes.array'        => 'نوع البيانات غير صحيح.',
+            'learning_outcomes.*.string'     => 'نوع البيانات غير صحيح.',
+            'learning_outcomes.*.max'          => 'كل مخرج تعليمي يجب ألا يتجاوز 500 حرف.',
+            'requirements.array'               => 'نوع البيانات غير صحيح.',
+            'requirements.*.string'            => 'نوع البيانات غير صحيح.',
+            'requirements.*.max'               => 'كل متطلب يجب ألا يتجاوز 500 حرف.',
+            'curriculum_topics.array'        => 'نوع البيانات غير صحيح.',
+            'curriculum_topics.*.string'     => 'نوع البيانات غير صحيح.',
+            'curriculum_topics.*.max'        => 'كل محور يجب ألا يتجاوز 500 حرف.',
+            'features.array'                 => 'نوع البيانات غير صحيح.',
+            'features.*.string'              => 'نوع البيانات غير صحيح.',
+            'features.*.max'                 => 'كل نقطة يجب ألا تتجاوز 255 حرفاً.',
+            'keywords.*.max'                 => 'كل كلمة مفتاحية يجب ألا تتجاوز 100 حرف.',
+        ];
+
+        $attributes = [
+            'status'           => 'حالة النشر',
+            'course_image'     => 'صورة الغلاف',
+            'learning_outcomes' => 'المخرجات التعليمية',
+            'features'         => 'ماذا ستتعلم',
+        ];
+
+        $rules = [
+            'track_id'              => 'nullable|exists:tracks,id',
+            'instructor_id'         => 'nullable|exists:instructors,id',
+            'department_id'         => 'nullable|exists:departments,id',
+            'title'                 => [
+                $isUpdate ? 'sometimes' : 'required',
+                'string',
+                'max:255',
+                Rule::unique('courses', 'title')->ignore($course?->id),
+            ],
+            'slug'                  => [
+                'nullable',
+                'string',
+                'max:255',
+                Rule::unique('courses', 'slug')->ignore($course?->id),
+            ],
+            'description'           => 'nullable|string',
+            'short_description'     => 'nullable|string',
+            'type'                  => 'nullable|in:free,paid',
+            'price'                 => 'nullable|numeric|min:0',
+            'is_free'               => 'nullable|boolean',
+            'program_type'          => 'nullable|in:course,workshop,one_session,full_program',
+            'content_type'          => 'nullable|in:course,workshop,one_session,full_program',
+            'session_format'        => 'nullable|in:online,offline,hybrid,workshop_single_session,workshop_one_session',
+            'location'              => 'nullable|string|max:255',
+            // Accept both delivery_type (frontend alias) and location_type (DB column name)
+            'delivery_type'         => 'nullable|in:online,offline,hybrid,unknown',
+            'location_type'         => 'nullable|in:online,offline,hybrid,unknown',
+            'meeting_link'          => 'nullable|string|max:500',
+            'is_online'             => 'nullable|boolean',
+            'start_date'            => 'nullable|date',
+            'start_time'            => 'nullable|date_format:H:i',
+            'end_date'              => $isUpdate ? 'sometimes|nullable|date' : 'nullable|date',
+            'end_time'              => 'nullable|date_format:H:i',
+            'capacity'              => 'nullable|integer|min:1',
+            'seats_count'           => 'nullable|integer|min:1',   // alias for capacity
+            'registration_open'     => 'nullable|boolean',
+            'registration_status'   => 'nullable|in:open,closed,coming_soon',
+            'requires_registration_code' => 'nullable|boolean',
+            'registration_code'     => [
+                'nullable',
+                'string',
+                'max:100',
+                Rule::requiredIf(fn () => $request->boolean('requires_registration_code')),
+            ],
+            'status'                => 'nullable|in:draft,published,archived',
+            'notes'                 => 'nullable|string',
+            'duration'              => 'nullable|string|max:255',
+            'training_hours'        => 'nullable|integer|min:0',
+            'hours_count'           => 'nullable|integer|min:0',   // alias for training_hours
+            'target_audience'       => 'nullable|string|max:255',
+            'language'              => 'nullable|string|max:255',
+            'level'                 => 'nullable|string|max:255',
+            'study_days'            => 'nullable|string|max:255',
+            'study_time'            => 'nullable|string|max:255',
+            'certificate'           => 'nullable|string|max:255',
+            'certificate_available' => 'nullable|boolean',
+            'certificate_type'      => 'nullable|string|max:100',
+            'learning_outcomes'     => 'nullable|array',
+            'learning_outcomes.*'   => 'string|max:500',
+            'requirements'          => 'nullable|array',
+            'requirements.*'        => 'string|max:500',
+            'curriculum_topics'     => 'nullable|array',
+            'curriculum_topics.*'   => 'string|max:500',
+            'keywords'              => 'nullable|array',
+            'keywords.*'            => 'string|max:100',
+            'features'              => 'nullable|array',
+            'features.*'            => 'string|max:255',
+            'requires_placement_test' => 'nullable|boolean',
+            'course_thumbnail'        => 'nullable|string',
+            'learning_path_id'        => 'nullable|integer|exists:learning_paths,id',
+            'whatsapp_community_url'  => ['nullable', 'string', 'starts_with:https://chat.whatsapp.com/'],
+        ];
+
+        if ($request->hasFile('course_image')) {
+            $rules['course_image'] = 'nullable|file|mimes:jpg,jpeg,png,webp,gif|max:4096';
+        } elseif ($request->hasFile('image')) {
+            $rules['image'] = 'nullable|file|mimes:jpg,jpeg,png,webp,gif|max:4096';
+            $rules['course_image'] = 'nullable';
+        } else {
+            // Accept string URL or null — no type enforcement so a URL of any length works
+            $rules['course_image'] = 'nullable';
+            $rules['image']        = 'nullable';
+        }
+
+        try {
+            $data = $request->validate($rules, $messages, $attributes);
+        } catch (ValidationException $e) {
+            Log::warning('admin.course.validation_failed', [
+                'course_id' => $course?->id,
+                'errors'    => $e->errors(),
+            ]);
+            throw $e;
+        }
+
+        // Remove file objects from the validated data array — handleImageUpload handles them
+        unset($data['course_image'], $data['image']);
+
+        // Map delivery_type → location_type (frontend alias)
+        if (isset($data['delivery_type']) && ! isset($data['location_type'])) {
+            $data['location_type'] = $data['delivery_type'];
+        }
+        unset($data['delivery_type']);
+
+        // Map seats_count → capacity (frontend alias)
+        if (isset($data['seats_count']) && ! isset($data['capacity'])) {
+            $data['capacity'] = $data['seats_count'];
+        }
+        unset($data['seats_count']);
+
+        // Map hours_count → training_hours (frontend alias)
+        if (isset($data['hours_count']) && ! isset($data['training_hours'])) {
+            $data['training_hours'] = $data['hours_count'];
+        }
+        unset($data['hours_count']);
+
+        // Map content_type → program_type (frontend alias)
+        if (isset($data['content_type']) && ! isset($data['program_type'])) {
+            $data['program_type'] = $data['content_type'];
+        }
+        unset($data['content_type']);
+
+        if (isset($data['training_hours'])) {
+            $data['training_hours'] = (int) round((float) $data['training_hours']);
+        }
+
+        if (empty($data['requires_registration_code'])) {
+            $data['requires_registration_code'] = false;
+            $data['registration_code']          = null;
+        } elseif (isset($data['registration_code'])) {
+            $data['registration_code'] = trim((string) $data['registration_code']) ?: null;
+        }
+
+        return CourseDisplay::applyOneSessionDefaults($data);
+    }
+
+    // ─── Image upload helper ──────────────────────────────────────────────────
+
+    private function handleImageUpload(Request $request, ?string $existing): ?string
+    {
+        if ($request->hasFile('course_image') && $request->file('course_image')->isValid()) {
+            if ($existing && ! str_starts_with($existing, 'http')) {
+                Storage::disk('public')->delete($existing);
+            }
+
+            return $request->file('course_image')->store('courses', 'public');
+        }
+
+        // Legacy: `image` field name
+        if ($request->hasFile('image') && $request->file('image')->isValid()) {
+            if ($existing && ! str_starts_with($existing, 'http')) {
+                Storage::disk('public')->delete($existing);
+            }
+
+            return $request->file('image')->store('courses', 'public');
+        }
+
+        if ($request->filled('course_image') && ! $request->hasFile('course_image')) {
+            return $request->input('course_image');
+        }
+
+        return $existing;
+    }
+
+    // ─── Response formatter ───────────────────────────────────────────────────
+
+    private function format(Course $course, ?LearningPathItem $lpItem = null, ?int $lpEnrollmentCount = null): array
+    {
+        $imageUrl = $this->storageUrl($course->course_image);
+
+        // Learning path membership metadata
+        $lp                    = $lpItem?->learningPath;
+        $isActiveLp            = $lp && in_array($lp->status, ['published', 'active']);
+        $lockReason            = $isActiveLp
+            ? 'هذه الدورة مرتبطة بمسار تعليمي نشط ولا يمكن حذفها أو أرشفتها أو تعطيلها قبل إزالتها من المسار أو أرشفة المسار.'
+            : null;
+
+        return [
+            'id'                    => $course->id,
+            'title'                 => $course->title,
+            'slug'                  => $course->slug,
+            'description'           => $course->description,
+            'short_description'     => $course->short_description,
+            'type'                  => $course->type,
+            'price'                 => (float) $course->price,
+            'is_free'               => (bool) $course->is_free,
+            'program_type'          => $course->program_type,
+            'content_type'          => $course->program_type,
+            'session_format'        => $course->session_format,
+            'requires_placement_test' => (bool) $course->requires_placement_test,
+            'location'              => $course->location,
+            'delivery_type'         => $course->location_type ?? 'online',
+            'location_type'         => $course->location_type ?? 'online',
+            'meeting_link'          => $course->meeting_link,
+            'is_online'             => (bool) $course->is_online,
+            'start_date'            => $this->dateStr($course->start_date),
+            'start_time'            => $course->start_time,
+            'end_date'              => $this->dateStr($course->end_date),
+            'end_time'              => $course->end_time,
+            'capacity'              => $course->capacity,
+            'seats_count'           => $course->capacity,
+            'registration_open'     => (bool) ($course->registration_open ?? true),
+            'registration_status'   => $course->registration_status ?? 'open',
+            'requires_registration_code' => (bool) $course->requires_registration_code,
+            'registration_code'     => $course->registration_code,
+            'next_cohort_pending'   => $course->start_date === null,
+            'status'                => $course->status,
+            'is_published'          => $course->status === 'published',
+            'is_ended'              => CourseComputedStatus::isEnded($course),
+            'computed_status'       => CourseComputedStatus::computedStatus($course),
+            'status_label_ar'       => CourseComputedStatus::statusLabelAr($course),
+            'notes'                 => $course->notes,
+            'duration'              => CourseDisplay::resolvedDuration(
+                $course->program_type,
+                $course->session_format,
+                $course->duration
+            ),
+            'duration_value'        => CourseDisplay::isOneSession($course->program_type, $course->session_format) ? 1 : null,
+            'duration_unit'         => CourseDisplay::isOneSession($course->program_type, $course->session_format) ? 'day' : null,
+            'computed_duration_label' => CourseDisplay::resolvedDuration(
+                $course->program_type,
+                $course->session_format,
+                $course->duration
+            ),
+            'training_hours'        => $course->training_hours,
+            'hours_count'           => $course->training_hours,
+            'target_audience'       => $course->target_audience,
+            'language'              => $course->language,
+            'level'                 => $course->level,
+            'study_days'            => $course->study_days,
+            'study_time'            => $course->study_time,
+            'certificate'           => $course->certificate,
+            'certificate_available' => (bool) $course->certificate_available,
+            'certificate_type'      => $course->certificate_type,
+            'course_image'          => $imageUrl,
+            'image_url'             => $imageUrl,
+            'thumbnail_url'         => $this->storageUrl($course->course_thumbnail),
+            'learning_outcomes'     => $course->learning_outcomes   ?? [],
+            'requirements'          => $course->requirements        ?? [],
+            'curriculum_topics'     => $course->curriculum_topics   ?? [],
+            'keywords'              => $course->keywords            ?? [],
+            'instructor'            => $course->instructor ? [
+                'id'               => $course->instructor->id,
+                'user_id'          => $course->instructor->user_id,
+                'name'             => $course->instructor->user?->name ?? $course->instructor->name,
+                'email'            => $course->instructor->user?->email,
+                'role'             => $course->instructor->user?->role ?? 'instructor',
+                'title'            => $course->instructor->title,
+                'profile_photo_url' => $this->storageUrl(
+                    $course->instructor->user?->avatar ?? $course->instructor->image
+                ),
+            ] : null,
+            // Effective instructor: course's own instructor, or LP instructor as fallback
+            'instructor_source'     => $course->instructor ? 'course' : ($lp?->instructor ? 'learning_path' : null),
+            'effective_instructor'  => $course->instructor ? null : ($lp?->instructor ? [
+                'id'               => $lp->instructor->id,
+                'user_id'          => $lp->instructor->user_id,
+                'name'             => $lp->instructor->user?->name ?? $lp->instructor->name,
+                'email'            => $lp->instructor->user?->email,
+                'title'            => $lp->instructor->title,
+                'profile_photo_url' => $this->storageUrl(
+                    $lp->instructor->user?->avatar ?? $lp->instructor->image
+                ),
+            ] : null),
+            'track'               => $course->track ? [
+                'id'    => $course->track->id,
+                'title' => $course->track->title,
+                'slug'  => $course->track->slug,
+            ] : null,
+            'department'          => $course->department ? [
+                'id'   => $course->department->id,
+                'name' => $course->department->name,
+            ] : null,
+            'created_by'          => $course->createdBy ? [
+                'id'    => $course->createdBy->id,
+                'name'  => $course->createdBy->name,
+                'email' => $course->createdBy->email,
+                'role'  => $course->createdBy->role,
+            ] : null,
+            'updated_by'          => $course->updatedBy ? [
+                'id'    => $course->updatedBy->id,
+                'name'  => $course->updatedBy->name,
+                'email' => $course->updatedBy->email,
+                'role'  => $course->updatedBy->role,
+            ] : null,
+            // Finance approval
+            'is_paid'             => $course->isPaid(),
+            'is_free'             => $course->isFree(),
+            'currency'            => strtoupper($course->currency ?? 'EUR'),
+            'finance_approval_status' => $course->finance_approval_status ?? 'not_required',
+            'submitted_for_finance_at' => $course->submitted_for_finance_at?->toIso8601String(),
+            'finance_approval'    => $course->relationLoaded('financeApproval') && $course->financeApproval
+                ? $this->formatFinanceApproval($course->financeApproval)
+                : null,
+            'registrations_count'      => $course->registrations_count ?? 0,
+            // Registrations that genuinely count as enrolled (Registration::scopeActiveEnrollment):
+            // excludes pending_payment, cancelled, and no_show rows. This — not the raw
+            // registrations_count above — is the correct "تسجيلات" figure for a paid course,
+            // since registrations_count includes rows still awaiting/failed payment.
+            'active_registrations_count' => $course->active_registrations_count ?? 0,
+            // For LP-owned courses students enroll via the learning path, not directly,
+            // so the direct registrations_count is 0. effective_enrollment_count returns
+            // the LP enrollment count instead (the true number of enrolled students).
+            // Otherwise it's the scoped active_registrations_count — never the raw,
+            // payment-status-agnostic registrations_count.
+            'effective_enrollment_count' => $isActiveLp && $lpEnrollmentCount !== null
+                ? $lpEnrollmentCount
+                : ($course->active_registrations_count ?? 0),
+            'features'            => $course->features?->pluck('title')->all() ?? [],
+            'whatsapp_community_url' => $course->whatsapp_community_url,
+            'created_at'          => $course->created_at,
+            'updated_at'          => $course->updated_at,
+            // Learning path membership
+            'learning_path'             => $lp ? [
+                'id'                   => $lp->id,
+                'title'                => $lp->title,
+                'slug'                 => $lp->slug,
+                'status'               => $lp->status,
+                'enrolled_students_count' => $lpEnrollmentCount ?? 0,
+            ] : null,
+            'is_part_of_learning_path'  => $lp !== null,
+            'learning_path_status'      => $lp?->status,
+            'can_delete'                => ! $isActiveLp,
+            'can_archive'               => ! $isActiveLp,
+            'can_deactivate'            => ! $isActiveLp,
+            'lock_reason'               => $lockReason,
+        ];
+    }
+
+    private function formatFinanceApproval(\App\Models\ProgramFinanceApproval $a): array
+    {
+        return [
+            'id'               => $a->id,
+            'status'           => $a->status,
+            'submitted_at'     => $a->submitted_at?->toIso8601String(),
+            'reviewed_at'      => $a->reviewed_at?->toIso8601String(),
+            'review_note'      => $a->review_note,
+            'rejection_reason' => $a->rejection_reason,
+            'price_snapshot'   => $a->price_snapshot ? (float) $a->price_snapshot : null,
+            'currency_snapshot' => $a->currency_snapshot,
+            'submitter'        => $a->submitter ? ['id' => $a->submitter->id, 'name' => $a->submitter->name, 'role' => $a->submitter->role] : null,
+            'reviewer'         => $a->reviewer  ? ['id' => $a->reviewer->id,  'name' => $a->reviewer->name,  'role' => $a->reviewer->role]  : null,
+        ];
+    }
+
+    /** Extended context for admin course detail drawer (tabs, metrics, related lists). */
+    private function buildDetailContext(Course $course, ?LearningPathItem $lpItem, ?int $lpEnrollCount): array
+    {
+        $isActiveLp = $lpItem?->learningPath && in_array($lpItem->learningPath->status, ['published', 'active']);
+        $studentsCount = $isActiveLp && $lpEnrollCount !== null
+            ? $lpEnrollCount
+            : Registration::where('course_id', $course->id)
+                ->whereNotIn('status', ['cancelled'])
+                ->count();
+
+        $progressAvg = round((float) (StudentProgress::where('course_id', $course->id)->avg('progress_percentage') ?? 0), 1);
+
+        $lmsSessionIds     = LmsSession::where('course_id', $course->id)->pluck('id');
+        $courseSessionIds  = CourseSession::where('course_id', $course->id)->pluck('id');
+        $attendanceBase    = Attendance::query()->where(function ($q) use ($lmsSessionIds, $courseSessionIds) {
+            if ($lmsSessionIds->isNotEmpty()) {
+                $q->whereIn('session_id', $lmsSessionIds);
+            }
+            if ($courseSessionIds->isNotEmpty()) {
+                $q->orWhereIn('course_session_id', $courseSessionIds);
+            }
+        });
+        $attendanceTotal   = (clone $attendanceBase)->count();
+        $attendancePresent = (clone $attendanceBase)->where('status', 'present')->count();
+        $attendancePct     = $attendanceTotal > 0 ? round(($attendancePresent / $attendanceTotal) * 100, 1) : 0;
+
+        $sessions = CourseSession::where('course_id', $course->id)
+            ->orderByDesc('start_at')
+            ->limit(20)
+            ->get()
+            ->map(fn (CourseSession $s) => [
+                'id'           => $s->id,
+                'title'        => $s->title,
+                'session_date' => $s->start_at?->setTimezone('Europe/Amsterdam')->toDateString(),
+                'start_time'   => $s->start_at?->setTimezone('Europe/Amsterdam')->format('H:i'),
+                'end_time'     => $s->end_at?->setTimezone('Europe/Amsterdam')->format('H:i'),
+                'status'       => $s->status ?? 'scheduled',
+                'meeting_url'  => $s->meeting_url ?? $s->meeting_link ?? null,
+                'location_type'=> $s->location_type ?? null,
+                'module_id'    => $s->module_id ?? null,
+            ]);
+
+        $assignments = Assignment::where('course_id', $course->id)
+            ->latest()
+            ->limit(12)
+            ->get()
+            ->map(fn (Assignment $a) => [
+                'id'         => $a->id,
+                'title'      => $a->title,
+                'due_date'   => $this->dateStr($a->due_date ?? null),
+                'status'     => $a->status ?? null,
+                'created_at' => $a->created_at?->toDateTimeString(),
+            ]);
+
+        $materials = CourseMaterial::where('course_id', $course->id)
+            ->orderBy('sort_order')
+            ->limit(12)
+            ->get()
+            ->map(fn (CourseMaterial $m) => [
+                'id'    => $m->id,
+                'title' => $m->title,
+                'type'  => $m->type ?? $m->material_type ?? null,
+            ]);
+
+        $registrations = Registration::with('user')
+            ->where('course_id', $course->id)
+            ->whereNotIn('status', ['cancelled'])
+            ->latest()
+            ->limit(12)
+            ->get()
+            ->map(fn (Registration $r) => [
+                'id'           => $r->id,
+                'student'      => $r->user?->name ?? $r->full_name,
+                'email'        => $r->user?->email ?? $r->email,
+                'status'       => $r->status,
+                'submitted_at' => $r->created_at?->toDateTimeString(),
+            ]);
+
+        return [
+            'students_count'       => $studentsCount,
+            'sessions_count'       => $sessions->count(),
+            'assignments_count'    => $course->assignments_count ?? $assignments->count(),
+            'materials_count'      => $course->materials_count ?? $materials->count(),
+            'average_progress'     => $progressAvg,
+            'attendance_summary'   => [
+                'present_count' => $attendancePresent,
+                'total'         => $attendanceTotal,
+                'present_pct'   => $attendancePct,
+            ],
+            'category'             => $course->track?->title,
+            'sessions'             => $sessions->values()->all(),
+            'assignments'          => $assignments->values()->all(),
+            'materials'            => $materials->values()->all(),
+            'registrations'        => $registrations->values()->all(),
+        ];
+    }
+
+    /** Assigns course to a learning path, removing it from any previous path first. */
+    private function assignCourseToPath(int $learningPathId, int $courseId): void
+    {
+        DB::transaction(function () use ($learningPathId, $courseId) {
+            // Remove existing membership (a course belongs to one path at a time)
+            LearningPathItem::where('course_id', $courseId)
+                ->where('learning_path_id', '!=', $learningPathId)
+                ->delete();
+
+            $maxOrder = LearningPathItem::where('learning_path_id', $learningPathId)->max('sort_order') ?? -1;
+
+            LearningPathItem::updateOrCreate(
+                ['learning_path_id' => $learningPathId, 'course_id' => $courseId],
+                ['sort_order'       => $maxOrder + 1],
+            );
+
+            // If course has no instructor and LP has one, inherit it
+            $lpInstructorId = \App\Models\LearningPath::where('id', $learningPathId)->value('instructor_id');
+            if ($lpInstructorId) {
+                Course::where('id', $courseId)
+                    ->whereNull('instructor_id')
+                    ->update(['instructor_id' => $lpInstructorId]);
+            }
+        });
+    }
+
+    /** Safely formats any date value (Carbon, string, or null) to Y-m-d. */
+    private function dateStr(mixed $value): ?string
+    {
+        if (! $value) {
+            return null;
+        }
+        return \Carbon\Carbon::parse($value)->format('Y-m-d');
+    }
+
+    /** Returns a full public URL for a storage path, or null if empty. */
+    private function storageUrl(?string $path): ?string
+    {
+        if (! $path) {
+            return null;
+        }
+        if (str_starts_with($path, 'http')) {
+            return $path;
+        }
+        return asset('storage/' . ltrim($path, '/'));
+    }
+
+    private function uniqueSlug(string $title, ?int $ignoreId = null): string
+    {
+        $base  = Str::slug($title);
+        $slug  = $base ?: 'course';
+        $count = 1;
+
+        while (
+            Course::query()
+                ->when($ignoreId, fn ($q) => $q->where('id', '!=', $ignoreId))
+                ->where('slug', $slug)
+                ->exists()
+        ) {
+            $slug = $base . '-' . $count++;
+        }
+
+        return $slug;
+    }
+}

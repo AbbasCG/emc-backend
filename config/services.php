@@ -35,4 +35,36 @@ return [
         ],
     ],
 
+    'stripe' => [
+        'key' => env('STRIPE_KEY'),
+        'secret' => env('STRIPE_SECRET'),
+        'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
+    ],
+
+    'vapid' => [
+        'public_key' => env('VAPID_PUBLIC_KEY'),
+        'private_key' => env('VAPID_PRIVATE_KEY'),
+        'subject' => env('VAPID_SUBJECT', 'mailto:support@example.com'),
+    ],
+
+    'paypal' => [
+        'mode' => env('PAYPAL_MODE', 'sandbox'),
+        'webhook_id' => env('PAYPAL_WEBHOOK_ID'),
+        'sandbox' => [
+            'client_id' => env('PAYPAL_SANDBOX_CLIENT_ID'),
+            'client_secret' => env('PAYPAL_SANDBOX_CLIENT_SECRET'),
+            'app_id' => env('PAYPAL_SANDBOX_APP_ID'),
+        ],
+        'live' => [
+            'client_id' => env('PAYPAL_LIVE_CLIENT_ID'),
+            'client_secret' => env('PAYPAL_LIVE_CLIENT_SECRET'),
+            'app_id' => env('PAYPAL_LIVE_APP_ID'),
+        ],
+        'payment_action' => 'Sale',
+        'currency' => env('PAYPAL_CURRENCY', 'EUR'),
+        'notify_url' => env('PAYPAL_NOTIFY_URL'),
+        'locale' => env('PAYPAL_LOCALE', 'en_US'),
+        'validate_ssl' => true,
+    ],
+
 ];

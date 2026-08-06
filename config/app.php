@@ -53,6 +53,16 @@ return [
     */
 
     'url' => env('APP_URL', 'http://localhost'),
+    'frontend_url' => env('FRONTEND_URL', env('APP_URL', 'http://localhost')),
+
+    'frontend_payment_success_url' => env('FRONTEND_PAYMENT_SUCCESS_URL', env('APP_URL', 'http://localhost')),
+    'frontend_payment_cancel_url' => env('FRONTEND_PAYMENT_CANCEL_URL', env('APP_URL', 'http://localhost')),
+
+    /*
+    | When true and APP_ENV=testing, the fake payment provider is allowed (for automated tests).
+    | Never enable this in production or staging.
+    */
+    'allow_fake_payments_in_testing' => env('ALLOW_FAKE_PAYMENTS_IN_TESTING', false),
 
     /*
     |--------------------------------------------------------------------------
@@ -66,6 +76,20 @@ return [
     */
 
     'timezone' => 'UTC',
+
+    /*
+    |--------------------------------------------------------------------------
+    | Booking Timezone
+    |--------------------------------------------------------------------------
+    |
+    | The wall-clock timezone in which all student/instructor booking flows
+    | (e.g. placement-test oral interviews) are entered and displayed. Storage
+    | always stays UTC (see 'timezone' above) — this value is only used to
+    | interpret local time input and to render local time output.
+    |
+    */
+
+    'booking_timezone' => env('BOOKING_TIMEZONE', 'Europe/Amsterdam'),
 
     /*
     |--------------------------------------------------------------------------

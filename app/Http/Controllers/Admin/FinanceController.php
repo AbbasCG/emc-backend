@@ -1,0 +1,287 @@
+<?php
+
+namespace App\Http\Controllers\Admin;
+
+use App\Http\Controllers\Controller;
+use App\Http\Resources\FinancialTransactionResource;
+use App\Models\FinanceAccount;
+use App\Models\FinanceAccountTransaction;
+use App\Models\FinancialTransaction;
+use App\Models\ManualPayment;
+use App\Models\Payment;
+use App\Support\PaymentStatuses;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+
+class FinanceController extends Controller
+{
+    public function overview(): \Illuminate\Http\JsonResponse
+    {
+        try {
+            $totalRevenue     = Payment::where('status', PaymentStatuses::CONFIRMED)->sum('amount');
+            $confirmedRevenue = $totalRevenue;
+            $pendingRevenue   = Payment::where('status', PaymentStatuses::PENDING)->sum('amount');
+            $failedCount      = Payment::where('status', PaymentStatuses::FAILED)->count();
+
+            $monthlyRevenue = DB::table('payments')
+                ->where('status', PaymentStatuses::CONFIRMED)
+                ->whereNotNull('confirmed_at')
+                ->select(
+                    DB::raw("DATE_FORMAT(confirmed_at, '%Y-%m') as month"),
+                    DB::raw('SUM(amount) as amount'),
+                    DB::raw('COUNT(*) as count')
+                )
+                ->groupBy('month')
+                ->orderBy('month', 'desc')
+                ->limit(12)
+                ->get()
+                ->map(fn ($r) => ['month' => $r->month, 'amount' => (float) $r->amount])
+                ->values();
+
+            $revenueByCourse = DB::table('payments')
+                ->join('registrations', 'payments.registration_id', '=', 'registrations.id')
+                ->join('courses', 'registrations.course_id', '=', 'courses.id')
+                ->where('payments.status', PaymentStatuses::CONFIRMED)
+                ->select('courses.title', DB::raw('SUM(payments.amount) as amount'))
+                ->groupBy('courses.id', 'courses.title')
+                ->orderByDesc('amount')
+                ->limit(10)
+                ->get()
+                ->map(fn ($r) => ['course_name' => $r->title, 'amount' => (float) $r->amount])
+                ->values();
+
+            $revenueByTrack = DB::table('payments')
+                ->join('registrations', 'payments.registration_id', '=', 'registrations.id')
+                ->join('tracks', 'registrations.track_id', '=', 'tracks.id')
+                ->where('payments.status', PaymentStatuses::CONFIRMED)
+                ->select('tracks.name', DB::raw('SUM(payments.amount) as amount'))
+                ->groupBy('tracks.id', 'tracks.name')
+                ->orderByDesc('amount')
+                ->limit(10)
+                ->get()
+                ->map(fn ($r) => ['track_name' => $r->name, 'amount' => (float) $r->amount])
+                ->values();
+
+            $latestPayments = Payment::with(['registration.course'])
+                ->latest()
+                ->limit(10)
+                ->get()
+                ->map(fn ($p) => [
+                    'id'          => $p->id,
+                    'amount'      => $p->amount,
+                    'currency'    => strtoupper($p->registration?->course?->currency ?? 'eur'),
+                    'status'      => strtolower($p->status ?? 'pending'),
+                    'provider'    => $p->provider ?? 'unknown',
+                    'course_name' => $p->registration?->course?->title,
+                    'payer_email' => $p->registration?->email,
+                    'created_at'  => $p->created_at?->toIso8601String(),
+                ])
+                ->values();
+
+            $pendingManualCount    = ManualPayment::where('status', 'pending_review')->count();
+            $activeAccountsCount   = FinanceAccount::where('is_active', true)->count();
+            $financeTransactionsCount = FinanceAccountTransaction::count();
+
+            // Ledger-based totals (finance_account_transactions) — covers manual payments
+            // and Stripe payments after the ledger wiring was deployed.
+            $ledgerIncome  = (float) FinanceAccountTransaction::where('status', 'confirmed')->whereIn('type', ['revenue', 'transfer_in'])->sum('amount');
+            $ledgerExpense = (float) FinanceAccountTransaction::where('status', 'confirmed')->whereIn('type', ['expense', 'transfer'])->sum('amount');
+
+            // Per-currency account balances — never sum across currencies.
+            $accountBalancesByCurrency = FinanceAccount::where('is_active', true)
+                ->selectRaw('currency, SUM(current_balance) as total')
+                ->groupBy('currency')
+                ->get()
+                ->mapWithKeys(fn ($r) => [$r->currency => (float) $r->total]);
+
+            // Legacy scalar: EUR total only (backward compat for frontend cards that expect one number).
+            $totalAccountBalance = (float) FinanceAccount::where('is_active', true)
+                ->where('currency', 'EUR')
+                ->sum('current_balance');
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'total_revenue'                   => (float) $totalRevenue,
+                    'confirmed_revenue'               => (float) $confirmedRevenue,
+                    'pending_revenue'                 => (float) $pendingRevenue,
+                    'failed_count'                    => $failedCount,
+                    'monthly_revenue'                 => $monthlyRevenue,
+                    'revenue_by_course'               => $revenueByCourse,
+                    'revenue_by_track'                => $revenueByTrack,
+                    'latest_payments'                 => $latestPayments,
+                    'pending_manual_payments_count'   => $pendingManualCount,
+                    'total_account_balance'           => $totalAccountBalance,
+                    'account_balances_by_currency'    => $accountBalancesByCurrency,
+                    'ledger_income'                   => $ledgerIncome,
+                    'ledger_expense'                  => $ledgerExpense,
+                    'net_ledger'                      => $ledgerIncome - $ledgerExpense,
+                    'active_accounts_count'           => $activeAccountsCount,
+                    'finance_transactions_count'      => $financeTransactionsCount,
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'total_revenue'     => 0,
+                    'confirmed_revenue' => 0,
+                    'pending_revenue'   => 0,
+                    'failed_count'      => 0,
+                    'monthly_revenue'   => [],
+                    'revenue_by_course' => [],
+                    'revenue_by_track'  => [],
+                    'latest_payments'   => [],
+                ],
+            ]);
+        }
+    }
+
+    public function transactions(Request $request): \Illuminate\Http\JsonResponse
+    {
+        $transactions = FinancialTransaction::with(['user', 'payment'])
+            ->when($request->type, fn ($q) => $q->where('type', $request->type))
+            ->when($request->status, fn ($q) => $q->where('status', $request->status))
+            ->when($request->from, fn ($q) => $q->whereDate('occurred_at', '>=', $request->from))
+            ->when($request->to, fn ($q) => $q->whereDate('occurred_at', '<=', $request->to))
+            ->latest('occurred_at')
+            ->paginate(30);
+
+        return response()->json([
+            'success' => true,
+            'data'    => FinancialTransactionResource::collection($transactions)->response()->getData(true),
+        ]);
+    }
+
+    public function payments(Request $request): \Illuminate\Http\JsonResponse
+    {
+        $payments = Payment::with([
+                'registration.course',
+                'order.user',
+                'order.course',
+                'order.invoice',
+            ])
+            ->when($request->status, fn ($q) => $q->where('status', $request->status))
+            ->when($request->provider, fn ($q) => $q->where('provider', $request->provider))
+            ->when($request->from, fn ($q) => $q->whereDate('created_at', '>=', $request->from))
+            ->when($request->to, fn ($q) => $q->whereDate('created_at', '<=', $request->to))
+            ->when($request->search, function ($q) use ($request) {
+                $s = $request->search;
+                $q->whereHas('order', fn ($oq) => $oq->where('order_number', 'like', "%{$s}%")
+                    ->orWhereHas('user', fn ($uq) => $uq->where('name', 'like', "%{$s}%")
+                        ->orWhere('email', 'like', "%{$s}%")
+                        ->orWhere('phone', 'like', "%{$s}%")))
+                  ->orWhereHas('registration', fn ($rq) => $rq->where('full_name', 'like', "%{$s}%")
+                        ->orWhere('email', 'like', "%{$s}%"));
+            })
+            ->latest()
+            ->paginate(50);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $payments->through(function ($p) {
+                $user         = $p->order?->user;
+                $reg          = $p->registration;
+                $studentName  = $user?->name  ?? $reg?->full_name  ?? null;
+                $studentEmail = $user?->email ?? $reg?->email       ?? null;
+                $studentPhone = $user?->phone ?? null;
+                $studentAvatar = $user?->avatar_url ?? null;
+
+                // Item resolution: order.course → registration.course
+                $course = $p->order?->course ?? $reg?->course;
+                $itemTitle = $course?->title ?? null;
+                $itemType  = $course ? 'course' : null;
+                // Workshop / learning path can be added here when those relations exist on Order
+
+                $currency    = strtoupper($p->order?->currency ?? $course?->currency ?? 'EUR');
+                $orderNumber = $p->order?->order_number ?? null;
+                $invoiceNum  = $p->order?->invoice?->invoice_number ?? null;
+
+                return [
+                    'id'              => $p->id,
+                    'amount'          => $p->amount,
+                    'currency'        => $currency,
+                    'status'          => $p->status,
+                    'provider'        => $p->provider,
+                    'payment_method'  => $p->payment_method,
+                    'receipt_url'     => $p->receipt_url ?? null,
+                    'confirmed_at'    => $p->confirmed_at,
+                    'created_at'      => $p->created_at,
+                    'student_name'    => $studentName,
+                    'student_email'   => $studentEmail,
+                    'student_phone'   => $studentPhone,
+                    'student_avatar'  => $studentAvatar,
+                    'item_title'      => $itemTitle,
+                    'item_type'       => $itemType,
+                    // legacy field kept for backward compat
+                    'course'          => $itemTitle,
+                    'payer_email'     => $studentEmail,
+                    'course_name'     => $itemTitle,
+                    'order_number'    => $orderNumber,
+                    'invoice_number'  => $invoiceNum,
+                    'order_id'        => $p->order_id,
+                    'registration_id' => $p->registration_id,
+                ];
+            }),
+        ]);
+    }
+
+    public function accountsSummary(): \Illuminate\Http\JsonResponse
+    {
+        $accounts = FinanceAccount::where('is_active', true)
+            ->orderBy('currency')
+            ->orderBy('name')
+            ->get()
+            ->map(fn ($a) => [
+                'id'              => $a->id,
+                'name'            => $a->name,
+                'type'            => $a->type,
+                'provider'        => $a->provider,
+                'currency'        => $a->currency,
+                'opening_balance' => (float) $a->opening_balance,
+                'current_balance' => (float) $a->current_balance,
+            ]);
+
+        // Per-currency totals — never add across currencies (EUR + SAR is meaningless).
+        $balancesByCurrency = $accounts
+            ->groupBy('currency')
+            ->map(fn ($group, $currency) => [
+                'currency' => $currency,
+                'total'    => round($group->sum('current_balance'), 2),
+                'accounts' => $group->count(),
+            ])
+            ->values();
+
+        // Legacy field: total of EUR accounts only, kept for backward compat.
+        $totalCash = round($accounts->where('currency', 'EUR')->sum('current_balance'), 2);
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'accounts'             => $accounts,
+                'balances_by_currency' => $balancesByCurrency,
+                'total_cash'           => $totalCash,
+            ],
+        ]);
+    }
+
+    public function revenueByCourse(): \Illuminate\Http\JsonResponse
+    {
+        $data = DB::table('payments')
+            ->join('registrations', 'payments.registration_id', '=', 'registrations.id')
+            ->join('courses', 'registrations.course_id', '=', 'courses.id')
+            ->where('payments.status', PaymentStatuses::CONFIRMED)
+            ->select(
+                'courses.id',
+                'courses.title',
+                DB::raw('SUM(payments.amount) as total_revenue'),
+                DB::raw('COUNT(payments.id) as payment_count'),
+                DB::raw('AVG(payments.amount) as avg_payment')
+            )
+            ->groupBy('courses.id', 'courses.title')
+            ->orderByDesc('total_revenue')
+            ->get();
+
+        return response()->json(['success' => true, 'data' => $data]);
+    }
+}

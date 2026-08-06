@@ -1,0 +1,504 @@
+═══════════════════════════════════════════════════════════════
+EMC BACKEND — STATUS OVERVIEW
+Last updated: RBAC complete (May 12 2026)
+═══════════════════════════════════════════════════════════════
+
+CURRENT STATE
+─────────────
+All 8 phases + full RBAC system complete.
+The backend is AI-ready, security-hardened, production-ready, and integration-ready.
+
+Tests: 37 passed / 0 failed / 87 assertions
+Migrations: All ran successfully.
+
+══════════════════════════════════════════
+RBAC — Roles & Permissions System (COMPLETE)
+══════════════════════════════════════════
+
+ROLES (14 system roles)
+────────────────────────
+super_admin, executive_admin, admin, department_manager, section_lead,
+finance_manager, marketing_manager, quality_manager, hr_manager,
+support_agent, instructor, student, volunteer, partner
+
+PERMISSIONS (70 total, grouped)
+─────────────────────────────────
+users (5): view/create/update/delete_users, manage_roles
+education (10): view/manage programs, courses, workshops, tracks, registrations
+lms (9): view/manage sessions, attendance, assignments, materials; review_submissions
+finance (6): view/manage payments, revenue, coupons, scholarships, financial_reports
+certificates (4): view/manage/issue/revoke_certificates
+operations (8): view/manage departments, tasks, meetings, forms
+hr (4): view/manage volunteers, team
+partnerships (3): view/manage_partners, view_partner_reports
+marketing (2): view/manage_marketing
+quality (3): view/manage_quality, approve_quality_reviews
+support (2): view/manage_support_tickets
+reports (4): view_kpi, view/generate/export_reports
+knowledge (2): view/manage_knowledge
+ai (3): use_ai_assistant, manage_ai_prompts, view_ai_usage
+system (5): view_audit_logs, manage_settings/integrations/webhooks/api_tokens
+
+MIGRATIONS (3 new)
+───────────────────
+roles               (id, name, display_name, description, is_system)
+permissions         (id, name, display_name, group, description)
+permission_role     (permission_id, role_id)
+
+MODELS
+───────
+Role.php        — grantPermission, revokePermission, syncPermissions
+Permission.php  — roles relationship
+User.php        — isSuperAdmin, isAdmin, hasRole, hasAnyRole, allPermissions(), hasPermission, flushPermissionCache
+                  teacher↔instructor alias handled automatically
+
+MIDDLEWARE
+────────────
+RoleMiddleware        — updated: super_admin passes all; instructor↔teacher alias
+PermissionMiddleware  — NEW: middleware('permission:manage_courses')
+bootstrap/app.php     — registered 'permission' alias
+
+CONTROLLERS (Admin)
+────────────────────
+Admin/RoleController.php       — CRUD + grant/revoke permission (super_admin only for writes)
+Admin/PermissionController.php — list grouped, GET /admin/me/permissions
+Admin/UserRoleController.php   — PUT /admin/users/{user}/role, GET /admin/users/{user}/permissions
+
+POLICIES (new/updated)
+────────────────────────
+UserPolicy.php       — view/create/update/delete + before() for super_admin
+DepartmentPolicy.php — scoped to department managers + admins
+AppServiceProvider   — Gate::before() super_admin bypass; all 70 permissions registered as Gates
+
+SEEDERS
+────────
+RoleSeeder.php             — 14 roles
+PermissionSeeder.php       — 70 permissions
+RolePermissionSeeder.php   — full role→permission mapping
+DemoUserSeeder.php         — 13 demo users
+
+DEMO USERS (password: password)
+─────────────────────────────────
+superadmin@emc.test   (super_admin)
+executive@emc.test    (executive_admin)
+admin@emc.test        (admin)
+instructor@emc.test   (instructor)
+student@emc.test      (student)
+finance@emc.test      (finance_manager)
+quality@emc.test      (quality_manager)
+hr@emc.test           (hr_manager)
+partner@emc.test      (partner)
+marketing@emc.test    (marketing_manager)
+support@edumc.nl      (support_agent)
+volunteer@emc.test    (volunteer)
+deptmanager@emc.test  (department_manager)
+
+API ROUTES ADDED
+─────────────────
+GET    /api/admin/roles
+GET    /api/admin/roles/options
+GET    /api/admin/roles/{role}
+POST   /api/admin/roles                         ← super_admin only
+PUT    /api/admin/roles/{role}                  ← super_admin only
+DELETE /api/admin/roles/{role}                  ← super_admin only
+POST   /api/admin/roles/{role}/grant-permission ← super_admin only
+POST   /api/admin/roles/{role}/revoke-permission← super_admin only
+GET    /api/admin/permissions
+GET    /api/admin/me/permissions
+PUT    /api/admin/users/{user}/role
+GET    /api/admin/users/{user}/permissions
+
+AUTH RESPONSE UPDATED
+──────────────────────
+POST /api/auth/login and GET /api/auth/me now return:
+{
+  "data": {
+    "user": {...},
+    "role": "admin",
+    "permissions": ["manage_courses", "view_payments", ...]
+  }
+}
+
+══════════════════════════════════════════
+PHASE 8 — AI Operating System & Intelligence Layer (COMPLETE)
+══════════════════════════════════════════
+
+AI ARCHITECTURE (app/AI/)
+───────────────────────────
+app/AI/Contracts/AiProviderInterface.php   — Provider contract (chat + embed)
+app/AI/Providers/OpenAiProvider.php        — OpenAI Chat Completions + Embeddings
+app/AI/Providers/MockAiProvider.php        — Safe mock for dev/CI (no HTTP calls)
+app/AI/AiManager.php                       — Central gateway, provider resolution, usage logging
+app/AI/DTOs/AiRequest.php                  — Immutable request value object
+app/AI/DTOs/AiResponse.php                 — Immutable response value object + cost estimate
+
+AI TOOLS (app/AI/Tools/)
+───────────────────────────
+AiToolInterface.php                        — Contract: name, description, parameters, execute, isAllowedForRole
+ToolRegistry.php                           — Registry + OpenAI function-calling definitions
+GetStudentProgressTool.php                 — get_student_progress (scoped by role)
+SearchKnowledgeTool.php                    — search_knowledge (public articles)
+GetKpiMetricsTool.php                      — get_kpi_metrics (admin/manager only)
+CreateTaskTool.php                         — create_task (admin/manager only)
+GetUpcomingSessionsTool.php                — get_upcoming_sessions (any role)
+
+AI SERVICES
+───────────────────────────
+app/AI/Services/AiConversationService.php  — Message exchange, context window, tool-call loop
+app/AI/Retrieval/KnowledgeRetrievalService.php — RAG: embed, chunk, cosine similarity search, keyword fallback
+app/AI/Services/AiContentGenerationService.php — course outlines, workshops, quizzes, marketing, reports, certs
+app/AI/Services/AiMeetingService.php       — summarize meetings, extract decisions/action items/risks
+app/AI/Services/AiInsightService.php       — platform insights, student recommendations
+
+AI QUEUE JOBS (app/Jobs/AI/)
+───────────────────────────
+GenerateAiResponseJob.php                  — Queued conversation responses
+GenerateEmbeddingJob.php                   — Knowledge article embedding/indexing
+GenerateMeetingSummaryJob.php              — Meeting AI summarization
+GenerateAiInsightsJob.php                  — Platform-wide insight generation
+GenerateStudentRecommendationsJob.php      — Per-student recommendation refresh
+
+MIGRATIONS (8 new/updated tables)
+───────────────────────────────────
+ai_conversations     + type, visibility columns added
+ai_messages          + token_usage, model columns added
+ai_prompts           (key, name, system_prompt, variables, category, version, status)
+ai_usage_logs        (user_id, provider, model, action, tokens, cost, status)
+knowledge_embeddings (embeddable morph, chunk_text, embedding json, metadata, model)
+meeting_ai_summaries (meeting_id, summary, decisions, action_items, risks, blockers)
+ai_insights          (type, entity morph, title, summary, score, severity, metadata)
+ai_recommendations   (user_id, type, title, description, priority, related morph, status)
+ai_automation_rules  (name, trigger, conditions, ai_action, action_config, status)
+ai_automation_executions (rule_id, status, input, output, error, started_at, finished_at)
+
+MODELS (8 new, 2 updated)
+───────────────────────────
+AiPrompt.php         — static render(key, vars) for variable interpolation
+AiUsageLog.php       — provider/model/action/tokens/cost tracking
+KnowledgeEmbedding.php — morph to any embeddable, cosineSimilarity() helper
+MeetingAiSummary.php — meeting summarization storage
+AiInsight.php        — risk/engagement insight storage
+AiRecommendation.php — per-user recommendation storage
+AiAutomationRule.php — AI-driven automation triggers
+AiAutomationExecution.php — execution log per rule run
+AiConversation.php   — updated: added type, visibility fields
+AiMessage.php        — updated: added token_usage, model fields
+
+CONTROLLERS
+───────────────────────────
+AiConversationController           — Fully upgraded: paginated, typed, async support, destroy
+AiContentGenerationController      — course-outline, workshop, quiz, marketing-copy, report-summary, learning-path
+AiSemanticSearchController         — POST /ai/search (semantic + keyword fallback, grouped results)
+AiRecommendationController         — list, refresh, dismiss
+AiMeetingController                — summarize (sync/async), getSummary, actionItems
+Admin/AI/AiPromptController        — CRUD for ai_prompts
+Admin/AI/AiInsightController       — list insights, trigger generation, delete
+Admin/AI/AiUsageController         — usage log list + summary/cost analytics
+Admin/AI/AiAutomationController    — CRUD for ai_automation_rules + executions view
+
+ROUTES (Phase 8)
+───────────────────────────
+POST   /api/ai/conversations/{id}/messages     (sync or async=true)
+DELETE /api/ai/conversations/{id}
+POST   /api/ai/meetings/{meeting}/summarize    (?async=true)
+GET    /api/ai/meetings/{meeting}/summary
+POST   /api/ai/meetings/{meeting}/action-items
+GET    /api/ai/recommendations
+POST   /api/ai/recommendations/refresh
+PATCH  /api/ai/recommendations/{id}/dismiss
+POST   /api/ai/search
+POST   /api/ai/generate/course-outline
+POST   /api/ai/generate/workshop
+POST   /api/ai/generate/quiz
+POST   /api/ai/generate/marketing-copy
+POST   /api/ai/generate/report-summary
+POST   /api/ai/generate/learning-path
+GET    /api/admin/ai/prompts (CRUD)
+GET    /api/admin/ai/insights + POST /generate
+GET    /api/admin/ai/usage + GET /summary
+GET    /api/admin/ai/automations (CRUD + executions)
+
+ENV VARIABLES ADDED
+───────────────────────────
+AI_PROVIDER=mock              (openai | anthropic | mock)
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4.1-mini
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+OPENAI_MAX_TOKENS=2048
+OPENAI_TEMPERATURE=0.7
+AI_RATE_LIMIT=20
+AI_QUEUE=default
+AI_CONTEXT_WINDOW=20
+AI_TOOLS_ENABLED=true
+
+CONFIG
+───────────────────────────
+config/ai.php — provider, openai, anthropic, rate_limit, queue, context_window, tools, cost_per_1k_tokens
+
+
+══════════════════════════════════════════
+PHASE 7 — Mobile, Integrations, Webhooks (COMPLETE)
+══════════════════════════════════════════
+
+MIGRATIONS (7 new tables)
+──────────────────────────
+notification_preferences (user_id, channel, type, enabled)
+notification_templates   (key, channel, language, subject, content, status)
+notification_logs        (user_id, channel, type, recipient, status, payload, error, sent_at)
+calendar_events          (user_id, eventable morph, title, start_at, end_at, location, meeting_url, sync_status)
+webhook_endpoints        (name, url, secret, events json, status)
+webhook_deliveries       (endpoint_id, event, payload, status, response_code, response_body, error)
+integration_settings     (key, provider, config encrypted, status)
+external_event_logs      (source, event_type, payload, status, processed_at)
+
+MODELS (8 new)
+───────────────
+NotificationPreference, NotificationTemplate, NotificationLog
+CalendarEvent, WebhookEndpoint, WebhookDelivery
+IntegrationSetting (config encrypted via Crypt), ExternalEventLog
+
+SERVICES (6 new)
+─────────────────
+app/Services/WhatsApp/WhatsAppProvider.php         (interface)
+app/Services/WhatsApp/LogWhatsAppProvider.php      (dev/test — logs only)
+app/Services/WhatsApp/MetaWhatsAppProvider.php     (Meta Cloud API)
+app/Services/WhatsApp/TwilioWhatsAppProvider.php   (Twilio)
+app/Services/WhatsApp/WhatsAppNotificationService.php (resolves provider from config)
+app/Services/NotificationDispatcher.php            (multi-channel fan-out with preferences)
+app/Services/WebhookDispatchService.php            (fire events to registered endpoints)
+app/Services/CalendarService.php                   (create events, generate ICS/RFC5545)
+app/Services/AutomationEngineService.php           (Phase 7 expanded: 9 triggers, 7 actions)
+
+CONFIG
+───────
+config/whatsapp.php  (WHATSAPP_PROVIDER=log|meta|twilio + credentials)
+
+QUEUE JOBS (2 new)
+───────────────────
+app/Jobs/SendWhatsAppJob.php       (queued WhatsApp via WhatsAppNotificationService)
+app/Jobs/DispatchWebhookJob.php    (HMAC-signed delivery, 3 retries, WithoutOverlapping)
+
+CONTROLLERS
+────────────
+Mobile:
+  app/Http/Controllers/Mobile/MobileController.php
+  GET  /api/mobile/home
+  GET  /api/mobile/dashboard
+  GET  /api/mobile/profile
+  PUT  /api/mobile/profile
+  GET  /api/mobile/my-learning
+  GET  /api/mobile/notifications
+  PUT  /api/mobile/notifications/{id}/read
+  GET  /api/mobile/upcoming-sessions
+  GET  /api/mobile/certificates
+
+Calendar:
+  app/Http/Controllers/CalendarController.php
+  GET  /api/calendar/events
+  GET  /api/calendar/events/{id}/ics
+
+Notification Preferences:
+  app/Http/Controllers/NotificationPreferenceController.php
+  GET  /api/notification-preferences
+  PUT  /api/notification-preferences
+
+Admin (Phase 7):
+  app/Http/Controllers/Admin/WebhookEndpointController.php
+  CRUD /api/admin/webhook-endpoints
+  POST /api/admin/webhook-endpoints/{id}/test
+  GET  /api/admin/webhook-deliveries
+
+  app/Http/Controllers/Admin/IntegrationSettingController.php
+  GET  /api/admin/integrations
+  PUT  /api/admin/integrations/{key}
+
+  app/Http/Controllers/Admin/ApiTokenController.php
+  GET    /api/admin/api-tokens
+  POST   /api/admin/api-tokens
+  DELETE /api/admin/api-tokens/{id}
+
+  app/Http/Controllers/Admin/NotificationTemplateController.php
+  CRUD /api/admin/notification-templates
+  GET  /api/admin/notification-logs
+
+  app/Http/Controllers/Admin/ExternalEventLogController.php
+  GET  /api/admin/external-event-logs
+
+ENV VARIABLES ADDED
+────────────────────
+WHATSAPP_PROVIDER=log
+WHATSAPP_META_TOKEN=
+WHATSAPP_META_PHONE_NUMBER_ID=
+WHATSAPP_META_API_VERSION=v19.0
+WHATSAPP_META_VERIFY_TOKEN=
+WHATSAPP_TWILIO_SID=
+WHATSAPP_TWILIO_TOKEN=
+WHATSAPP_TWILIO_FROM=
+
+SECURITY
+─────────
+- Webhook secrets stored hashed, never returned after creation
+- Integration configs stored AES-encrypted via Laravel Crypt
+- safeConfig() masks token/secret/key/password fields in API responses
+- Webhook deliveries signed with HMAC-SHA256 (X-EMC-Signature header)
+- Mobile endpoints: auth:sanctum, student data scoped to own records only
+
+
+══════════════════════════════════════════
+PHASE 6 — Enterprise Hardening (COMPLETE)
+══════════════════════════════════════════
+
+SECURITY HARDENING
+────────────────────
++ Permissions class: app/Support/Permissions.php
+  - 13 permission constants (MANAGE_COURSES, MANAGE_LMS, VIEW_FINANCE, etc.)
+  - forRole(string $role): array — maps each role to its permissions
+  - Gates registered via AppServiceProvider::configurePermissionGates()
+
++ User model updated:
+  - isAdmin() now includes 'super_admin' role
+  - isPartner() added
+  - hasRole(...$roles) added
+  - hasPermission(string $permission) added
+
++ 12 NEW POLICIES created:
+  app/Policies/CoursePolicy.php
+  app/Policies/WorkshopPolicy.php
+  app/Policies/TrackPolicy.php
+  app/Policies/RegistrationPolicy.php
+  app/Policies/PaymentPolicy.php
+  app/Policies/CertificatePolicy.php
+  app/Policies/TaskPolicy.php
+  app/Policies/MeetingPolicy.php
+  app/Policies/DocumentPolicy.php
+  app/Policies/KnowledgeArticlePolicy.php
+  app/Policies/PartnerPolicy.php
+  app/Policies/ReportPolicy.php
+
++ All policies + 6 existing phase-2 policies registered in AppServiceProvider
+
+RATE LIMITING (AppServiceProvider)
+────────────────────────────────────
+Named limiters:
+  auth          10 req/min per IP
+  registration   5 req/min per IP
+  public_forms   5 req/min per IP
+  workshop       5 req/min per IP (legacy kept)
+  contact        3 req/min per IP
+  payments      10 req/min per user
+  admin_write   30 req/min per admin user
+  api           60 req/min per user/IP (general)
+
+AUDIT LOG IMPROVEMENT
+──────────────────────
++ Migration: 2026_05_17_100002_improve_activity_logs.php
+  - Added: entity_type, entity_id, old_values (JSON), new_values (JSON)
+  - Safe migration: only adds if columns missing; never drops table
+
++ ActivityLog model: updated fillable + casts for old/new values
++ ActivityLogger service: updated to accept oldValues/newValues params
+  - Backward compatible: old callers not affected
+
+PERFORMANCE INDEXES
+────────────────────
++ Migration: 2026_05_17_100001_add_performance_indexes.php
+  Tables indexed: users (role), courses (slug, status, track_id, instructor_id),
+  registrations (status, email, user_id), payments (status, provider, provider+status),
+  certificates (user_id, status, verification_code), lms_sessions (course_id, instructor_id, status),
+  assignments (course_id, due_date), tasks (status, assigned_to, due_date, department_id),
+  knowledge_articles (slug, visibility, category_id), documents (visibility, uploaded_by),
+  activity_logs (user_id, entity_type, action, created_at)
+
+FILE UPLOAD SECURITY
+─────────────────────
++ app/Services/FileUploadService.php
+  Modules: course_materials, assignment_submissions, documents,
+           knowledge_attachments, marketing_assets, certificates,
+           partner_documents, avatars
+  Each module enforces: disk (public/private), max size, allowed MIME extensions,
+  safe filename generation (Str::slug + random 12-char suffix)
+  Methods: store(), delete(), temporaryUrl()
+
+QUEUE JOBS
+───────────
++ app/Jobs/SendNotificationJob.php — writes to notifications table + optionally dispatches email
++ app/Jobs/SendEmailJob.php — generic queued email via Mail::raw()
++ app/Jobs/GenerateReportJob.php — marks report processing/ready/failed, notifies requester
++ app/Jobs/IssueCertificateJob.php — generates certificate, marks issued, notifies user
++ app/Jobs/ProcessPaymentWebhookJob.php — idempotent webhook handler via WithoutOverlapping
+
+Queue driver: database (no Redis required)
+Setup: php artisan queue:table && php artisan migrate && php artisan queue:work
+
+EXCEPTION HANDLER (bootstrap/app.php)
+───────────────────────────────────────
+Standardized JSON error responses for all API routes:
+  401 — AuthenticationException (Sanctum missing/expired token)
+  403 — AuthorizationException (policy/gate failure)
+  404 — ModelNotFoundException (route model binding fails)
+  404 — NotFoundHttpException (no such route)
+  405 — MethodNotAllowedHttpException
+  422 — ValidationException (with errors object)
+  429 — ThrottleRequestsException
+
+NEW TESTS
+──────────
+tests/Feature/AuthTest.php         — register, login, logout, me, unauthenticated checks
+tests/Feature/AdminAccessTest.php  — admin vs student vs guest on admin routes
+tests/Feature/SecurityTest.php     — cross-user data access, auth boundaries, JSON 404s
+tests/Feature/CertificateTest.php  — verify, list, issue, student cannot issue
+
+DOCUMENTATION
+──────────────
+docs/api.md               — full API reference (auth, public, student, instructor, partner, admin, payments)
+docs/setup.md             — local development setup guide
+docs/deployment.md        — production deployment (Nginx, Supervisor, Certbot, zero-downtime script)
+docs/production-checklist.md — launch checklist (50+ items across app, DB, storage, auth, mail, payments, queues, SSL, monitoring)
+
+
+══════════════════════════════════════
+PHASE 5 — Scale & Intelligence (COMPLETE)
+══════════════════════════════════════
+19 migrations, 18 models, 2 services (SearchService, QuizScoringService),
+12 resources, 12+ controllers (knowledge, partner portal, advanced LMS, automations, AI, documents)
+
+
+══════════════════════════════════════
+PHASE 4 — Revenue & Quality (COMPLETE)
+══════════════════════════════════════
+Certificates, Finance, Quality, KPI, Reports
+
+
+══════════════════════════════════════
+PHASE 3 — Internal Operations (COMPLETE)
+══════════════════════════════════════
+Tasks, Meetings, Departments, Forms, Volunteers, Activity Logs
+
+
+══════════════════════════════════════
+PHASE 2 — LMS Core (COMPLETE)
+══════════════════════════════════════
+LMS Sessions (renamed from sessions), Assignments, Submissions, Materials,
+Evaluations, Progress, Instructors
+
+
+══════════════════════════════════════
+PHASE 1 — Foundation (COMPLETE)
+══════════════════════════════════════
+Auth (Sanctum), Courses, Registrations, Payments (Stripe/PayPal/Fake),
+Workshop Requests, Mail, RoleMiddleware
+
+
+═══════════════════════════════════════════════════════════════
+COMMANDS TO RUN (first deploy or after pulling this branch)
+═══════════════════════════════════════════════════════════════
+
+php artisan migrate
+php artisan queue:table       # only first time
+php artisan migrate
+php artisan storage:link      # only first time
+php artisan optimize:clear
+php artisan optimize
+php artisan queue:work --sleep=3 --tries=3
+
+═══════════════════════════════════════════════════════════════

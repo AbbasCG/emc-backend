@@ -16,6 +16,17 @@ return [
 
     'default' => env('MAIL_MAILER', 'log'),
 
+    'designer_email' => env('DESIGNER_EMAIL', null),
+
+    'support_email' => env('MAIL_SUPPORT_ADDRESS', env('SUPPORT_EMAIL', 'support@edumc.nl')),
+    'support_name'  => env('MAIL_SUPPORT_NAME', 'EMC Support'),
+
+    // Sender identity for the dedicated 'support' SMTP mailer below. Kept separate
+    // from support_email/support_name (which are also used as Reply-To on non-support
+    // mailers) so the From address always matches the support mailer's login exactly.
+    'support_from_address' => env('SUPPORT_MAIL_FROM_ADDRESS', 'support@edumc.nl'),
+    'support_from_name'    => env('SUPPORT_MAIL_FROM_NAME', 'EMC Support'),
+
     /*
     |--------------------------------------------------------------------------
     | Mailer Configurations
@@ -88,6 +99,27 @@ return [
             'retry_after' => 60,
         ],
 
+        // ── Support / Contact Form mailer ────────────────────────────────
+        // Uses its own SMTP login (support@edumc.nl) so Contact Form and support
+        // emails never ride the noreply account. Deliberately NOT a failover onto
+        // 'smtp': failing over to the noreply login while the Envelope still claims
+        // From: support@edumc.nl would trigger "553 Sender address rejected: not
+        // owned by user". If these credentials are missing, callers must check
+        // config('mail.mailers.support.username')/.password themselves (see
+        // App\Mail\Concerns\UsesSupportSender) and fall back to the default mailer
+        // WITH a matching default From address instead.
+        'support' => [
+            'transport'  => 'smtp',
+            'scheme'     => env('SUPPORT_MAIL_SCHEME'),
+            'url'        => env('SUPPORT_MAIL_URL'),
+            'host'       => env('SUPPORT_MAIL_HOST', 'smtp.hostinger.com'),
+            'port'       => env('SUPPORT_MAIL_PORT', 587),
+            'username'   => env('SUPPORT_MAIL_USERNAME'),
+            'password'   => env('SUPPORT_MAIL_PASSWORD'),
+            'timeout'    => null,
+            'local_domain' => env('SUPPORT_MAIL_EHLO_DOMAIN', env('MAIL_EHLO_DOMAIN', 'api.edumc.nl')),
+        ],
+
         'roundrobin' => [
             'transport' => 'roundrobin',
             'mailers' => [
@@ -114,5 +146,7 @@ return [
         'address' => env('MAIL_FROM_ADDRESS', 'hello@example.com'),
         'name' => env('MAIL_FROM_NAME', env('APP_NAME', 'Laravel')),
     ],
+
+    'designer_email' => env('DESIGNER_EMAIL'),
 
 ];

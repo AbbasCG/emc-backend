@@ -1,0 +1,290 @@
+<?php
+
+namespace App\Http\Controllers\Student;
+
+use App\Http\Controllers\Controller;
+use App\Http\Resources\AssignmentSubmissionResource;
+use App\Http\Resources\StudentCourseAssignmentResource;
+use App\Models\Assignment;
+use App\Models\AssignmentSubmission;
+use App\Models\CourseAssignment;
+use App\Services\AssignmentSubmissionHistoryService;
+use App\Services\LmsEnrollmentService;
+use App\Services\NotificationService;
+use App\Services\StudentProgressService;
+use App\Support\AssignmentSubmissionStatus;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
+
+class StudentAssignmentController extends Controller
+{
+    /**
+     * GET /api/student/assignments
+     *
+     * List assignments the student has submitted, sourced from course_assignments.
+     */
+    public function index(
+        Request $request,
+        LmsEnrollmentService $enrollment,
+    ): AnonymousResourceCollection {
+        $user      = $request->user();
+        $courseIds = $enrollment->enrolledCourseIds($user);
+        $myClassGroupIds = $enrollment->classGroupIdsByCourse($user)->values();
+
+        $query = CourseAssignment::query()
+            ->with(['course:id,title,slug'])
+            ->whereIn('status', ['published', 'active'])
+            ->where('is_visible', true)
+            ->whereIn('course_id', $courseIds)
+            ->visibleToClassGroupIn($myClassGroupIds)
+            ->orderByDesc('deadline');
+
+        $perPage = min((int) $request->query('per_page', 20), 100);
+
+        return StudentCourseAssignmentResource::collection($query->paginate($perPage))
+            ->additional(['success' => true, 'message' => 'Assignments retrieved successfully']);
+    }
+
+    /**
+     * GET /api/student/assignments/{assignment}
+     *
+     * Return a single assignment with the student's own submission status.
+     * Accepts either an Assignment ID (legacy) or a CourseAssignment ID.
+     */
+    public function show(
+        Request $request,
+        Assignment $assignment,
+        LmsEnrollmentService $enrollment,
+    ): JsonResponse {
+        $user      = $request->user();
+        $courseIds = $enrollment->enrolledCourseIds($user);
+
+        $accessible = ($assignment->course_id && $courseIds->contains($assignment->course_id))
+            || ($assignment->workshop_id && $assignment->workshop && $courseIds->contains($assignment->workshop->course_id));
+
+        if ($accessible && $assignment->class_group_id) {
+            // Course enrollment alone isn't enough for a class-scoped assignment
+            // — the student must be an active member of that specific class.
+            // index() already enforces this via CourseAssignment::visibleToClassGroupIn();
+            // this closes the same gap on the direct-by-ID path.
+            $myClassGroupIds = $enrollment->classGroupIdsByCourse($user);
+            $accessible = $myClassGroupIds->get($assignment->course_id) === $assignment->class_group_id;
+        }
+
+        if (! $accessible && ! $user->isAdmin() && ! $user->isSuperAdmin()) {
+            return response()->json(['success' => false, 'message' => 'You are not enrolled in this course.'], 403);
+        }
+
+        // If this Assignment links to a CourseAssignment, show the richer resource.
+        if ($assignment->course_assignment_id) {
+            $ca = CourseAssignment::find($assignment->course_assignment_id);
+            if ($ca) {
+                return (new StudentCourseAssignmentResource($ca))
+                    ->additional(['success' => true])
+                    ->response();
+            }
+        }
+
+        $assignment->load([
+            'course:id,title',
+            'submissions' => fn ($q) => $q->where('user_id', $user->id),
+        ]);
+
+        return (new \App\Http\Resources\LmsAssignmentResource($assignment))
+            ->additional(['success' => true])
+            ->response();
+    }
+
+    /**
+     * GET /api/student/assignments/{assignment}/history
+     *
+     * The student's own resubmission history for this assignment — every
+     * prior attempt, never overwritten (see AssignmentSubmissionHistoryService).
+     */
+    public function history(Request $request, Assignment $assignment, LmsEnrollmentService $enrollment): JsonResponse
+    {
+        $user = $request->user();
+        $courseIds = $enrollment->enrolledCourseIds($user);
+        $accessible = ($assignment->course_id && $courseIds->contains($assignment->course_id))
+            || ($assignment->workshop_id && $assignment->workshop && $courseIds->contains($assignment->workshop->course_id));
+
+        if (! $accessible && ! $user->isAdmin() && ! $user->isSuperAdmin()) {
+            return response()->json(['success' => false, 'message' => 'You are not enrolled in this course.'], 403);
+        }
+
+        $submission = AssignmentSubmission::where('assignment_id', $assignment->id)
+            ->where('user_id', $user->id)
+            ->first();
+
+        if (! $submission) {
+            return response()->json(['success' => true, 'data' => []]);
+        }
+
+        $attempts = app(AssignmentSubmissionHistoryService::class)->attempts($submission);
+
+        return response()->json([
+            'success' => true,
+            'data' => $attempts->map(fn ($a) => [
+                'attempt_number' => $a->attempt_number,
+                'text_answer'    => $a->text_answer,
+                'has_file'       => $a->file_path !== null,
+                'score'          => $a->score,
+                'feedback'       => $a->feedback,
+                'status'         => $a->status,
+                'submitted_at'   => $a->submitted_at,
+                'reviewed_at'    => $a->reviewed_at,
+            ]),
+        ]);
+    }
+
+    /**
+     * POST /api/student/assignments/{assignment}/submit
+     *
+     * Submit (or resubmit) an assignment.
+     * Payload: file (optional), text_answer / answer_text (optional), notes (optional).
+     */
+    public function submit(
+        Request $request,
+        Assignment $assignment,
+        LmsEnrollmentService $enrollment,
+        StudentProgressService $progress,
+    ): JsonResponse {
+        $user      = $request->user();
+        $courseIds = $enrollment->enrolledCourseIds($user);
+
+        $assignment->loadMissing('workshop');
+        $courseId = $assignment->course_id
+            ?? $assignment->workshop?->course_id;
+
+        $accessible = $courseId && $courseIds->contains($courseId);
+
+        if ($accessible && $assignment->class_group_id) {
+            // Same class-membership gate as show() — a course-enrolled student
+            // outside the assigned class group must not be able to submit by
+            // posting directly to a known assignment ID.
+            $myClassGroupIds = $enrollment->classGroupIdsByCourse($user);
+            $accessible = $myClassGroupIds->get($courseId) === $assignment->class_group_id;
+        }
+
+        if (! $accessible && ! $user->isAdmin() && ! $user->isSuperAdmin()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'غير مصرح لك بالوصول إلى هذا المسار.',
+            ], 403);
+        }
+
+        $validated = $request->validate([
+            'text_answer' => ['nullable', 'string', 'max:20000'],
+            'answer_text' => ['nullable', 'string', 'max:20000'],
+            'notes'       => ['nullable', 'string', 'max:5000'],
+            'file'        => [
+                'nullable', 'file', 'max:10240',
+                'mimes:pdf,doc,docx,png,jpg,jpeg,webp,zip',
+            ],
+        ]);
+
+        $textAnswer = $validated['text_answer'] ?? $validated['answer_text'] ?? null;
+
+        $existing = AssignmentSubmission::query()
+            ->where('assignment_id', $assignment->id)
+            ->where('user_id', $user->id)
+            ->first();
+
+        $instructorRequestedResubmission = $existing && $existing->status === 'needs_revision';
+
+        if ($existing?->submitted_at && ! $assignment->resubmission_allowed && ! $instructorRequestedResubmission) {
+            throw ValidationException::withMessages([
+                'assignment' => ['تم تسليم هذا الواجب مسبقاً ولا يمكن إعادة التسليم إلا بطلب من المدرس.'],
+            ]);
+        }
+
+        if ($assignment->max_attempts !== null && $existing) {
+            $priorAttempts = app(AssignmentSubmissionHistoryService::class)->attempts($existing)->count();
+            $attemptAboutToBeMade = $priorAttempts + 2; // +1 for $existing itself (already one attempt), +1 for this new one
+            if ($attemptAboutToBeMade > $assignment->max_attempts) {
+                throw ValidationException::withMessages([
+                    'assignment' => ["لقد وصلت إلى الحد الأقصى لعدد المحاولات المسموح بها ({$assignment->max_attempts})."],
+                ]);
+            }
+        }
+
+        $filePath = null;
+        if ($request->hasFile('file') && $request->file('file')->isValid()) {
+            $filePath = $request->file('file')->store('assignment-submissions', 'private');
+        }
+
+        if (! $textAnswer && ! $filePath && ! $existing?->text_answer && ! $existing?->file_path) {
+            throw ValidationException::withMessages([
+                'text_answer' => ['Provide a text answer or upload a file.'],
+            ]);
+        }
+
+        $submissionStatus = AssignmentSubmissionStatus::onSubmit($assignment);
+
+        $submission = DB::transaction(function () use ($user, $assignment, $textAnswer, $validated, $filePath, $existing, $submissionStatus, $instructorRequestedResubmission) {
+            // Ticket 5: a real resubmission (a row already existed with prior
+            // content/grade/feedback) must never silently lose that state —
+            // snapshot it into attempt history before it gets overwritten.
+            // The very first submission has no prior state to preserve.
+            if ($existing) {
+                app(AssignmentSubmissionHistoryService::class)->snapshot($existing);
+            }
+
+            $data = [
+                'text_answer'  => $textAnswer ?? $existing?->text_answer,
+                'notes'        => array_key_exists('notes', $validated) ? $validated['notes'] : $existing?->notes,
+                'file_path'    => $filePath ?? $existing?->file_path,
+                'submitted_at' => now(),
+                'status'       => $submissionStatus,
+                'score'        => null,
+                'feedback'     => null,
+            ];
+
+            if ($instructorRequestedResubmission
+                && \Illuminate\Support\Facades\Schema::hasColumn('assignment_submissions', 'resubmitted_at')
+            ) {
+                $data['resubmitted_at'] = now();
+            }
+
+            return AssignmentSubmission::query()->updateOrCreate(
+                [
+                    'assignment_id' => $assignment->id,
+                    'user_id'       => $user->id,
+                ],
+                $data
+            );
+        });
+
+        $progress->syncForUser($user);
+
+        $assignment->loadMissing('course.instructor');
+        $instructorUserId = $assignment->course?->instructor?->user_id;
+        if ($instructorUserId) {
+            if ($instructorRequestedResubmission) {
+                NotificationService::studentResubmittedAssignment(
+                    instructorUserId: $instructorUserId,
+                    studentName:      $user->name,
+                    courseTitle:      $assignment->course?->title ?? 'الدورة',
+                    assignmentTitle:  $assignment->title,
+                    submissionId:     $submission->id,
+                );
+            } else {
+                NotificationService::studentSubmittedAssignment(
+                    instructorUserId: $instructorUserId,
+                    studentName:      $user->name,
+                    courseTitle:      $assignment->course?->title ?? 'الدورة',
+                    assignmentTitle:  $assignment->title,
+                    submissionId:     $submission->id,
+                );
+            }
+        }
+
+        return (new AssignmentSubmissionResource($submission->load('assignment')))
+            ->additional(['success' => true, 'message' => 'Assignment submitted successfully.'])
+            ->response()
+            ->setStatusCode($existing?->submitted_at ? 200 : 201);
+    }
+}
