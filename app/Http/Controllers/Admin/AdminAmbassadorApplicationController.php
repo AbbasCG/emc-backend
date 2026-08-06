@@ -23,31 +23,14 @@ class AdminAmbassadorApplicationController extends Controller
 {
     /**
      * GET /api/admin/ambassador-applications
-     * Query params: status, country, university_name, major, gender, search, date_from, date_to, per_page, page
+     * Query params: status, country, city, university|university_name,
+     *               specialization|major, gender, search, date_from, date_to, per_page, page
      */
     public function index(Request $request): JsonResponse
     {
-        $base = AmbassadorApplication::query()
-            ->where('is_draft', false)
-            ->when($request->filled('status'),           fn ($q) => $q->where('status', $request->status))
-            ->when($request->filled('country'),          fn ($q) => $q->where('country', $request->country))
-            ->when($request->filled('university_name'),  fn ($q) => $q->where('university_name', 'like', "%{$request->university_name}%"))
-            ->when($request->filled('major'),            fn ($q) => $q->where('major', 'like', "%{$request->major}%"))
-            ->when($request->filled('gender'),           fn ($q) => $q->where('gender', $request->gender))
-            ->when($request->filled('date_from'),        fn ($q) => $q->whereDate('created_at', '>=', $request->date_from))
-            ->when($request->filled('date_to'),          fn ($q) => $q->whereDate('created_at', '<=', $request->date_to))
-            ->when($request->filled('search'), function ($q) use ($request) {
-                $term = $request->search;
-                $q->where(function ($sub) use ($term) {
-                    $sub->where('full_name',       'like', "%{$term}%")
-                        ->orWhere('email',          'like', "%{$term}%")
-                        ->orWhere('mobile_phone',   'like', "%{$term}%")
-                        ->orWhere('university_name','like', "%{$term}%")
-                        ->orWhere('major',          'like', "%{$term}%");
-                });
-            });
+        // Filter-aware base excludes status so KPI cards stay status-agnostic.
+        $base = $this->filteredQuery($request, includeStatus: false);
 
-        // Statistics (filter-aware, status-agnostic)
         $statusCounts = (clone $base)
             ->select('status', DB::raw('COUNT(*) as cnt'))
             ->groupBy('status')
@@ -64,7 +47,6 @@ class AdminAmbassadorApplicationController extends Controller
             'cancelled'           => (int) ($statusCounts['cancelled']            ?? 0),
         ];
 
-        // Country breakdown for analytics
         $byCountry = (clone $base)
             ->select('country', DB::raw('COUNT(*) as cnt'))
             ->groupBy('country')
@@ -73,17 +55,21 @@ class AdminAmbassadorApplicationController extends Controller
             ->get()
             ->map(fn ($r) => ['country' => $r->country, 'count' => (int) $r->cnt]);
 
-        // Monthly trend
+        $driver = DB::connection()->getDriverName();
+        $monthExpr = $driver === 'sqlite'
+            ? "strftime('%Y-%m', created_at)"
+            : "DATE_FORMAT(created_at, '%Y-%m')";
+
         $monthlyTrend = (clone $base)
-            ->select(DB::raw("DATE_FORMAT(created_at, '%Y-%m') as month"), DB::raw('COUNT(*) as cnt'))
+            ->select(DB::raw("{$monthExpr} as month"), DB::raw('COUNT(*) as cnt'))
             ->groupBy('month')
             ->orderBy('month', 'desc')
             ->limit(12)
             ->get()
             ->map(fn ($r) => ['month' => $r->month, 'count' => (int) $r->cnt]);
 
-        $perPage  = min((int) $request->query('per_page', 20), 100);
-        $paginated = (clone $base)
+        $perPage = min(max((int) $request->query('per_page', 20), 1), 100);
+        $paginated = $this->filteredQuery($request, includeStatus: true)
             ->with(['reviewer', 'statusUpdatedBy'])
             ->latest()
             ->paginate($perPage)
@@ -99,6 +85,63 @@ class AdminAmbassadorApplicationController extends Controller
             'statistics'    => $statistics,
             'by_country'    => $byCountry,
             'monthly_trend' => $monthlyTrend,
+        ]);
+    }
+
+    /**
+     * GET /api/admin/ambassador-applications/filter-options
+     * Optional query: country, city — narrow dependent city/university lists.
+     */
+    public function filterOptions(Request $request): JsonResponse
+    {
+        $base = AmbassadorApplication::query()->where('is_draft', false);
+
+        $country = trim((string) $request->query('country', ''));
+        $city = trim((string) $request->query('city', ''));
+
+        $countries = (clone $base)
+            ->whereNotNull('country')
+            ->where('country', '!=', '')
+            ->distinct()
+            ->orderBy('country')
+            ->pluck('country')
+            ->values();
+
+        $citiesQuery = (clone $base)
+            ->whereNotNull('city')
+            ->where('city', '!=', '');
+        if ($country !== '') {
+            $citiesQuery->where('country', $country);
+        }
+        $cities = $citiesQuery->distinct()->orderBy('city')->pluck('city')->values();
+
+        $universitiesQuery = (clone $base)
+            ->whereNotNull('university_name')
+            ->where('university_name', '!=', '');
+        if ($country !== '') {
+            $universitiesQuery->where('country', $country);
+        }
+        if ($city !== '') {
+            $universitiesQuery->where('city', $city);
+        }
+        $universities = $universitiesQuery->distinct()->orderBy('university_name')->pluck('university_name')->values();
+
+        $specializations = (clone $base)
+            ->whereNotNull('major')
+            ->where('major', '!=', '')
+            ->distinct()
+            ->orderBy('major')
+            ->pluck('major')
+            ->values();
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'countries'       => $countries,
+                'cities'          => $cities,
+                'universities'    => $universities,
+                'specializations' => $specializations,
+            ],
         ]);
     }
 
@@ -391,5 +434,60 @@ class AdminAmbassadorApplicationController extends Controller
         $ambassadorApplication->delete();
 
         return response()->json(['success' => true, 'message' => 'تم حذف الطلب.']);
+    }
+
+    /**
+     * Build the filtered ambassador applications query.
+     *
+     * @return \Illuminate\Database\Eloquent\Builder<\App\Models\AmbassadorApplication>
+     */
+    private function filteredQuery(Request $request, bool $includeStatus = true)
+    {
+        $university = trim((string) ($request->query('university') ?: $request->query('university_name', '')));
+        $specialization = trim((string) ($request->query('specialization') ?: $request->query('major', '')));
+        $country = trim((string) $request->query('country', ''));
+        $city = trim((string) $request->query('city', ''));
+        $gender = trim((string) $request->query('gender', ''));
+        $status = trim((string) $request->query('status', ''));
+        $dateFrom = trim((string) $request->query('date_from', ''));
+        $dateTo = trim((string) $request->query('date_to', ''));
+        $search = trim((string) $request->query('search', ''));
+
+        return AmbassadorApplication::query()
+            ->where('is_draft', false)
+            ->when($includeStatus && $status !== '' && $status !== 'all', function ($q) use ($status) {
+                $q->where('status', $status);
+            })
+            ->when($country !== '', fn ($q) => $q->where('country', $country))
+            ->when($city !== '', fn ($q) => $q->where('city', $city))
+            ->when($university !== '', fn ($q) => $q->where('university_name', $university))
+            ->when($specialization !== '', fn ($q) => $q->where('major', $specialization))
+            ->when($gender !== '' && $gender !== 'all', fn ($q) => $q->where('gender', $gender))
+            ->when($dateFrom !== '', fn ($q) => $q->whereDate('created_at', '>=', $dateFrom))
+            ->when($dateTo !== '', fn ($q) => $q->whereDate('created_at', '<=', $dateTo))
+            ->when($search !== '', function ($q) use ($search) {
+                $like = '%' . addcslashes($search, '%_\\') . '%';
+                $q->where(function ($sub) use ($like, $search) {
+                    $sub->where('full_name', 'like', $like)
+                        ->orWhere('email', 'like', $like)
+                        ->orWhere('mobile_phone', 'like', $like)
+                        ->orWhere('university_name', 'like', $like)
+                        ->orWhere('country', 'like', $like)
+                        ->orWhere('city', 'like', $like)
+                        ->orWhere('major', 'like', $like)
+                        ->orWhere('nationality', 'like', $like)
+                        ->orWhere('faculty', 'like', $like)
+                        ->orWhere('uuid', 'like', $like);
+
+                    if (ctype_digit($search)) {
+                        $sub->orWhere('id', (int) $search);
+                    }
+
+                    // Support AMB-YYYY-NNNNNN reference numbers (computed, not stored).
+                    if (preg_match('/^AMB-(\d{4})-0*(\d+)$/i', $search, $matches)) {
+                        $sub->orWhere('id', (int) $matches[2]);
+                    }
+                });
+            });
     }
 }

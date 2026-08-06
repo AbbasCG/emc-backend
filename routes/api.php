@@ -57,6 +57,8 @@ use App\Http\Controllers\Admin\SupportTicketController as AdminSupportTicketCont
 use App\Http\Controllers\Admin\TaskController;
 use App\Http\Controllers\Admin\VolunteerController;
 use App\Http\Controllers\Admin\AdminVolunteerRequestController;
+use App\Http\Controllers\Admin\HrVolunteerProfileController;
+use App\Http\Controllers\VolunteerHrProfileController;
 use App\Http\Controllers\Admin\AdminMemberController;
 use App\Http\Controllers\Admin\AdminTeamProfileController;
 use App\Http\Controllers\Public\VolunteerRequestController as PublicVolunteerRequestController;
@@ -766,6 +768,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     // Ambassador applications — admin / super_admin (hr_manager duplicated below)
     Route::get('ambassador-applications',                                          [AdminAmbassadorApplicationController::class, 'index']);
     Route::get('ambassador-applications/analytics',                                [AdminAmbassadorApplicationController::class, 'analytics']);
+    Route::get('ambassador-applications/filter-options',                           [AdminAmbassadorApplicationController::class, 'filterOptions']);
     Route::get('ambassador-applications/{ambassadorApplication}',                  [AdminAmbassadorApplicationController::class, 'show']);
     Route::patch('ambassador-applications/{ambassadorApplication}/status',         [AdminAmbassadorApplicationController::class, 'updateStatus']);
     Route::post('ambassador-applications/{ambassadorApplication}/notes',           [AdminAmbassadorApplicationController::class, 'storeNote']);
@@ -1088,6 +1091,7 @@ Route::middleware(['auth:sanctum', 'role:admin,programs_manager,tech_admin,super
 Route::middleware(['auth:sanctum', 'role:admin,department_manager,programs_manager'])->prefix('operations')->group(function () {
     Route::get('departments',              [DepartmentController::class, 'index']);
     Route::get('departments/{department}', [DepartmentController::class, 'show']);
+    Route::get('departments/{department}/overview', [DepartmentController::class, 'overview']);
 });
 
 // ─── Operations: support tickets — extended roles (support_agent, hr_manager can view/reply) ─
@@ -1397,14 +1401,51 @@ Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin
     // Ambassador applications — accessible to hr_manager + admin + super_admin
     Route::get('ambassador-applications',                                          [AdminAmbassadorApplicationController::class, 'index']);
     Route::get('ambassador-applications/analytics',                                [AdminAmbassadorApplicationController::class, 'analytics']);
+    Route::get('ambassador-applications/filter-options',                           [AdminAmbassadorApplicationController::class, 'filterOptions']);
     Route::get('ambassador-applications/{ambassadorApplication}',                  [AdminAmbassadorApplicationController::class, 'show']);
     Route::patch('ambassador-applications/{ambassadorApplication}/status',         [AdminAmbassadorApplicationController::class, 'updateStatus']);
     Route::post('ambassador-applications/{ambassadorApplication}/notes',           [AdminAmbassadorApplicationController::class, 'storeNote']);
     Route::delete('ambassador-applications/{ambassadorApplication}/notes/{noteId}',[AdminAmbassadorApplicationController::class, 'deleteNote']);
 });
 
+// ─── Volunteer HR profile — self-service (any authenticated user) ───────────
+Route::middleware(['auth:sanctum'])->prefix('volunteer')->group(function () {
+    Route::get('hr-profile',                    [VolunteerHrProfileController::class, 'show']);
+    Route::post('hr-profile',                   [VolunteerHrProfileController::class, 'store']);
+    Route::put('hr-profile/{volunteerHrProfile}', [VolunteerHrProfileController::class, 'update']);
+});
+
+// Reference data: department -> job-title options, used by both the
+// volunteer HR form and the HR review UI. Non-sensitive, any authenticated user.
+Route::middleware(['auth:sanctum'])->get('job-titles', [\App\Http\Controllers\JobTitleController::class, 'index']);
+
+// Active department list for the volunteer HR form's own department picker.
+// Deliberately NOT the HR-only /hr/volunteer-hr-profiles/filter-options
+// endpoint (role:hr_manager,admin,super_admin,tech_admin) — the volunteer
+// applicant filling out this form is ordinarily none of those roles, and
+// reusing that endpoint here silently 403'd their department dropdown.
+Route::middleware(['auth:sanctum'])->get('departments/options', function () {
+    return response()->json([
+        'success' => true,
+        'data' => \App\Models\Department::where('is_active', true)->orderBy('sort_order')->get(['id', 'name_ar', 'name']),
+    ]);
+});
+
 // ─── HR Manager portal (auth:sanctum + role:hr_manager,admin,super_admin,tech_admin) ────
 Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin'])->prefix('hr')->group(function () {
+    // NOTE: "volunteer-hr-profiles" (not "volunteers") — /hr/volunteers is
+    // already taken by HrDashboardController::volunteers() (the older,
+    // thinner VolunteerProfile-backed listing), which is left untouched.
+    Route::get('volunteer-hr-profiles',                                [HrVolunteerProfileController::class, 'index']);
+    Route::get('volunteer-hr-profiles/filter-options',                 [HrVolunteerProfileController::class, 'filterOptions']);
+    Route::get('volunteer-hr-profiles/{volunteerHrProfile}',            [HrVolunteerProfileController::class, 'show']);
+    Route::patch('volunteer-hr-profiles/{volunteerHrProfile}/review',   [HrVolunteerProfileController::class, 'review']);
+    Route::post('volunteer-hr-profiles/{volunteerHrProfile}/approve',   [HrVolunteerProfileController::class, 'approve']);
+    Route::post('volunteer-hr-profiles/{volunteerHrProfile}/reject',    [HrVolunteerProfileController::class, 'reject']);
+    // Blob-fetched via axios (Authorization header), not a signed browser-nav
+    // link — matches AdminAmbassadorApplicationFileController's convention.
+    Route::get('volunteers/{volunteerHrProfile}/cv/preview',            [HrVolunteerProfileController::class, 'previewCv']);
+    Route::get('volunteers/{volunteerHrProfile}/cv/download',           [HrVolunteerProfileController::class, 'downloadCv']);
     Route::get('dashboard',                                [HrDashboardController::class, 'dashboard']);
     Route::get('team',                                     [HrDashboardController::class, 'team']);
     Route::get('volunteers',                               [HrDashboardController::class, 'volunteers']);
