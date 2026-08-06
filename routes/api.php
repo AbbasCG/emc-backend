@@ -1762,3 +1762,53 @@ Route::middleware(['auth:sanctum', 'role:super_admin,executive_admin'])->prefix(
     Route::put('email-settings',            [EmailSettingsController::class, 'update']);
     Route::post('email-settings/test',      [EmailSettingsController::class, 'test']);
 });
+
+// ─── English Institute Module (المعهد الإنجليزي) ─────────────────────────────
+Route::prefix('institute')->group(function () {
+
+    // Student Routes
+    Route::middleware(['auth:sanctum', 'role:student'])->prefix('student')->group(function () {
+        Route::post('preferences', [\App\Http\Controllers\Institute\InstituteStudentController::class, 'savePreferences']);
+        
+        // Placement Test
+        Route::get('placement-test', [\App\Http\Controllers\Institute\InstituteStudentController::class, 'getTest']);
+        Route::post('placement-test/start', [\App\Http\Controllers\Institute\InstituteStudentController::class, 'startTest']);
+        Route::post('placement-test/submit', [\App\Http\Controllers\Institute\InstituteStudentController::class, 'submitTest']);
+        
+        // Checkout & Payment
+        Route::post('coupons/validate', [\App\Http\Controllers\Institute\InstituteStudentController::class, 'validateCoupon']);
+        Route::post('checkout', [\App\Http\Controllers\Institute\InstituteStudentController::class, 'checkout']);
+        
+        // Dashboard
+        Route::get('dashboard', [\App\Http\Controllers\Institute\InstituteStudentController::class, 'dashboard']);
+    });
+
+    // Admin Routes
+    Route::middleware(['auth:sanctum', 'role:admin,super_admin'])->prefix('admin')->group(function () {
+        // Levels & Bundles
+        Route::apiResource('levels', \App\Http\Controllers\Institute\InstituteAdminController::class);
+        
+        // Coupons
+        Route::apiResource('coupons', \App\Http\Controllers\Institute\InstituteAdminController::class);
+        
+        // Class Distribution
+        Route::get('waitlist', [\App\Http\Controllers\Institute\InstituteAdminController::class, 'waitlist']);
+        Route::post('classes/auto-assign', [\App\Http\Controllers\Institute\InstituteAdminController::class, 'autoAssign']);
+        Route::post('classes/manual-transfer', [\App\Http\Controllers\Institute\InstituteAdminController::class, 'manualTransfer']);
+
+        // Classes Management
+        Route::get('classes', [\App\Http\Controllers\Institute\InstituteAdminController::class, 'getClasses']);
+        Route::post('classes', [\App\Http\Controllers\Institute\InstituteAdminController::class, 'storeClass']);
+        Route::get('classes/{id}', [\App\Http\Controllers\Institute\InstituteAdminController::class, 'getClass']);
+        Route::put('classes/{id}', [\App\Http\Controllers\Institute\InstituteAdminController::class, 'updateClass']);
+        Route::delete('classes/{id}', [\App\Http\Controllers\Institute\InstituteAdminController::class, 'deleteClass']);
+        Route::get('instructors', [\App\Http\Controllers\Institute\InstituteAdminController::class, 'getInstructors']);
+    });
+
+    // Teacher Routes
+    Route::middleware(['auth:sanctum', 'role:instructor'])->prefix('teacher')->group(function () {
+        Route::get('classes', [\App\Http\Controllers\Institute\InstituteTeacherController::class, 'index']);
+        Route::get('classes/{classGroup}', [\App\Http\Controllers\Institute\InstituteTeacherController::class, 'show']);
+        Route::post('classes/{classGroup}/attendance', [\App\Http\Controllers\Institute\InstituteTeacherController::class, 'attendance']);
+    });
+});

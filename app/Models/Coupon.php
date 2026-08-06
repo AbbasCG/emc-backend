@@ -18,6 +18,17 @@ class Coupon extends Model
 
     protected $fillable = [
         'code', 'name', 'description', 'discount_type', 'discount_value',
+<<<<<<< HEAD
+        'max_uses', 'used_count', 'starts_at', 'expires_at', 'status',
+        'applies_to_type', 'applies_to_id', 'is_institute',
+    ];
+
+    protected $casts = [
+        'starts_at'      => 'datetime',
+        'expires_at'     => 'datetime',
+        'discount_value' => 'decimal:2',
+        'is_institute'   => 'boolean',
+=======
         'maximum_discount_amount', 'minimum_order_amount', 'currency',
         'max_uses', 'used_count', 'usage_limit_per_user',
         'first_order_only', 'individual_use_only',
@@ -34,6 +45,7 @@ class Coupon extends Model
         'minimum_order_amount'      => 'decimal:2',
         'first_order_only'          => 'boolean',
         'individual_use_only'       => 'boolean',
+>>>>>>> a8c90225b378a3f985bcd5d4f9f024d07db890d4
     ];
 
     /** @deprecated legacy single-target pin — no longer written by any current flow; kept for backward compatibility with any historical row. */

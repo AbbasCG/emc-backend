@@ -75,6 +75,8 @@ class Course extends Model
         'stripe_price_id',
         'finance_approval_status',
         'submitted_for_finance_at',
+        'is_institute',
+        'pricing_options',
     ];
 
     protected $casts = [
@@ -94,6 +96,8 @@ class Course extends Model
         'requires_registration_code' => 'boolean',
         'submitted_for_finance_at'   => 'datetime',
         'finance_approval_status'    => 'string',
+        'is_institute'               => 'boolean',
+        'pricing_options'            => 'array',
     ];
 
     public function instructor()
@@ -265,5 +269,10 @@ class Course extends Model
         return $query->whereDoesntHave('learningPaths', function ($q) {
             $q->whereIn('learning_paths.status', ['published', 'active']);
         });
+    }
+
+    public function classGroups(): HasMany
+    {
+        return $this->hasMany(ClassGroup::class);
     }
 }
