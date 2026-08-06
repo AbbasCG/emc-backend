@@ -15,6 +15,11 @@ class Order extends Model
         'order_number',
         'type',
         'subtotal',
+        'discount_amount',
+        'coupon_id',
+        'coupon_code_snapshot',
+        'discount_type_snapshot',
+        'discount_value_snapshot',
         'tax_amount',
         'total',
         'currency',
@@ -30,6 +35,8 @@ class Order extends Model
         'metadata' => 'array',
         'paid_at'  => 'datetime',
         'subtotal' => 'decimal:2',
+        'discount_amount' => 'decimal:2',
+        'discount_value_snapshot' => 'decimal:2',
         'tax_amount' => 'decimal:2',
         'total'    => 'decimal:2',
     ];
@@ -42,6 +49,11 @@ class Order extends Model
     public function course(): BelongsTo
     {
         return $this->belongsTo(Course::class);
+    }
+
+    public function coupon(): BelongsTo
+    {
+        return $this->belongsTo(Coupon::class);
     }
 
     public function payments(): HasMany

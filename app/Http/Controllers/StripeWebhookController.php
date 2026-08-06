@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Enums\RegistrationStatus;
 use App\Mail\PaymentConfirmedMail;
+use App\Models\Coupon;
+use App\Models\CouponUsage;
 use App\Models\FinanceAccount;
 use App\Models\FinanceAccountTransaction;
 use App\Models\Invoice;
@@ -279,6 +281,24 @@ class StripeWebhookController extends Controller
                 'payment_method'      => $storedPaymentMethod,
             ]);
 
+            // ── Finalize coupon usage (Phase 15/16) ───────────────────────────
+            // The reservation row created by CheckoutController is the
+            // idempotency guard: only a row still in 'reserved' gets marked
+            // 'used' and only then does the coupon's permanent counter move.
+            // A webhook retry finds the row already 'used' and does nothing.
+            $couponUsage = CouponUsage::where('payment_id', $payment->id)
+                ->orWhere('stripe_checkout_session_id', $sessionId)
+                ->lockForUpdate()
+                ->first();
+
+            if ($couponUsage && $couponUsage->status === CouponUsage::STATUS_RESERVED) {
+                $couponUsage->update([
+                    'status'  => CouponUsage::STATUS_USED,
+                    'used_at' => now(),
+                ]);
+                Coupon::where('id', $couponUsage->coupon_id)->increment('used_count');
+            }
+
             // ── Update registration ───────────────────────────────────────────
             if ($registration) {
                 $registration->update(['status' => RegistrationStatus::REGISTERED->value]);
@@ -417,6 +437,12 @@ class StripeWebhookController extends Controller
                     ->where('status', '!=', 'paid')
                     ->update(['status' => 'failed']);
             }
+
+            // Release the reservation — it never counted toward any usage
+            // limit, so there is nothing to roll back beyond the row itself.
+            CouponUsage::where('payment_id', $payment->id)
+                ->where('status', CouponUsage::STATUS_RESERVED)
+                ->update(['status' => CouponUsage::STATUS_CANCELLED]);
         });
     }
 }

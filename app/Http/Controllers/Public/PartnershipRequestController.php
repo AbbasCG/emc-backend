@@ -3,27 +3,20 @@
 namespace App\Http\Controllers\Public;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\StorePartnershipRequestRequest;
 use App\Models\PartnershipRequest;
-use Illuminate\Http\Request;
+use Illuminate\Http\JsonResponse;
 
 class PartnershipRequestController extends Controller
 {
-    public function store(Request $request): \Illuminate\Http\JsonResponse
+    public function store(StorePartnershipRequestRequest $request): JsonResponse
     {
-        $data = $request->validate([
-            'partner_name' => 'required|string|max:255',
-            'contact_name' => 'required|string|max:255',
-            'email'        => 'required|email',
-            'phone'        => 'nullable|string|max:50',
-            'type'         => 'required|in:university,school,company,institution,donor,community',
-            'message'      => 'required|string',
-        ]);
-
-        PartnershipRequest::create($data);
+        $partnershipRequest = PartnershipRequest::create($request->validated());
 
         return response()->json([
             'success' => true,
-            'message' => 'Partnership request submitted. We will be in touch soon.',
+            'message' => 'تم إرسال طلب الشراكة بنجاح. سيتواصل معك فريق EMC بعد مراجعة الطلب.',
+            'data'    => ['id' => $partnershipRequest->id],
         ], 201);
     }
 }

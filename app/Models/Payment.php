@@ -14,6 +14,8 @@ class Payment extends Model
         'order_id',
         'registration_id',
         'amount',
+        'coupon_id',
+        'discount_amount',
         'provider',
         'provider_payment_id',
         'checkout_url',
@@ -25,6 +27,7 @@ class Payment extends Model
 
     protected $casts = [
         'confirmed_at' => 'datetime',
+        'discount_amount' => 'decimal:2',
     ];
 
     public function registration()
@@ -35,6 +38,11 @@ class Payment extends Model
     public function order()
     {
         return $this->belongsTo(Order::class);
+    }
+
+    public function coupon()
+    {
+        return $this->belongsTo(Coupon::class);
     }
 
     public function financialTransactions()
