@@ -15,9 +15,11 @@ class VolunteerHrProfile extends Model
         'user_id', 'full_name', 'email', 'normalized_email', 'phone', 'phone_country_code', 'country', 'country_code', 'city',
         'date_of_birth', 'gender', 'nationality',
         'department_id', 'job_title', 'employment_type', 'join_date', 'availability', 'weekly_hours',
-        'skills', 'languages', 'education', 'experience', 'motivation',
+        'skills', 'languages', 'education', 'university_specialization', 'experience', 'motivation', 'professional_bio',
         'emergency_contact_name', 'emergency_contact_phone',
         'cv_path', 'cv_original_name', 'cv_mime_type', 'cv_size', 'profile_photo_path', 'linkedin_url', 'portfolio_url',
+        'photo_publication_consent', 'photo_consent_at',
+        'professional_profile_consent', 'professional_profile_consent_at',
         'status', 'submitted_at', 'reviewed_at', 'reviewed_by', 'rejection_reason',
         'approved_at', 'approved_by', 'team_profile_id',
     ];
@@ -29,6 +31,10 @@ class VolunteerHrProfile extends Model
         'reviewed_at'   => 'datetime',
         'approved_at'   => 'datetime',
         'weekly_hours'  => 'integer',
+        'photo_publication_consent'       => 'boolean',
+        'photo_consent_at'                => 'datetime',
+        'professional_profile_consent'    => 'boolean',
+        'professional_profile_consent_at' => 'datetime',
     ];
 
     /** Statuses in workflow order. */

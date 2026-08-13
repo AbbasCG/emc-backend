@@ -105,12 +105,18 @@ class VolunteerApprovalService
                 'gender'        => $locked->gender,
                 'skills'        => $locked->skills,
                 'cv_file_path'  => $locked->cv_path,
-                'image'         => $locked->profile_photo_path,
+                // Photo only propagates to the public-facing TeamProfile row when
+                // the volunteer explicitly consented — otherwise TeamMemberResource
+                // has nothing to show and falls back to initials, regardless of
+                // whatever was uploaded/stored on the private volunteer record.
+                'image'         => $locked->photo_publication_consent === true ? $locked->profile_photo_path : null,
                 'is_active'     => true,
                 'member_type'   => 'volunteer',
                 'source'        => 'volunteer_hr_profile',
                 'source_id'     => $locked->id,
                 'joined_at'     => $locked->join_date,
+                'photo_publication_consent'    => $locked->photo_publication_consent,
+                'professional_profile_consent' => $locked->professional_profile_consent,
             ];
 
             // Reuse the existing synced row if this profile was already linked

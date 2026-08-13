@@ -79,8 +79,10 @@ class VolunteerHrProfileController extends Controller
             'skills'           => $data['skills'] ?? null,
             'languages'        => $data['languages'] ?? null,
             'education'        => $data['education'] ?? null,
+            'university_specialization' => $data['university_specialization'] ?? null,
             'experience'       => $data['experience'] ?? null,
             'motivation'       => $data['motivation'] ?? null,
+            'professional_bio' => isset($data['professional_bio']) ? strip_tags($data['professional_bio']) : null,
             'cv_path'              => $cvPath,
             'cv_original_name'     => $cvOriginalName,
             'cv_mime_type'          => $cvMimeType,
@@ -88,6 +90,10 @@ class VolunteerHrProfileController extends Controller
             'profile_photo_path'   => $photoPath,
             'linkedin_url'         => $data['linkedin_url'] ?? null,
             'portfolio_url'        => $data['portfolio_url'] ?? null,
+            'photo_publication_consent'       => $data['photo_publication_consent'],
+            'photo_consent_at'                => now(),
+            'professional_profile_consent'    => $data['professional_profile_consent'],
+            'professional_profile_consent_at' => now(),
             'status'               => 'submitted',
             'submitted_at'         => now(),
         ]);
@@ -134,6 +140,13 @@ class VolunteerHrProfileController extends Controller
         $data['normalized_email'] = VolunteerHrProfile::normalizeEmail($data['email']);
         $data['status']       = 'submitted';
         $data['submitted_at'] = now();
+        if (isset($data['professional_bio'])) {
+            $data['professional_bio'] = strip_tags($data['professional_bio']);
+        }
+        // Re-submission still requires an explicit answer (FormRequest enforces
+        // `required|boolean`) — refresh the timestamp each time the choice is resubmitted.
+        $data['photo_consent_at']                = now();
+        $data['professional_profile_consent_at'] = now();
         unset($data['cv_file'], $data['profile_photo'], $data['confirmed']);
 
         $volunteerHrProfile->update($data);

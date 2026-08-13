@@ -42,6 +42,8 @@ class VolunteerHrProfileWorkflowTest extends TestCase
             'job_title'   => 'مطور برمجيات',
             'join_date'   => now()->toDateString(),
             'confirmed'   => true,
+            'photo_publication_consent'    => true,
+            'professional_profile_consent' => true,
             'cv_file'     => UploadedFile::fake()->create('cv.pdf', 100, 'application/pdf'),
         ], $overrides);
     }

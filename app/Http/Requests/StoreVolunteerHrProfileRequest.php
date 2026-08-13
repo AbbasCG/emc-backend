@@ -47,13 +47,24 @@ class StoreVolunteerHrProfileRequest extends FormRequest
             'languages'   => 'nullable|array',
             'languages.*' => 'string|max:50|distinct',
             'education'   => 'nullable|string',
+            'university_specialization' => 'nullable|string|max:255',
             'experience'  => 'nullable|string',
             'motivation'  => 'nullable|string',
+            'professional_bio' => ['nullable', 'string', 'max:500', function ($attribute, $value, $fail) {
+                if ($value !== null && strip_tags($value) !== $value) {
+                    $fail('لا يُسمح بإدخال وسوم HTML في هذا الحقل.');
+                }
+            }],
 
             'cv_file'        => ($existingId ? 'nullable' : 'required') . '|file|mimes:pdf,doc,docx|max:5120',
             'profile_photo'  => 'nullable|file|image|max:3072',
             'linkedin_url'   => 'nullable|url|max:255',
             'portfolio_url'  => 'nullable|url|max:255',
+
+            // Explicit choice required on every submission — null/omitted is
+            // rejected, not silently defaulted, so consent is never inferred.
+            'photo_publication_consent'    => 'required|boolean',
+            'professional_profile_consent' => 'required|boolean',
 
             'confirmed' => 'required|accepted',
         ];
@@ -70,6 +81,9 @@ class StoreVolunteerHrProfileRequest extends FormRequest
             'department_id.exists'     => 'القسم المحدد غير صالح',
             'languages.*.distinct'     => 'لا يمكن اختيار نفس اللغة أكثر من مرة',
             'confirmed.accepted'       => 'يجب تأكيد صحة المعلومات المدخلة',
+            'professional_bio.max'     => 'النبذة التعريفية يجب ألا تتجاوز 500 حرف',
+            'photo_publication_consent.required'    => 'يرجى تحديد موافقتك على استخدام الصورة الشخصية',
+            'professional_profile_consent.required' => 'يرجى تحديد موافقتك على عرض البيانات المهنية',
         ];
     }
 

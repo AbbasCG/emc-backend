@@ -43,10 +43,20 @@ class VolunteerHrProfileResource extends JsonResource
             'skills'        => $this->skills,
             'languages'     => $this->languages,
             'education'     => $this->education,
+            'university_specialization' => $this->university_specialization,
             'experience'    => $this->experience,
             'motivation'    => $this->motivation,
+            'professional_bio' => $this->professional_bio,
             'linkedin_url'  => $this->linkedin_url,
             'portfolio_url' => $this->portfolio_url,
+
+            // ── Consents and privacy — HR must see the explicit choice, never
+            // infer it from whether a photo exists. null = not yet answered
+            // (only possible on rows predating this feature). ──
+            'photo_publication_consent'       => $this->photo_publication_consent,
+            'photo_consent_at'                => $this->photo_consent_at?->toIso8601String(),
+            'professional_profile_consent'    => $this->professional_profile_consent,
+            'professional_profile_consent_at' => $this->professional_profile_consent_at?->toIso8601String(),
 
             // ── Documents — metadata only, never the raw storage path. The
             // frontend builds preview/download URLs from `id` against the

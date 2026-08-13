@@ -35,6 +35,8 @@ class TeamProfile extends Model
         'source_id',
         'is_new_member',
         'joined_at',
+        'photo_publication_consent',
+        'professional_profile_consent',
     ];
 
     protected $casts = [
@@ -43,7 +45,20 @@ class TeamProfile extends Model
         'is_active'     => 'boolean',
         'is_new_member' => 'boolean',
         'joined_at'     => 'datetime',
+        'photo_publication_consent'    => 'boolean',
+        'professional_profile_consent' => 'boolean',
     ];
+
+    /**
+     * Consent gating only applies to rows created via the volunteer HR flow
+     * (source='volunteer_hr_profile') — directly-added team members (admin
+     * CRUD) never went through a consent form and must keep displaying
+     * exactly as before this feature existed.
+     */
+    public function requiresConsentGating(): bool
+    {
+        return $this->source === 'volunteer_hr_profile';
+    }
 
     public function department(): BelongsTo
     {

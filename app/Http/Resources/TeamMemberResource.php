@@ -9,7 +9,13 @@ class TeamMemberResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
-        $teamImage = $this->image
+        // Consent gating only applies to volunteer-sourced rows — directly-added
+        // team members (admin CRUD, no consent form ever shown) are unaffected.
+        $gated = $this->requiresConsentGating();
+        $photoAllowed = ! $gated || $this->photo_publication_consent === true;
+        $bioAllowed   = ! $gated || $this->professional_profile_consent === true;
+
+        $teamImage = ($photoAllowed && $this->image)
             ? (str_starts_with($this->image, 'http') ? $this->image : asset('storage/' . $this->image))
             : null;
 
@@ -21,7 +27,7 @@ class TeamMemberResource extends JsonResource
 
         if ($this->relationLoaded('user') && $this->user) {
             $raw = $this->user->avatar;
-            $userAvatar = $raw
+            $userAvatar = ($photoAllowed && $raw)
                 ? (str_starts_with($raw, 'http') ? $raw : asset('storage/' . $raw))
                 : null;
 
@@ -49,7 +55,7 @@ class TeamMemberResource extends JsonResource
             'user_name'          => $userName,
             'user_email'         => $userEmail,
             'user_role'          => $userRole,
-            'bio_ar'             => $this->bio_ar,
+            'bio_ar'             => $bioAllowed ? $this->bio_ar : null,
             'sort_order'         => $this->sort_order,
             'is_leader'          => (bool) $this->is_leader,
             'is_executive'       => (bool) $this->is_executive,

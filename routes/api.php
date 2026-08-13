@@ -204,7 +204,12 @@ Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(fu
     // Advanced LMS
     Route::get('/learning',                    [\App\Http\Controllers\Student\StudentLearningController::class, 'index']);
     Route::get('/lessons/{lesson}',            [\App\Http\Controllers\Student\StudentLearningController::class, 'lesson']);
-    Route::post('/quizzes/{quiz}/submit',      [\App\Http\Controllers\Student\StudentLearningController::class, 'submitQuiz']);
+
+    // الاختبارات القصيرة — quizzes count toward the course final grade; see StudentQuizController.
+    Route::get('/courses/{course}/quizzes',       [\App\Http\Controllers\Student\StudentQuizController::class, 'index']);
+    Route::get('/courses/{course}/final-grade',   [\App\Http\Controllers\Student\StudentQuizController::class, 'finalGrade']);
+    Route::get('/quizzes/{quiz}',                 [\App\Http\Controllers\Student\StudentQuizController::class, 'show']);
+    Route::post('/quizzes/{quiz}/submit',      [\App\Http\Controllers\Student\StudentQuizController::class, 'submit']);
 
     // Placement-gated course content — blocked until placement complete
     Route::middleware('placement.required')->group(function () {
@@ -403,6 +408,25 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:instructor,admin'
     Route::get( '/courses/{course}/placement-students',       [InstructorPlacementController::class, 'students']);
     Route::get( '/placement-tests',                                     [InstructorPlacementController::class, 'placementTests']);
     Route::get( '/placement-tests/{attempt}/answers',                  [InstructorPlacementController::class, 'answers']);
+
+    // ── Quizzes — الاختبارات القصيرة (unlimited per course; final exam reuses the same engine) ──
+    Route::get(   '/courses/{course}/quizzes',                          [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'index']);
+    Route::post(  '/courses/{course}/quizzes',                          [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'store']);
+    Route::get(   '/quizzes/{quiz}',                                    [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'show']);
+    Route::patch( '/quizzes/{quiz}',                                    [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'update']);
+    Route::delete('/quizzes/{quiz}',                                    [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'destroy']);
+    Route::post(  '/quizzes/{quiz}/publish',                            [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'publish']);
+    Route::post(  '/quizzes/{quiz}/schedule',                           [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'schedule']);
+    Route::post(  '/quizzes/{quiz}/close',                              [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'close']);
+    Route::post(  '/quizzes/{quiz}/reopen',                             [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'reopen']);
+    Route::post(  '/quizzes/{quiz}/archive',                            [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'archive']);
+    Route::post(  '/quizzes/{quiz}/duplicate',                          [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'duplicate']);
+    Route::post(  '/quizzes/{quiz}/questions',                          [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'storeQuestion']);
+    Route::patch( '/quizzes/{quiz}/questions/{question}',                [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'updateQuestion']);
+    Route::delete('/quizzes/{quiz}/questions/{question}',                [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'destroyQuestion']);
+    Route::get(   '/courses/{course}/assessment-settings',              [\App\Http\Controllers\Instructor\InstructorCourseAssessmentController::class, 'show']);
+    Route::put(   '/courses/{course}/assessment-settings',              [\App\Http\Controllers\Instructor\InstructorCourseAssessmentController::class, 'update']);
+    Route::get(   '/courses/{course}/students/{user}/quiz-breakdown',    [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'studentBreakdown']);
 
     // ── Class / group management ──────────────────────────────────────────────
     Route::get(   '/classes',                                           [\App\Http\Controllers\Instructor\InstructorClassController::class, 'index']);
@@ -1038,7 +1062,7 @@ Route::get('dashboard/admin', [AdminController::class, 'dashboard'])
 Route::middleware('auth:sanctum')->prefix('lms')->group(function () {
     Route::get('courses/{courseId}/modules', [StudentLearningController::class, 'modules']);
     Route::get('lessons/{lesson}',           [StudentLearningController::class, 'lesson']);
-    Route::post('quizzes/{quiz}/submit',     [StudentLearningController::class, 'submitQuiz']);
+    Route::post('quizzes/{quiz}/submit',     [\App\Http\Controllers\Student\StudentQuizController::class, 'submit']);
 });
 
 // ─── Admin LMS (frontend uses /admin/lms/*) ──────────────────────────────────
