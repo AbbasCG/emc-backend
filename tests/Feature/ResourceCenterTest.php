@@ -35,9 +35,32 @@ class ResourceCenterTest extends TestCase
         }
     }
 
+    public function test_programs_manager_and_other_staff_managers_can_list_courses(): void
+    {
+        foreach ([
+            'programs_manager',
+            'operations_manager',
+            'partnerships_manager',
+            'community_manager',
+            'executive_admin',
+            'admin',
+        ] as $role) {
+            $this->actingAs($this->makeUser($role), 'sanctum')
+                ->getJson('/api/admin/resource-center/courses')
+                ->assertOk();
+        }
+    }
+
     public function test_student_cannot_access_resource_center(): void
     {
         $this->actingAs($this->makeUser('student'), 'sanctum')
+            ->getJson('/api/admin/resource-center/courses')
+            ->assertStatus(403);
+    }
+
+    public function test_partner_cannot_access_resource_center(): void
+    {
+        $this->actingAs($this->makeUser('partner'), 'sanctum')
             ->getJson('/api/admin/resource-center/courses')
             ->assertStatus(403);
     }

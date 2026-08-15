@@ -752,8 +752,9 @@ Route::middleware(['auth:sanctum', 'role:hr_manager,super_admin,executive_admin'
 // ── Resource Center (مركز الموارد) — read-only course/workshop/learning-path
 // discovery for internal staff. Deliberately its own route group with a
 // broad role set (never touches enrollment/creation, so no need to restrict
-// to the narrower Phase 3 admin roles below). ──
-Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,instructor,hr_manager,finance_manager,marketing,marketing_manager,quality,quality_manager,support_agent,volunteer'])
+// to the narrower Phase 3 admin roles below). Keep in sync with
+// frontend RESOURCE_CENTER_ROLES (+ legacy marketing/quality aliases). ──
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,programs_manager,instructor,hr_manager,finance_manager,marketing,marketing_manager,quality,quality_manager,support_agent,operations_manager,partnerships_manager,community_manager,volunteer'])
     ->prefix('admin/resource-center')
     ->group(function () {
         Route::get('courses',                          [\App\Http\Controllers\Admin\ResourceCenterController::class, 'index']);

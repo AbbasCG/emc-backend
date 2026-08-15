@@ -170,7 +170,9 @@ class AdminCourseController extends Controller
                 ->pluck('cnt', 'learning_path_id');
         }
 
-        // Global summary counts — single aggregation query, always unfiltered
+        // Global summary counts — single aggregation query, always unfiltered.
+        // Use a bound ISO date (not CURDATE()) so SQLite tests and MySQL agree.
+        $today = now()->toDateString();
         $summaryRow = DB::table('courses')
             ->selectRaw("
                 COUNT(*) as total,
@@ -179,9 +181,9 @@ class AdminCourseController extends Controller
                 SUM(CASE WHEN status='archived' THEN 1 ELSE 0 END) as archived_count,
                 SUM(CASE WHEN start_date IS NULL THEN 1 ELSE 0 END) as no_date_count,
                 SUM(CASE WHEN instructor_id IS NULL THEN 1 ELSE 0 END) as no_instructor_count,
-                SUM(CASE WHEN end_date < CURDATE() AND status='published' THEN 1 ELSE 0 END) as ended_count,
+                SUM(CASE WHEN end_date < ? AND status='published' THEN 1 ELSE 0 END) as ended_count,
                 SUM(CASE WHEN start_date IS NOT NULL THEN 1 ELSE 0 END) as scheduled_count
-            ")
+            ", [$today])
             ->first();
 
         return response()->json([
