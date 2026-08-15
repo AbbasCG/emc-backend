@@ -736,6 +736,32 @@ Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin
     Route::post('volunteer-requests/{volunteerRequest}/convert-to-member',   [AdminVolunteerRequestController::class, 'convertToMember']);
 });
 
+// ── Ambassador applications export center — reporting only, never touches the
+// approval workflow. Scoped exactly to super_admin/executive_admin/hr_manager
+// per explicit spec — a dedicated group, not reused from the broader
+// admin/tech_admin set the rest of ambassador-applications uses, since
+// executive_admin otherwise has no ambassador-applications access at all. ──
+Route::middleware(['auth:sanctum', 'role:hr_manager,super_admin,executive_admin'])
+    ->prefix('admin')
+    ->group(function () {
+        Route::get('ambassador-applications/export/options',  [\App\Http\Controllers\Admin\AdminAmbassadorApplicationExportController::class, 'options']);
+        Route::post('ambassador-applications/export/preview', [\App\Http\Controllers\Admin\AdminAmbassadorApplicationExportController::class, 'preview']);
+        Route::post('ambassador-applications/export',         [\App\Http\Controllers\Admin\AdminAmbassadorApplicationExportController::class, 'export']);
+    });
+
+// ── Resource Center (مركز الموارد) — read-only course/workshop/learning-path
+// discovery for internal staff. Deliberately its own route group with a
+// broad role set (never touches enrollment/creation, so no need to restrict
+// to the narrower Phase 3 admin roles below). ──
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,instructor,hr_manager,finance_manager,marketing,marketing_manager,quality,quality_manager,support_agent,volunteer'])
+    ->prefix('admin/resource-center')
+    ->group(function () {
+        Route::get('courses',                          [\App\Http\Controllers\Admin\ResourceCenterController::class, 'index']);
+        Route::get('favorites',                         [\App\Http\Controllers\Admin\ResourceCenterController::class, 'favorites']);
+        Route::post('courses/{course}/favorite',        [\App\Http\Controllers\Admin\ResourceCenterController::class, 'toggleFavorite']);
+        Route::get('export',                            [\App\Http\Controllers\Admin\ResourceCenterController::class, 'export']);
+    });
+
 // ─── Phase 3: Operations — auth:sanctum + role:admin ─────────────────────────
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('admin')->group(function () {
 
