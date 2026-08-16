@@ -23,11 +23,14 @@ class FinanceController extends Controller
             $pendingRevenue   = Payment::where('status', PaymentStatuses::PENDING)->sum('amount');
             $failedCount      = Payment::where('status', PaymentStatuses::FAILED)->count();
 
+            $isSqlite = DB::connection()->getDriverName() === 'sqlite';
+            $monthSelector = $isSqlite ? "strftime('%Y-%m', confirmed_at)" : "DATE_FORMAT(confirmed_at, '%Y-%m')";
+
             $monthlyRevenue = DB::table('payments')
                 ->where('status', PaymentStatuses::CONFIRMED)
                 ->whereNotNull('confirmed_at')
                 ->select(
-                    DB::raw("DATE_FORMAT(confirmed_at, '%Y-%m') as month"),
+                    DB::raw("$monthSelector as month"),
                     DB::raw('SUM(amount) as amount'),
                     DB::raw('COUNT(*) as count')
                 )

@@ -5,10 +5,12 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\MeetingActionItemResource;
 use App\Http\Resources\MeetingDecisionResource;
+use App\Http\Resources\MeetingReportResource;
 use App\Http\Resources\MeetingResource;
 use App\Models\Meeting;
 use App\Models\MeetingActionItem;
 use App\Models\MeetingDecision;
+use App\Models\MeetingReport;
 use App\Models\Task;
 use App\Services\ActivityLogger;
 use Illuminate\Http\Request;
@@ -49,6 +51,10 @@ class MeetingController extends Controller
 
         $data['organizer_id'] = $request->user()->id;
 
+        if (empty($data['department_id']) && $request->user()->department_id) {
+            $data['department_id'] = $request->user()->department_id;
+        }
+
         $meeting = Meeting::create($data);
 
         ActivityLogger::log('meeting.created', $meeting, [], $request);
@@ -64,7 +70,7 @@ class MeetingController extends Controller
         return response()->json([
             'success' => true,
             'data'    => new MeetingResource(
-                $meeting->load(['department', 'organizer', 'decisions.decidedBy', 'actionItems.assignedTo'])
+                $meeting->load(['department', 'organizer', 'decisions.decidedBy', 'actionItems.assignedTo', 'report'])
             ),
         ]);
     }
@@ -135,6 +141,34 @@ class MeetingController extends Controller
             'success' => true,
             'data'    => new MeetingActionItemResource($item->load('assignedTo')),
         ], 201);
+    }
+
+    public function storeReport(Request $request, Meeting $meeting): \Illuminate\Http\JsonResponse
+    {
+        $data = $request->validate([
+            'absentees'               => 'nullable|array',
+            'team_commitment_score'   => 'nullable|integer|min:1|max:5',
+            'team_commitment_notes'   => 'nullable|string',
+            'completed_tasks_summary' => 'nullable|string',
+            'kpi_percentage'          => 'nullable|integer|min:0|max:100',
+            'top_interactive_member'  => 'nullable|string',
+            'challenges'              => 'nullable|string',
+            'executive_requests'      => 'nullable|string',
+            'next_month_goals'        => 'nullable|string',
+            'improvement_suggestions' => 'nullable|string',
+        ]);
+
+        $report = $meeting->report()->updateOrCreate(
+            ['meeting_id' => $meeting->id],
+            $data
+        );
+
+        ActivityLogger::log('meeting.report_submitted', $meeting, [], $request);
+
+        return response()->json([
+            'success' => true,
+            'data'    => new MeetingReportResource($report),
+        ], 200);
     }
 
     public function convertActionItemToTask(Request $request, Meeting $meeting, MeetingActionItem $actionItem): \Illuminate\Http\JsonResponse

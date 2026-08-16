@@ -711,7 +711,7 @@ Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin
 });
 
 // ─── Phase 3: Operations — auth:sanctum + role:admin ─────────────────────────
-Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('admin')->group(function () {
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations_manager'])->prefix('admin')->group(function () {
 
     // Departments
     Route::apiResource('departments', DepartmentController::class);
@@ -731,6 +731,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::post('meetings/{meeting}/decisions',                          [MeetingController::class, 'storeDecision']);
     Route::post('meetings/{meeting}/action-items',                       [MeetingController::class, 'storeActionItem']);
     Route::post('meetings/{meeting}/action-items/{actionItem}/convert-to-task', [MeetingController::class, 'convertActionItemToTask']);
+    Route::post('meetings/{meeting}/report',                             [MeetingController::class, 'storeReport']);
 
     // Dynamic Forms (admin management)
     Route::apiResource('forms', DynamicFormController::class);
@@ -1085,7 +1086,7 @@ Route::middleware(['auth:sanctum', 'role:admin,programs_manager,tech_admin,super
 
 // ─── Operations: department routes — accessible by admin, department_manager, programs_manager ─
 // (department_manager scopes to own dept; programs_manager needs read-only for course dept dropdown)
-Route::middleware(['auth:sanctum', 'role:admin,department_manager,programs_manager'])->prefix('operations')->group(function () {
+Route::middleware(['auth:sanctum', 'role:admin,department_manager,programs_manager,operations_manager'])->prefix('operations')->group(function () {
     Route::get('departments',              [DepartmentController::class, 'index']);
     Route::get('departments/{department}', [DepartmentController::class, 'show']);
 });
@@ -1104,7 +1105,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,support_ag
 });
 
 // ─── Operations aliases (frontend uses /operations/*, backend uses /admin/*) ─
-Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('operations')->group(function () {
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations_manager'])->prefix('operations')->group(function () {
     Route::get('dashboard',                                            [AdminController::class,                   'dashboard']);
     // NOTE: GET departments + departments/{id} are registered ABOVE this group with role:admin,department_manager
     // so that Dept. Managers can access their own department data.
@@ -1123,11 +1124,15 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::get('volunteers',                                           [VolunteerController::class,               'index']);
     Route::get('volunteers/{volunteer}',                               [VolunteerController::class,               'show']);
     Route::patch('volunteers/{volunteer}',                             [VolunteerController::class,               'update']);
-    Route::get('partners',                                             [PartnerController::class,                 'index']);
-    Route::get('partnership-requests',                                 [PartnershipRequestAdminController::class, 'index']);
-    Route::patch('partnership-requests/{partnershipRequest}',          [PartnershipRequestAdminController::class, 'updateStatus']);
     Route::get('marketing',                                            [MarketingItemController::class,           'index']);
     Route::patch('marketing/{marketingItem}',                          [MarketingItemController::class,           'update']);
+});
+
+// ─── Operations: Partnerships (accessible to partnerships_manager as well) ─
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations_manager,partnerships_manager'])->prefix('operations')->group(function () {
+    Route::apiResource('partners',                                     PartnerController::class);
+    Route::get('partnership-requests',                                 [PartnershipRequestAdminController::class, 'index']);
+    Route::patch('partnership-requests/{partnershipRequest}',          [PartnershipRequestAdminController::class, 'updateStatus']);
 });
 
 // ─── Finance aliases (frontend uses /finance/*, backend uses /admin/finance/*) ─
@@ -1203,6 +1208,16 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_ma
 Route::get('kpi', [KpiController::class, 'unified'])
     ->middleware(['auth:sanctum', 'role:admin,finance_manager,quality_manager,programs_manager']);
 
+// ─── Department Meeting Lounge ────────────────────────────────────────────────
+Route::middleware(['auth:sanctum'])->prefix('department')->group(function () {
+    Route::get('meetings', [App\Http\Controllers\Admin\MeetingController::class, 'index']);
+    Route::post('meetings', [App\Http\Controllers\Admin\MeetingController::class, 'store']);
+    Route::get('meetings/{meeting}', [App\Http\Controllers\Admin\MeetingController::class, 'show']);
+    Route::put('meetings/{meeting}', [App\Http\Controllers\Admin\MeetingController::class, 'update']);
+    Route::post('meetings/{meeting}/report', [App\Http\Controllers\Admin\MeetingController::class, 'storeReport']);
+    Route::post('meetings/{meeting}/action-items', [App\Http\Controllers\Admin\MeetingController::class, 'storeActionItem']);
+});
+
 // ─── Quality Management System ────────────────────────────────────────────────
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,quality_manager'])->prefix('quality')->group(function () {
     Route::get('dashboard',   [QualityController::class, 'dashboard']);
@@ -1230,7 +1245,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,quality_ma
 });
 
 // ─── Reports aliases (frontend uses /reports directly) ───────────────────────
-Route::middleware(['auth:sanctum', 'role:admin,programs_manager'])->group(function () {
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,programs_manager,operations_manager'])->group(function () {
     Route::get('reports',          [ReportController::class, 'index']);
     Route::post('reports/generate',[ReportController::class, 'generate']);
 });

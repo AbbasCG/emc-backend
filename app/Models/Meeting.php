@@ -40,4 +40,9 @@ class Meeting extends Model
     {
         return $this->hasMany(MeetingActionItem::class);
     }
+
+    public function report()
+    {
+        return $this->hasOne(MeetingReport::class);
+    }
 }

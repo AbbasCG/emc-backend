@@ -11,29 +11,52 @@ class PartnerController extends Controller
 {
     public function index(Request $request): \Illuminate\Http\JsonResponse
     {
-        $partners = Partner::query()
+        $query = Partner::query()
+            ->when($request->project_scope, fn ($q) => $q->where('project_scope', $request->project_scope))
             ->when($request->type, fn ($q) => $q->where('type', $request->type))
             ->when($request->status, fn ($q) => $q->where('status', $request->status))
-            ->when($request->search, fn ($q) => $q->where('name', 'like', '%' . $request->search . '%'))
-            ->latest()
-            ->paginate(20);
+            ->when($request->classification, fn ($q) => $q->where('classification', $request->classification))
+            ->when($request->search, fn ($q) => $q->where('name', 'like', '%' . $request->search . '%'));
 
-        return response()->json(['success' => true, 'data' => PartnerResource::collection($partners)->response()->getData(true)]);
+        // KPIs for the current scope
+        $kpis = [
+            'total' => (clone $query)->count(),
+            'actual' => (clone $query)->where('classification', 'Actual Partner')->count(),
+            'negotiation' => (clone $query)->where('classification', 'Under Negotiation')->count(),
+            'rejected' => (clone $query)->where('classification', 'Rejected')->count(),
+        ];
+
+        $partners = $query->latest()->paginate(20);
+
+        return response()->json([
+            'success' => true,
+            'data' => PartnerResource::collection($partners)->response()->getData(true),
+            'kpis' => $kpis
+        ]);
     }
 
     public function store(Request $request): \Illuminate\Http\JsonResponse
     {
         $data = $request->validate([
             'name'           => 'required|string|max:255',
-            'type'           => 'in:university,school,company,institution,donor,community',
+            'type'           => 'nullable|string|max:100',
             'contact_person' => 'nullable|string|max:255',
             'email'          => 'nullable|email',
             'phone'          => 'nullable|string|max:50',
             'website'        => 'nullable|url',
             'country'        => 'nullable|string|max:100',
             'city'           => 'nullable|string|max:100',
-            'status'         => 'in:active,inactive,archived',
+            'status'         => 'nullable|string|max:50',
             'notes'          => 'nullable|string',
+            'project_scope'  => 'required|string|max:50',
+            'classification' => 'nullable|string|max:50',
+            'field_of_work'  => 'nullable|string',
+            'contact_position' => 'nullable|string|max:150',
+            'assigned_to'    => 'nullable|string|max:100',
+            'first_contact_date' => 'nullable|date',
+            'last_contact_date'  => 'nullable|date',
+            'rejection_reason'   => 'nullable|string',
+            'attachment_url'     => 'nullable|string',
         ]);
 
         $partner = Partner::create($data);
@@ -56,15 +79,24 @@ class PartnerController extends Controller
     {
         $data = $request->validate([
             'name'           => 'string|max:255',
-            'type'           => 'in:university,school,company,institution,donor,community',
+            'type'           => 'nullable|string|max:100',
             'contact_person' => 'nullable|string|max:255',
             'email'          => 'nullable|email',
             'phone'          => 'nullable|string|max:50',
             'website'        => 'nullable|url',
             'country'        => 'nullable|string|max:100',
             'city'           => 'nullable|string|max:100',
-            'status'         => 'in:active,inactive,archived',
+            'status'         => 'nullable|string|max:50',
             'notes'          => 'nullable|string',
+            'project_scope'  => 'string|max:50',
+            'classification' => 'nullable|string|max:50',
+            'field_of_work'  => 'nullable|string',
+            'contact_position' => 'nullable|string|max:150',
+            'assigned_to'    => 'nullable|string|max:100',
+            'first_contact_date' => 'nullable|date',
+            'last_contact_date'  => 'nullable|date',
+            'rejection_reason'   => 'nullable|string',
+            'attachment_url'     => 'nullable|string',
         ]);
 
         $partner->update($data);

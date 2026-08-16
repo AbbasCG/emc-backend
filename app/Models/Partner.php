@@ -12,6 +12,14 @@ class Partner extends Model
     protected $fillable = [
         'name', 'type', 'contact_person', 'email', 'phone',
         'website', 'country', 'city', 'status', 'notes',
+        'project_scope', 'classification', 'field_of_work',
+        'contact_position', 'assigned_to', 'first_contact_date',
+        'last_contact_date', 'rejection_reason', 'attachment_url',
+    ];
+
+    protected $casts = [
+        'first_contact_date' => 'date',
+        'last_contact_date' => 'date',
     ];
 
     public function partnerUsers(): \Illuminate\Database\Eloquent\Relations\HasMany
