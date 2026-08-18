@@ -34,9 +34,9 @@ class AmbassadorApplicationFileResource extends JsonResource
             // inline regardless of whether a separate optimized preview variant exists.
             'has_preview'        => str_starts_with($file->mime_type, 'image/') || $file->mime_type === 'application/pdf',
 
-            // Safe URLs — no disk/path/stored_name exposed
-            'preview_url'        => route('admin.ambassador-applications.files.preview',  [$applicationId, $file->id]),
-            'download_url'       => route('admin.ambassador-applications.files.download', [$applicationId, $file->id]),
+            // Safe URLs — no disk/path/stored_name exposed. No download_url:
+            // download() was intentionally removed (privacy policy — preview only).
+            'preview_url'        => route('admin.ambassador-applications.files.preview', [$applicationId, $file->id]),
             'thumbnail_url'      => $file->thumbnail_path
                 ? route('admin.ambassador-applications.files.thumbnail', [$applicationId, $file->id])
                 : null,
