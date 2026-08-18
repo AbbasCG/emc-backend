@@ -687,10 +687,7 @@ Route::post('/ambassador-applications/draft', [PublicAmbassadorController::class
 Route::get('/ambassador-applications/draft/{token}', [PublicAmbassadorController::class, 'getDraft'])
     ->middleware('throttle:30,1');
 
-// Signed CV download — URL issued only via authenticated admin volunteer-request APIs
-Route::get('admin/volunteer-requests/{volunteerRequest}/cv', [AdminVolunteerRequestController::class, 'downloadCv'])
-    ->middleware('signed')
-    ->name('admin.volunteer-requests.cv');
+// Signed CV download route removed — privacy policy: preview only, no download.
 
 // Signed CV inline view
 Route::get('admin/volunteer-requests/{volunteerRequest}/cv/view', [AdminVolunteerRequestController::class, 'viewCv'])
@@ -698,16 +695,12 @@ Route::get('admin/volunteer-requests/{volunteerRequest}/cv/view', [AdminVoluntee
     ->name('admin.volunteer-requests.cv.view');
 
 // Ambassador application file routes (auth:sanctum — role check done in controller)
+// Privacy policy: staff may preview applicant CV/student-ID/photo in-app but
+// never download the raw file — downloadCv()/downloadStudentId() routes removed.
 Route::middleware('auth:sanctum')->group(function () {
-    Route::get('admin/ambassador-applications/{ambassadorApplication}/cv',
-        [AdminAmbassadorApplicationController::class, 'downloadCv'])
-        ->name('admin.ambassador.cv.download');
     Route::get('admin/ambassador-applications/{ambassadorApplication}/cv/view',
         [AdminAmbassadorApplicationController::class, 'viewCv'])
         ->name('admin.ambassador.cv.view');
-    Route::get('admin/ambassador-applications/{ambassadorApplication}/student-id',
-        [AdminAmbassadorApplicationController::class, 'downloadStudentId'])
-        ->name('admin.ambassador.student-id.download');
     Route::get('admin/ambassador-applications/{ambassadorApplication}/photo',
         [AdminAmbassadorApplicationController::class, 'viewPhoto'])
         ->name('admin.ambassador.photo.view');
@@ -718,7 +711,6 @@ Route::middleware('auth:sanctum')->group(function () {
         ->group(function () {
             Route::get('/',                  [AdminAmbassadorApplicationFileController::class, 'index'])    ->name('index');
             Route::get('/{fileId}/preview',  [AdminAmbassadorApplicationFileController::class, 'preview'])  ->name('preview');
-            Route::get('/{fileId}/download', [AdminAmbassadorApplicationFileController::class, 'download']) ->name('download');
             Route::get('/{fileId}/thumbnail',[AdminAmbassadorApplicationFileController::class, 'thumbnail'])->name('thumbnail');
             Route::delete('/{fileId}',       [AdminAmbassadorApplicationFileController::class, 'destroy'])  ->name('destroy');
         });
@@ -736,18 +728,8 @@ Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin
     Route::post('volunteer-requests/{volunteerRequest}/convert-to-member',   [AdminVolunteerRequestController::class, 'convertToMember']);
 });
 
-// ── Ambassador applications export center — reporting only, never touches the
-// approval workflow. Scoped exactly to super_admin/executive_admin/hr_manager
-// per explicit spec — a dedicated group, not reused from the broader
-// admin/tech_admin set the rest of ambassador-applications uses, since
-// executive_admin otherwise has no ambassador-applications access at all. ──
-Route::middleware(['auth:sanctum', 'role:hr_manager,super_admin,executive_admin'])
-    ->prefix('admin')
-    ->group(function () {
-        Route::get('ambassador-applications/export/options',  [\App\Http\Controllers\Admin\AdminAmbassadorApplicationExportController::class, 'options']);
-        Route::post('ambassador-applications/export/preview', [\App\Http\Controllers\Admin\AdminAmbassadorApplicationExportController::class, 'preview']);
-        Route::post('ambassador-applications/export',         [\App\Http\Controllers\Admin\AdminAmbassadorApplicationExportController::class, 'export']);
-    });
+// Ambassador applications personal-data export center removed — privacy
+// policy: no CSV/Excel export of applicant personal data.
 
 // ── Resource Center (مركز الموارد) — read-only course/workshop/learning-path
 // discovery for internal staff. Deliberately its own route group with a
@@ -1496,7 +1478,7 @@ Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin
     // Blob-fetched via axios (Authorization header), not a signed browser-nav
     // link — matches AdminAmbassadorApplicationFileController's convention.
     Route::get('volunteers/{volunteerHrProfile}/cv/preview',            [HrVolunteerProfileController::class, 'previewCv']);
-    Route::get('volunteers/{volunteerHrProfile}/cv/download',           [HrVolunteerProfileController::class, 'downloadCv']);
+    // cv/download removed — privacy policy: no CV download, preview only.
     Route::get('dashboard',                                [HrDashboardController::class, 'dashboard']);
     Route::get('team',                                     [HrDashboardController::class, 'team']);
     Route::get('volunteers',                               [HrDashboardController::class, 'volunteers']);

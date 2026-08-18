@@ -288,19 +288,8 @@ class AdminAmbassadorApplicationController extends Controller
         return response()->json(['success' => true, 'message' => 'تم حذف الملاحظة.']);
     }
 
-    /**
-     * GET /api/admin/ambassador-applications/{id}/cv
-     */
-    public function downloadCv(AmbassadorApplication $ambassadorApplication): StreamedResponse|JsonResponse
-    {
-        $path = $ambassadorApplication->cvStoragePath();
-
-        if (! $path || ! Storage::disk('private')->exists($path)) {
-            return response()->json(['success' => false, 'message' => 'الملف غير موجود.'], 404);
-        }
-
-        return Storage::disk('private')->download($path, 'cv_' . $ambassadorApplication->id . '.pdf');
-    }
+    // downloadCv() removed — privacy policy: staff may preview an applicant's
+    // CV in-app but never download the raw file.
 
     /**
      * GET /api/admin/ambassador-applications/{id}/cv/view
@@ -320,19 +309,7 @@ class AdminAmbassadorApplicationController extends Controller
         );
     }
 
-    /**
-     * GET /api/admin/ambassador-applications/{id}/student-id
-     */
-    public function downloadStudentId(AmbassadorApplication $ambassadorApplication): StreamedResponse|JsonResponse
-    {
-        $path = $ambassadorApplication->student_id_path;
-
-        if (! $path || ! Storage::disk('private')->exists($path)) {
-            return response()->json(['success' => false, 'message' => 'الملف غير موجود.'], 404);
-        }
-
-        return Storage::disk('private')->download($path, 'student_id_' . $ambassadorApplication->id);
-    }
+    // downloadStudentId() removed — privacy policy: no student-ID download.
 
     /**
      * GET /api/admin/ambassador-applications/{id}/photo

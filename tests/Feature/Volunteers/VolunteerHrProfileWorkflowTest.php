@@ -156,25 +156,25 @@ class VolunteerHrProfileWorkflowTest extends TestCase
         $response->assertStatus(200);
     }
 
-    public function test_authorized_hr_can_download_cv(): void
+    // Privacy policy: no CV download endpoint exists — preview only.
+    public function test_cv_download_route_no_longer_exists(): void
     {
         Storage::fake('private');
         $profile = $this->profileWithCv();
         $hr = $this->hr();
 
-        $response = $this->actingAs($hr, 'sanctum')->get("/api/hr/volunteers/{$profile->id}/cv/download");
-
-        $response->assertStatus(200);
+        $this->actingAs($hr, 'sanctum')
+            ->get("/api/hr/volunteers/{$profile->id}/cv/download")
+            ->assertStatus(404);
     }
 
-    public function test_unauthorized_role_receives_403_from_cv_endpoints(): void
+    public function test_unauthorized_role_receives_403_from_cv_preview_endpoint(): void
     {
         Storage::fake('private');
         $profile = $this->profileWithCv();
         $student = $this->volunteer();
 
         $this->actingAs($student, 'sanctum')->get("/api/hr/volunteers/{$profile->id}/cv/preview")->assertStatus(403);
-        $this->actingAs($student, 'sanctum')->get("/api/hr/volunteers/{$profile->id}/cv/download")->assertStatus(403);
     }
 
     public function test_volunteer_cannot_preview_another_volunteers_cv(): void

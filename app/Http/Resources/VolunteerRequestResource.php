@@ -10,8 +10,7 @@ class VolunteerRequestResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
-        $cvDownloadUrl = $this->signedCvUrl('admin.volunteer-requests.cv');
-        $cvViewUrl     = $this->signedCvUrl('admin.volunteer-requests.cv.view');
+        $cvViewUrl = $this->signedCvUrl('admin.volunteer-requests.cv.view');
 
         return [
             'id'                  => $this->id,
@@ -27,9 +26,8 @@ class VolunteerRequestResource extends JsonResource
             'availability'        => $this->availability,
             'motivation'          => $this->motivation,
             'previous_experience' => $this->previous_experience,
-            'cv_url'              => $cvDownloadUrl,
-            'cv_file_url'         => $cvDownloadUrl,
-            'cv_download_url'     => $cvDownloadUrl,
+            'cv_url'              => $cvViewUrl,
+            'cv_file_url'         => $cvViewUrl,
             'cv_view_url'         => $cvViewUrl,
             'notes'               => $this->notes,
             'status'              => $this->status,

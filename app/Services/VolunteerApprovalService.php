@@ -7,6 +7,7 @@ use App\Models\TeamProfile;
 use App\Models\User;
 use App\Models\VolunteerHrProfile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class VolunteerApprovalService
 {
@@ -21,6 +22,12 @@ class VolunteerApprovalService
             ->when($excludeProfileId, fn ($q) => $q->where('id', '!=', $excludeProfileId))
             ->first();
         if ($approved) {
+            Log::info('volunteer_hr_profile.duplicate_check', [
+                'duplicate_reason' => 'already_volunteer',
+                'user_id'          => $userId,
+                'matched_profile_id' => $approved->id,
+            ]);
+
             return [
                 'code'    => 'already_volunteer',
                 'message' => 'يوجد بالفعل سجل لهذا المتطوع في النظام',
@@ -34,6 +41,12 @@ class VolunteerApprovalService
             ->when($excludeProfileId, fn ($q) => $q->where('id', '!=', $excludeProfileId))
             ->first();
         if ($pending) {
+            Log::info('volunteer_hr_profile.duplicate_check', [
+                'duplicate_reason' => 'pending_exists',
+                'user_id'          => $userId,
+                'matched_profile_id' => $pending->id,
+            ]);
+
             return [
                 'code'    => 'pending_exists',
                 'message' => 'يوجد طلب سابق قيد المراجعة لهذا البريد الإلكتروني',
@@ -42,10 +55,24 @@ class VolunteerApprovalService
         }
 
         // 3) Linked user is already an active team member (defensive — should
-        // already be caught by #1, but a member can also be added manually).
+        // already be caught by #1, but a member can also be added manually,
+        // e.g. directly through admin Team CRUD, not via this approval flow).
+        // Uses TeamProfile::scopeActive() (is_active=true) rather than mere row
+        // existence — `is_active` on team_profiles is this app's only signal
+        // for "currently a member" (the table has no soft-deletes; removal is
+        // a hard delete via AdminTeamProfileController::destroy()), so an
+        // inactive/hidden row must NOT block a fresh submission.
         if ($userId) {
-            $existingMember = TeamProfile::where('user_id', $userId)->where('is_active', true)->first();
+            $existingMember = TeamProfile::active()->where('user_id', $userId)->first();
             if ($existingMember) {
+                Log::info('volunteer_hr_profile.duplicate_check', [
+                    'duplicate_reason'  => 'already_member',
+                    'user_id'           => $userId,
+                    'matched_member_id' => $existingMember->id,
+                    'member_type'       => $existingMember->member_type,
+                    'source'            => $existingMember->source,
+                ]);
+
                 return [
                     'code'    => 'already_member',
                     'message' => 'هذا المتطوع موجود بالفعل ضمن أعضاء الفريق',

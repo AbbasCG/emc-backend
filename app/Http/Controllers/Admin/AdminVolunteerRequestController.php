@@ -204,27 +204,8 @@ class AdminVolunteerRequestController extends Controller
         ]);
     }
 
-    // GET /api/admin/volunteer-requests/{id}/cv  (signed URL — forces download)
-    public function downloadCv(Request $request, VolunteerRequest $volunteerRequest): StreamedResponse|JsonResponse
-    {
-        $path = $volunteerRequest->cvStoragePath();
-
-        [$disk, $resolvedPath] = $this->resolveCvDisk($path);
-
-        if (! $disk) {
-            return response()->json([
-                'success' => false,
-                'message' => 'CV file not found.',
-            ], 404);
-        }
-
-        $filename = basename($resolvedPath);
-        if (! str_contains($filename, '.')) {
-            $filename .= '.pdf';
-        }
-
-        return Storage::disk($disk)->download($resolvedPath, $filename);
-    }
+    // downloadCv() removed — privacy policy: staff may preview an applicant's
+    // CV in-app but never download the raw file.
 
     // GET /api/admin/volunteer-requests/{id}/cv/view  (signed URL — inline view)
     public function viewCv(Request $request, VolunteerRequest $volunteerRequest): StreamedResponse|JsonResponse

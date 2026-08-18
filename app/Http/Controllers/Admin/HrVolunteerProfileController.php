@@ -164,22 +164,8 @@ class HrVolunteerProfileController extends Controller
         ]);
     }
 
-    // GET /api/hr/volunteers/{volunteerHrProfile}/cv/download
-    // Role-gated by route middleware (hr_manager/admin/super_admin/tech_admin)
-    // + auth:sanctum — fetched via axios with the Authorization header, not a
-    // signed browser-nav link, so the raw storage path is never exposed.
-    public function downloadCv(VolunteerHrProfile $volunteerHrProfile): StreamedResponse|JsonResponse
-    {
-        if (! $volunteerHrProfile->cv_path || ! Storage::disk('private')->exists($volunteerHrProfile->cv_path)) {
-            return response()->json(['success' => false, 'message' => 'CV file not found.'], 404);
-        }
-
-        AuditLogService::logDownload($volunteerHrProfile, $volunteerHrProfile->cv_original_name ?? basename($volunteerHrProfile->cv_path));
-
-        $filename = $volunteerHrProfile->cv_original_name ?? basename($volunteerHrProfile->cv_path);
-
-        return Storage::disk('private')->download($volunteerHrProfile->cv_path, $filename);
-    }
+    // downloadCv() removed — privacy policy: staff may preview a volunteer's CV
+    // in-app but never download the raw file. previewCv() below is unaffected.
 
     // GET /api/hr/volunteers/{volunteerHrProfile}/cv/preview — inline bytes for
     // the frontend's blob-based preview modal (same pattern as
