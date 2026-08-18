@@ -234,6 +234,99 @@ class VolunteerHrProfileProfessionalFieldsTest extends TestCase
         $response->assertStatus(422)->assertJsonValidationErrors('professional_profile_consent');
     }
 
+    // ── Live bug regression: consent values arrive as multipart/form-data
+    // strings (the real submission path — this form also uploads a CV/photo),
+    // not JSON booleans. postJson() above never exercised this path. ──────
+
+    public function test_multipart_string_1_and_0_are_normalized_to_booleans(): void
+    {
+        Storage::fake('private');
+        $user = $this->volunteer();
+        $dept = $this->department();
+        $data = $this->payload($dept, [
+            'photo_publication_consent'    => '1',
+            'professional_profile_consent' => '0',
+        ]);
+
+        $response = $this->actingAs($user, 'sanctum')->post('/api/volunteer/hr-profile', $data);
+
+        $response->assertStatus(201);
+        $profile = VolunteerHrProfile::where('user_id', $user->id)->first();
+        $this->assertTrue($profile->photo_publication_consent);
+        $this->assertFalse($profile->professional_profile_consent);
+    }
+
+    public function test_multipart_string_true_and_false_are_normalized_to_booleans(): void
+    {
+        Storage::fake('private');
+        $user = $this->volunteer();
+        $dept = $this->department();
+        $data = $this->payload($dept, [
+            'photo_publication_consent'    => 'true',
+            'professional_profile_consent' => 'false',
+        ]);
+
+        $response = $this->actingAs($user, 'sanctum')->post('/api/volunteer/hr-profile', $data);
+
+        $response->assertStatus(201);
+        $profile = VolunteerHrProfile::where('user_id', $user->id)->first();
+        $this->assertTrue($profile->photo_publication_consent);
+        $this->assertFalse($profile->professional_profile_consent);
+    }
+
+    public function test_invalid_consent_string_is_rejected_with_arabic_message(): void
+    {
+        Storage::fake('private');
+        $user = $this->volunteer();
+        $dept = $this->department();
+        $data = $this->payload($dept, ['photo_publication_consent' => 'random']);
+
+        $response = $this->actingAs($user, 'sanctum')->post('/api/volunteer/hr-profile', $data);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('photo_publication_consent');
+        $this->assertSame(
+            'يرجى اختيار الموافقة أو عدم الموافقة على استخدام الصورة الشخصية',
+            $response->json('errors.photo_publication_consent.0'),
+        );
+    }
+
+    public function test_false_is_not_treated_as_missing_over_multipart(): void
+    {
+        Storage::fake('private');
+        $user = $this->volunteer();
+        $dept = $this->department();
+        $data = $this->payload($dept, [
+            'photo_publication_consent'    => '0',
+            'professional_profile_consent' => '0',
+        ]);
+
+        $response = $this->actingAs($user, 'sanctum')->post('/api/volunteer/hr-profile', $data);
+
+        $response->assertStatus(201);
+        $profile = VolunteerHrProfile::where('user_id', $user->id)->first();
+        $this->assertFalse($profile->photo_publication_consent);
+        $this->assertFalse($profile->professional_profile_consent);
+        $this->assertNotNull($profile->photo_consent_at);
+        $this->assertNotNull($profile->professional_profile_consent_at);
+    }
+
+    public function test_model_returns_real_booleans_not_strings(): void
+    {
+        Storage::fake('private');
+        $user = $this->volunteer();
+        $dept = $this->department();
+        $data = $this->payload($dept, [
+            'photo_publication_consent'    => '1',
+            'professional_profile_consent' => '1',
+        ]);
+
+        $this->actingAs($user, 'sanctum')->post('/api/volunteer/hr-profile', $data);
+
+        $profile = VolunteerHrProfile::where('user_id', $user->id)->first();
+        $this->assertIsBool($profile->photo_publication_consent);
+        $this->assertIsBool($profile->professional_profile_consent);
+    }
+
     // ── 10. Consent fields returned to HR ────────────────────────────────
 
     public function test_consent_fields_are_returned_to_hr(): void

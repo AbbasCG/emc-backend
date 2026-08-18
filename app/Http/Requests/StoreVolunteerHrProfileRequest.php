@@ -83,8 +83,36 @@ class StoreVolunteerHrProfileRequest extends FormRequest
             'confirmed.accepted'       => 'يجب تأكيد صحة المعلومات المدخلة',
             'professional_bio.max'     => 'النبذة التعريفية يجب ألا تتجاوز 500 حرف',
             'photo_publication_consent.required'    => 'يرجى تحديد موافقتك على استخدام الصورة الشخصية',
+            'photo_publication_consent.boolean'     => 'يرجى اختيار الموافقة أو عدم الموافقة على استخدام الصورة الشخصية',
             'professional_profile_consent.required' => 'يرجى تحديد موافقتك على عرض البيانات المهنية',
+            'professional_profile_consent.boolean'  => 'يرجى اختيار الموافقة أو عدم الموافقة على عرض البيانات المهنية',
         ];
+    }
+
+    /**
+     * The consent fields arrive over multipart/form-data (the request also
+     * carries the CV/photo uploads), which has no boolean type — every value
+     * lands as text. Only recognized representations ("1"/"0"/"true"/"false"/
+     * real booleans) are normalized to real booleans here; anything else
+     * (missing, or an arbitrary string like "random") is left untouched so
+     * the required/boolean rules below correctly reject it — false must
+     * never be coerced away as if it were "missing".
+     */
+    protected function prepareForValidation(): void
+    {
+        $sanitized = [];
+        foreach (['photo_publication_consent', 'professional_profile_consent'] as $field) {
+            if (! $this->has($field)) {
+                continue;
+            }
+            $normalized = filter_var($this->input($field), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            if ($normalized !== null) {
+                $sanitized[$field] = $normalized;
+            }
+        }
+        if ($sanitized) {
+            $this->merge($sanitized);
+        }
     }
 
     /** Cross-field check: a 'canonical' job title must actually belong to the selected department. */
