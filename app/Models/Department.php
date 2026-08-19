@@ -6,6 +6,7 @@ use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class Department extends Model
 {
@@ -42,6 +43,13 @@ class Department extends Model
     public function teamMembers(): HasMany
     {
         return $this->hasMany(TeamMember::class);
+    }
+
+    public function users(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'user_departments')
+                    ->withPivot('is_primary')
+                    ->withTimestamps();
     }
 
     /** Public website team profiles (no user account required). */

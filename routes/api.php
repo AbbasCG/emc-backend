@@ -150,6 +150,7 @@ Route::prefix('auth')->middleware('throttle:auth')->group(function () {
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
         Route::get('/me',      [AuthController::class, 'me']);
+        Route::get('/me/access-manifest', \App\Http\Controllers\AccessManifestController::class);
     });
 });
 
@@ -169,6 +170,9 @@ Route::get('/search', SearchController::class)->middleware('throttle:api');
 
 // ─── Public: Team (EMC V3 website team page — no auth required) ──────────────
 Route::get('/team', [\App\Http\Controllers\TeamController::class, 'index'])->middleware('throttle:api');
+
+// ─── Public: Expert & Instructor Application ──────────────────────────────────
+Route::post('/expert-applications', [\App\Http\Controllers\Public\PublicExpertApplicationController::class, 'store'])->middleware('throttle:api');
 
 // ─── Student LMS (auth:sanctum + role:student) ─────────────────────────────────
 Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(function () {
@@ -716,6 +720,13 @@ Route::middleware('auth:sanctum')->group(function () {
         });
 });
 
+// Admin Expert Applications
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,ai_manager'])->prefix('admin/expert-applications')->group(function () {
+    Route::get('/', [\App\Http\Controllers\Admin\AdminExpertApplicationController::class, 'index']);
+    Route::get('/{id}', [\App\Http\Controllers\Admin\AdminExpertApplicationController::class, 'show']);
+    Route::put('/{id}/status', [\App\Http\Controllers\Admin\AdminExpertApplicationController::class, 'updateStatus']);
+});
+
 // ─── Public: Support tickets ─────────────────────────────────────────────────
 Route::post('/support-tickets', [PublicSupportTicketController::class, 'store'])
     ->middleware('throttle:workshop');
@@ -982,32 +993,34 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     Route::put('users/{user}/role',                  [UserRoleController::class, 'assignRole']);
     Route::get('users/{user}/permissions',           [UserRoleController::class, 'getUserPermissions']);
 
-    // ── Phase 8: AI Admin ─────────────────────────────────────────────────────
-    Route::prefix('ai')->group(function () {
-        // Prompt management
-        Route::get('prompts',                    [AiPromptController::class, 'index']);
-        Route::post('prompts',                   [AiPromptController::class, 'store']);
-        Route::get('prompts/{aiPrompt}',         [AiPromptController::class, 'show']);
-        Route::put('prompts/{aiPrompt}',         [AiPromptController::class, 'update']);
-        Route::delete('prompts/{aiPrompt}',      [AiPromptController::class, 'destroy']);
 
-        // AI Insights
-        Route::get('insights',                   [AiInsightController::class, 'index']);
-        Route::post('insights/generate',         [AiInsightController::class, 'generate']);
-        Route::delete('insights/{aiInsight}',    [AiInsightController::class, 'destroy']);
+});
 
-        // AI Usage logs & cost tracking
-        Route::get('usage',                      [AiUsageController::class, 'index']);
-        Route::get('usage/summary',              [AiUsageController::class, 'summary']);
+// ── Phase 8: AI Admin ─────────────────────────────────────────────────────
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,ai_manager'])->prefix('admin/ai')->group(function () {
+    // Prompt management
+    Route::get('prompts',                    [AiPromptController::class, 'index']);
+    Route::post('prompts',                   [AiPromptController::class, 'store']);
+    Route::get('prompts/{aiPrompt}',         [AiPromptController::class, 'show']);
+    Route::put('prompts/{aiPrompt}',         [AiPromptController::class, 'update']);
+    Route::delete('prompts/{aiPrompt}',      [AiPromptController::class, 'destroy']);
 
-        // AI Automation rules
-        Route::get('automations',                [AiAutomationController::class, 'index']);
-        Route::post('automations',               [AiAutomationController::class, 'store']);
-        Route::get('automations/{aiAutomationRule}',            [AiAutomationController::class, 'show']);
-        Route::put('automations/{aiAutomationRule}',            [AiAutomationController::class, 'update']);
-        Route::delete('automations/{aiAutomationRule}',         [AiAutomationController::class, 'destroy']);
-        Route::get('automations/{aiAutomationRule}/executions', [AiAutomationController::class, 'executions']);
-    });
+    // AI Insights
+    Route::get('insights',                   [AiInsightController::class, 'index']);
+    Route::post('insights/generate',         [AiInsightController::class, 'generate']);
+    Route::delete('insights/{aiInsight}',    [AiInsightController::class, 'destroy']);
+
+    // AI Usage logs & cost tracking
+    Route::get('usage',                      [AiUsageController::class, 'index']);
+    Route::get('usage/summary',              [AiUsageController::class, 'summary']);
+
+    // AI Automation rules
+    Route::get('automations',                [AiAutomationController::class, 'index']);
+    Route::post('automations',               [AiAutomationController::class, 'store']);
+    Route::get('automations/{aiAutomationRule}',            [AiAutomationController::class, 'show']);
+    Route::put('automations/{aiAutomationRule}',            [AiAutomationController::class, 'update']);
+    Route::delete('automations/{aiAutomationRule}',         [AiAutomationController::class, 'destroy']);
+    Route::get('automations/{aiAutomationRule}/executions', [AiAutomationController::class, 'executions']);
 });
 
 // ─── Phase 7: Mobile API (auth required, any role) ───────────────────────────
@@ -1900,4 +1913,19 @@ Route::prefix('institute')->group(function () {
         Route::get('classes/{classGroup}', [\App\Http\Controllers\Institute\InstituteTeacherController::class, 'show']);
         Route::post('classes/{classGroup}/attendance', [\App\Http\Controllers\Institute\InstituteTeacherController::class, 'attendance']);
     });
+});
+
+// ─── Department Manager Routes (Delegated Permissions) ────────────────────────
+Route::middleware(['auth:sanctum', 'role:department_manager,super_admin,tech_admin'])->prefix('department')->group(function () {
+    Route::get('/employees', [\App\Http\Controllers\DepartmentPermissionController::class, 'getEmployees']);
+    Route::get('/employees/{employee}/permission-tree', [\App\Http\Controllers\DepartmentPermissionController::class, 'getEmployeePermissionTree']);
+    Route::post('/employees/{employee}/permissions/grant', [\App\Http\Controllers\DepartmentPermissionController::class, 'grantPermission']);
+    Route::post('/employees/{employee}/permissions/revoke', [\App\Http\Controllers\DepartmentPermissionController::class, 'revokePermission']);
+});
+
+// ─── Super Admin Routes (Delegatable Permissions Management) ──────────────────
+Route::middleware(['auth:sanctum', 'role:super_admin,tech_admin'])->prefix('admin/permissions')->group(function () {
+    Route::get('/roles', [\App\Http\Controllers\AdminPermissionController::class, 'getRoles']);
+    Route::get('/roles/{role}/delegatable', [\App\Http\Controllers\AdminPermissionController::class, 'getDelegatableConfig']);
+    Route::post('/roles/{role}/delegatable/toggle', [\App\Http\Controllers\AdminPermissionController::class, 'toggleDelegatable']);
 });
