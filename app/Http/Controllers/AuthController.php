@@ -38,10 +38,11 @@ class AuthController extends Controller
             'success' => true,
             'message' => 'Registration successful',
             'data'    => [
-                'user'        => new UserResource($user),
-                'role'        => $user->effectiveRole(),
-                'permissions' => $user->allPermissions(),
-                'token'       => $token,
+                'user'                => new UserResource($user),
+                'role'                => $user->effectiveRole(),
+                'permissions'         => $user->allPermissions(),
+                'token'               => $token,
+                'has_english_courses' => $this->hasEnglishCourses($user),
             ],
         ], 201);
     }
@@ -86,10 +87,11 @@ class AuthController extends Controller
             'success' => true,
             'message' => 'Login successful',
             'data'    => [
-                'user'        => new UserResource($user),
-                'role'        => $user->effectiveRole(),
-                'permissions' => $user->allPermissions(),
-                'token'       => $token,
+                'user'                => new UserResource($user),
+                'role'                => $user->effectiveRole(),
+                'permissions'         => $user->allPermissions(),
+                'token'               => $token,
+                'has_english_courses' => $this->hasEnglishCourses($user),
             ],
         ]);
     }
@@ -123,6 +125,7 @@ class AuthController extends Controller
             'permissions'          => $user->allPermissions(),
             'is_department_leader' => $isDepartmentLeader,
             'is_impersonating'     => $isImpersonating,
+            'has_english_courses'  => $this->hasEnglishCourses($user),
         ];
 
         if ($isImpersonating) {
@@ -141,5 +144,17 @@ class AuthController extends Controller
             'message' => 'Authenticated user retrieved',
             'data'    => $data,
         ]);
+    }
+
+    /**
+     * English Institute gate: derived solely from courses.requires_placement_test
+     * via Instructor::hasEnglishCourses() — never from role/department/title.
+     * Shared across register/login/me so every auth response agrees, instead of
+     * only /auth/me knowing this field (which left it undefined right after an
+     * in-SPA login until a full page reload re-hydrated from /auth/me).
+     */
+    private function hasEnglishCourses(User $user): bool
+    {
+        return $user->instructorProfile?->hasEnglishCourses() ?? false;
     }
 }

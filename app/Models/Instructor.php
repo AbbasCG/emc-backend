@@ -71,4 +71,16 @@ class Instructor extends Model
                     ->where('is_active', true);
             });
     }
+
+    /**
+     * English Institute visibility gate — the single source of truth is the
+     * course's own `requires_placement_test` flag, never the instructor's
+     * role, department, or course title. Any UI/route that shows English
+     * Institute or quiz functionality to an instructor must derive it from
+     * this check (or the equivalent per-course flag), not be hardcoded.
+     */
+    public function hasEnglishCourses(): bool
+    {
+        return $this->courses()->where('requires_placement_test', true)->exists();
+    }
 }

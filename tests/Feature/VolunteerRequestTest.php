@@ -309,12 +309,17 @@ class VolunteerRequestTest extends TestCase
         $this->assertNotNull($row);
         $this->assertArrayHasKey('cv_url', $row);
         $this->assertArrayHasKey('cv_file_url', $row);
+        $this->assertArrayHasKey('cv_view_url', $row);
         $this->assertNotNull($row['cv_url']);
         $this->assertSame($row['cv_url'], $row['cv_file_url']);
+        $this->assertSame($row['cv_url'], $row['cv_view_url']);
         $this->assertSame('Needs follow-up', $row['admin_notes']);
     }
 
-    public function test_signed_cv_download_works_for_admin_issued_url(): void
+    // Privacy policy: no CV download — only a signed inline preview/view route
+    // exists (admin.volunteer-requests.cv.view). The plain admin.volunteer-requests.cv
+    // (download) route was removed.
+    public function test_signed_cv_view_works_for_admin_issued_url(): void
     {
         Storage::fake('public');
 
@@ -328,17 +333,15 @@ class VolunteerRequestTest extends TestCase
         ]));
 
         $url = URL::temporarySignedRoute(
-            'admin.volunteer-requests.cv',
+            'admin.volunteer-requests.cv.view',
             now()->addHour(),
             ['volunteerRequest' => $vr->id],
         );
 
-        $this->get($url)
-            ->assertOk()
-            ->assertHeader('content-disposition');
+        $this->get($url)->assertOk();
     }
 
-    public function test_unsigned_cv_download_is_rejected(): void
+    public function test_unsigned_cv_view_is_rejected(): void
     {
         Storage::fake('public');
 
@@ -350,8 +353,20 @@ class VolunteerRequestTest extends TestCase
             'cv_file_path' => $path,
         ]));
 
-        $this->get("/api/admin/volunteer-requests/{$vr->id}/cv")
+        $this->get("/api/admin/volunteer-requests/{$vr->id}/cv/view")
             ->assertForbidden();
+    }
+
+    public function test_cv_download_route_no_longer_exists(): void
+    {
+        $admin = $this->makeAdmin();
+        $vr = VolunteerRequest::create(array_merge($this->validPayload(['agree_terms' => null]), [
+            'status' => 'pending',
+        ]));
+
+        $this->actingAs($admin, 'sanctum')
+            ->get("/api/admin/volunteer-requests/{$vr->id}/cv")
+            ->assertStatus(404);
     }
 
     public function test_invalid_status_value_is_rejected(): void

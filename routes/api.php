@@ -57,6 +57,8 @@ use App\Http\Controllers\Admin\SupportTicketController as AdminSupportTicketCont
 use App\Http\Controllers\Admin\TaskController;
 use App\Http\Controllers\Admin\VolunteerController;
 use App\Http\Controllers\Admin\AdminVolunteerRequestController;
+use App\Http\Controllers\Admin\HrVolunteerProfileController;
+use App\Http\Controllers\VolunteerHrProfileController;
 use App\Http\Controllers\Admin\AdminMemberController;
 use App\Http\Controllers\Admin\AdminTeamProfileController;
 use App\Http\Controllers\Public\VolunteerRequestController as PublicVolunteerRequestController;
@@ -202,7 +204,12 @@ Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(fu
     // Advanced LMS
     Route::get('/learning',                    [\App\Http\Controllers\Student\StudentLearningController::class, 'index']);
     Route::get('/lessons/{lesson}',            [\App\Http\Controllers\Student\StudentLearningController::class, 'lesson']);
-    Route::post('/quizzes/{quiz}/submit',      [\App\Http\Controllers\Student\StudentLearningController::class, 'submitQuiz']);
+
+    // الاختبارات القصيرة — quizzes count toward the course final grade; see StudentQuizController.
+    Route::get('/courses/{course}/quizzes',       [\App\Http\Controllers\Student\StudentQuizController::class, 'index']);
+    Route::get('/courses/{course}/final-grade',   [\App\Http\Controllers\Student\StudentQuizController::class, 'finalGrade']);
+    Route::get('/quizzes/{quiz}',                 [\App\Http\Controllers\Student\StudentQuizController::class, 'show']);
+    Route::post('/quizzes/{quiz}/submit',      [\App\Http\Controllers\Student\StudentQuizController::class, 'submit']);
 
     // Placement-gated course content — blocked until placement complete
     Route::middleware('placement.required')->group(function () {
@@ -401,6 +408,25 @@ Route::prefix('instructor')->middleware(['auth:sanctum', 'role:instructor,admin'
     Route::get( '/courses/{course}/placement-students',       [InstructorPlacementController::class, 'students']);
     Route::get( '/placement-tests',                                     [InstructorPlacementController::class, 'placementTests']);
     Route::get( '/placement-tests/{attempt}/answers',                  [InstructorPlacementController::class, 'answers']);
+
+    // ── Quizzes — الاختبارات القصيرة (unlimited per course; final exam reuses the same engine) ──
+    Route::get(   '/courses/{course}/quizzes',                          [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'index']);
+    Route::post(  '/courses/{course}/quizzes',                          [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'store']);
+    Route::get(   '/quizzes/{quiz}',                                    [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'show']);
+    Route::patch( '/quizzes/{quiz}',                                    [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'update']);
+    Route::delete('/quizzes/{quiz}',                                    [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'destroy']);
+    Route::post(  '/quizzes/{quiz}/publish',                            [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'publish']);
+    Route::post(  '/quizzes/{quiz}/schedule',                           [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'schedule']);
+    Route::post(  '/quizzes/{quiz}/close',                              [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'close']);
+    Route::post(  '/quizzes/{quiz}/reopen',                             [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'reopen']);
+    Route::post(  '/quizzes/{quiz}/archive',                            [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'archive']);
+    Route::post(  '/quizzes/{quiz}/duplicate',                          [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'duplicate']);
+    Route::post(  '/quizzes/{quiz}/questions',                          [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'storeQuestion']);
+    Route::patch( '/quizzes/{quiz}/questions/{question}',                [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'updateQuestion']);
+    Route::delete('/quizzes/{quiz}/questions/{question}',                [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'destroyQuestion']);
+    Route::get(   '/courses/{course}/assessment-settings',              [\App\Http\Controllers\Instructor\InstructorCourseAssessmentController::class, 'show']);
+    Route::put(   '/courses/{course}/assessment-settings',              [\App\Http\Controllers\Instructor\InstructorCourseAssessmentController::class, 'update']);
+    Route::get(   '/courses/{course}/students/{user}/quiz-breakdown',    [\App\Http\Controllers\Instructor\InstructorQuizController::class, 'studentBreakdown']);
 
     // ── Class / group management ──────────────────────────────────────────────
     Route::get(   '/classes',                                           [\App\Http\Controllers\Instructor\InstructorClassController::class, 'index']);
@@ -661,10 +687,7 @@ Route::post('/ambassador-applications/draft', [PublicAmbassadorController::class
 Route::get('/ambassador-applications/draft/{token}', [PublicAmbassadorController::class, 'getDraft'])
     ->middleware('throttle:30,1');
 
-// Signed CV download — URL issued only via authenticated admin volunteer-request APIs
-Route::get('admin/volunteer-requests/{volunteerRequest}/cv', [AdminVolunteerRequestController::class, 'downloadCv'])
-    ->middleware('signed')
-    ->name('admin.volunteer-requests.cv');
+// Signed CV download route removed — privacy policy: preview only, no download.
 
 // Signed CV inline view
 Route::get('admin/volunteer-requests/{volunteerRequest}/cv/view', [AdminVolunteerRequestController::class, 'viewCv'])
@@ -672,16 +695,12 @@ Route::get('admin/volunteer-requests/{volunteerRequest}/cv/view', [AdminVoluntee
     ->name('admin.volunteer-requests.cv.view');
 
 // Ambassador application file routes (auth:sanctum — role check done in controller)
+// Privacy policy: staff may preview applicant CV/student-ID/photo in-app but
+// never download the raw file — downloadCv()/downloadStudentId() routes removed.
 Route::middleware('auth:sanctum')->group(function () {
-    Route::get('admin/ambassador-applications/{ambassadorApplication}/cv',
-        [AdminAmbassadorApplicationController::class, 'downloadCv'])
-        ->name('admin.ambassador.cv.download');
     Route::get('admin/ambassador-applications/{ambassadorApplication}/cv/view',
         [AdminAmbassadorApplicationController::class, 'viewCv'])
         ->name('admin.ambassador.cv.view');
-    Route::get('admin/ambassador-applications/{ambassadorApplication}/student-id',
-        [AdminAmbassadorApplicationController::class, 'downloadStudentId'])
-        ->name('admin.ambassador.student-id.download');
     Route::get('admin/ambassador-applications/{ambassadorApplication}/photo',
         [AdminAmbassadorApplicationController::class, 'viewPhoto'])
         ->name('admin.ambassador.photo.view');
@@ -692,7 +711,6 @@ Route::middleware('auth:sanctum')->group(function () {
         ->group(function () {
             Route::get('/',                  [AdminAmbassadorApplicationFileController::class, 'index'])    ->name('index');
             Route::get('/{fileId}/preview',  [AdminAmbassadorApplicationFileController::class, 'preview'])  ->name('preview');
-            Route::get('/{fileId}/download', [AdminAmbassadorApplicationFileController::class, 'download']) ->name('download');
             Route::get('/{fileId}/thumbnail',[AdminAmbassadorApplicationFileController::class, 'thumbnail'])->name('thumbnail');
             Route::delete('/{fileId}',       [AdminAmbassadorApplicationFileController::class, 'destroy'])  ->name('destroy');
         });
@@ -709,6 +727,23 @@ Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin
     Route::get('volunteers/accepted',                                        [AdminVolunteerRequestController::class, 'acceptedIndex']);
     Route::post('volunteer-requests/{volunteerRequest}/convert-to-member',   [AdminVolunteerRequestController::class, 'convertToMember']);
 });
+
+// Ambassador applications personal-data export center removed — privacy
+// policy: no CSV/Excel export of applicant personal data.
+
+// ── Resource Center (مركز الموارد) — read-only course/workshop/learning-path
+// discovery for internal staff. Deliberately its own route group with a
+// broad role set (never touches enrollment/creation, so no need to restrict
+// to the narrower Phase 3 admin roles below). Keep in sync with
+// frontend RESOURCE_CENTER_ROLES (+ legacy marketing/quality aliases). ──
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,programs_manager,instructor,hr_manager,finance_manager,marketing,marketing_manager,quality,quality_manager,support_agent,operations_manager,partnerships_manager,community_manager,volunteer'])
+    ->prefix('admin/resource-center')
+    ->group(function () {
+        Route::get('courses',                          [\App\Http\Controllers\Admin\ResourceCenterController::class, 'index']);
+        Route::get('favorites',                         [\App\Http\Controllers\Admin\ResourceCenterController::class, 'favorites']);
+        Route::post('courses/{course}/favorite',        [\App\Http\Controllers\Admin\ResourceCenterController::class, 'toggleFavorite']);
+        Route::get('export',                            [\App\Http\Controllers\Admin\ResourceCenterController::class, 'export']);
+    });
 
 // ─── Phase 3: Operations — auth:sanctum + role:admin ─────────────────────────
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations_manager'])->prefix('admin')->group(function () {
@@ -767,6 +802,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     // Ambassador applications — admin / super_admin (hr_manager duplicated below)
     Route::get('ambassador-applications',                                          [AdminAmbassadorApplicationController::class, 'index']);
     Route::get('ambassador-applications/analytics',                                [AdminAmbassadorApplicationController::class, 'analytics']);
+    Route::get('ambassador-applications/filter-options',                           [AdminAmbassadorApplicationController::class, 'filterOptions']);
     Route::get('ambassador-applications/{ambassadorApplication}',                  [AdminAmbassadorApplicationController::class, 'show']);
     Route::patch('ambassador-applications/{ambassadorApplication}/status',         [AdminAmbassadorApplicationController::class, 'updateStatus']);
     Route::post('ambassador-applications/{ambassadorApplication}/notes',           [AdminAmbassadorApplicationController::class, 'storeNote']);
@@ -1036,7 +1072,7 @@ Route::get('dashboard/admin', [AdminController::class, 'dashboard'])
 Route::middleware('auth:sanctum')->prefix('lms')->group(function () {
     Route::get('courses/{courseId}/modules', [StudentLearningController::class, 'modules']);
     Route::get('lessons/{lesson}',           [StudentLearningController::class, 'lesson']);
-    Route::post('quizzes/{quiz}/submit',     [StudentLearningController::class, 'submitQuiz']);
+    Route::post('quizzes/{quiz}/submit',     [\App\Http\Controllers\Student\StudentQuizController::class, 'submit']);
 });
 
 // ─── Admin LMS (frontend uses /admin/lms/*) ──────────────────────────────────
@@ -1089,6 +1125,7 @@ Route::middleware(['auth:sanctum', 'role:admin,programs_manager,tech_admin,super
 Route::middleware(['auth:sanctum', 'role:admin,department_manager,programs_manager,operations_manager'])->prefix('operations')->group(function () {
     Route::get('departments',              [DepartmentController::class, 'index']);
     Route::get('departments/{department}', [DepartmentController::class, 'show']);
+    Route::get('departments/{department}/overview', [DepartmentController::class, 'overview']);
 });
 
 // ─── Operations: support tickets — extended roles (support_agent, hr_manager can view/reply) ─
@@ -1412,14 +1449,51 @@ Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin
     // Ambassador applications — accessible to hr_manager + admin + super_admin
     Route::get('ambassador-applications',                                          [AdminAmbassadorApplicationController::class, 'index']);
     Route::get('ambassador-applications/analytics',                                [AdminAmbassadorApplicationController::class, 'analytics']);
+    Route::get('ambassador-applications/filter-options',                           [AdminAmbassadorApplicationController::class, 'filterOptions']);
     Route::get('ambassador-applications/{ambassadorApplication}',                  [AdminAmbassadorApplicationController::class, 'show']);
     Route::patch('ambassador-applications/{ambassadorApplication}/status',         [AdminAmbassadorApplicationController::class, 'updateStatus']);
     Route::post('ambassador-applications/{ambassadorApplication}/notes',           [AdminAmbassadorApplicationController::class, 'storeNote']);
     Route::delete('ambassador-applications/{ambassadorApplication}/notes/{noteId}',[AdminAmbassadorApplicationController::class, 'deleteNote']);
 });
 
+// ─── Volunteer HR profile — self-service (any authenticated user) ───────────
+Route::middleware(['auth:sanctum'])->prefix('volunteer')->group(function () {
+    Route::get('hr-profile',                    [VolunteerHrProfileController::class, 'show']);
+    Route::post('hr-profile',                   [VolunteerHrProfileController::class, 'store']);
+    Route::put('hr-profile/{volunteerHrProfile}', [VolunteerHrProfileController::class, 'update']);
+});
+
+// Reference data: department -> job-title options, used by both the
+// volunteer HR form and the HR review UI. Non-sensitive, any authenticated user.
+Route::middleware(['auth:sanctum'])->get('job-titles', [\App\Http\Controllers\JobTitleController::class, 'index']);
+
+// Active department list for the volunteer HR form's own department picker.
+// Deliberately NOT the HR-only /hr/volunteer-hr-profiles/filter-options
+// endpoint (role:hr_manager,admin,super_admin,tech_admin) — the volunteer
+// applicant filling out this form is ordinarily none of those roles, and
+// reusing that endpoint here silently 403'd their department dropdown.
+Route::middleware(['auth:sanctum'])->get('departments/options', function () {
+    return response()->json([
+        'success' => true,
+        'data' => \App\Models\Department::where('is_active', true)->orderBy('sort_order')->get(['id', 'name_ar', 'name']),
+    ]);
+});
+
 // ─── HR Manager portal (auth:sanctum + role:hr_manager,admin,super_admin,tech_admin) ────
 Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin'])->prefix('hr')->group(function () {
+    // NOTE: "volunteer-hr-profiles" (not "volunteers") — /hr/volunteers is
+    // already taken by HrDashboardController::volunteers() (the older,
+    // thinner VolunteerProfile-backed listing), which is left untouched.
+    Route::get('volunteer-hr-profiles',                                [HrVolunteerProfileController::class, 'index']);
+    Route::get('volunteer-hr-profiles/filter-options',                 [HrVolunteerProfileController::class, 'filterOptions']);
+    Route::get('volunteer-hr-profiles/{volunteerHrProfile}',            [HrVolunteerProfileController::class, 'show']);
+    Route::patch('volunteer-hr-profiles/{volunteerHrProfile}/review',   [HrVolunteerProfileController::class, 'review']);
+    Route::post('volunteer-hr-profiles/{volunteerHrProfile}/approve',   [HrVolunteerProfileController::class, 'approve']);
+    Route::post('volunteer-hr-profiles/{volunteerHrProfile}/reject',    [HrVolunteerProfileController::class, 'reject']);
+    // Blob-fetched via axios (Authorization header), not a signed browser-nav
+    // link — matches AdminAmbassadorApplicationFileController's convention.
+    Route::get('volunteers/{volunteerHrProfile}/cv/preview',            [HrVolunteerProfileController::class, 'previewCv']);
+    // cv/download removed — privacy policy: no CV download, preview only.
     Route::get('dashboard',                                [HrDashboardController::class, 'dashboard']);
     Route::get('team',                                     [HrDashboardController::class, 'team']);
     Route::get('volunteers',                               [HrDashboardController::class, 'volunteers']);

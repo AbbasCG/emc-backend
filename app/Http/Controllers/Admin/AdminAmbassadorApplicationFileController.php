@@ -12,7 +12,6 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
-use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AdminAmbassadorApplicationFileController extends Controller
 {
@@ -75,45 +74,8 @@ class AdminAmbassadorApplicationFileController extends Controller
         );
     }
 
-    // ── GET /admin/ambassador-applications/{ambassadorApplication}/files/{file}/download ─
-
-    public function download(Request $request, AmbassadorApplication $ambassadorApplication, int $fileId): StreamedResponse|JsonResponse
-    {
-        if (! $this->authorized($request)) {
-            return $this->forbidden();
-        }
-
-        $file = $this->resolveFile($ambassadorApplication, $fileId);
-        if (! $file) {
-            return response()->json(['success' => false, 'message' => 'الملف غير موجود.'], 404);
-        }
-
-        $disk = Storage::disk($file->disk);
-        $servePath = $this->resolveServePath($file, $disk);
-        if (! $servePath) {
-            return response()->json(['success' => false, 'message' => 'الملف غير موجود على القرص.'], 404);
-        }
-
-        Log::info('Ambassador file downloaded', [
-            'file_id'        => $file->id,
-            'application_id' => $ambassadorApplication->id,
-            'admin_id'       => $request->user()->id,
-        ]);
-
-        AuditLogService::log(
-            'ambassador_file.downloaded',
-            'AmbassadorApplicationFile',
-            $file->id,
-            $file->original_name,
-            [],
-            ['application_id' => $ambassadorApplication->id],
-        );
-
-        // Sanitize filename
-        $safeName = preg_replace('/[^a-zA-Z0-9._\- ]/', '_', $file->original_name) ?: $file->stored_name;
-
-        return $disk->download($servePath, $safeName);
-    }
+    // download() removed — privacy policy: staff may preview an applicant's
+    // files in-app but never download the raw file.
 
     // ── GET /admin/ambassador-applications/{ambassadorApplication}/files/{file}/thumbnail ─
 

@@ -532,6 +532,70 @@ class NotificationService
         );
     }
 
+    // ── Volunteer HR profile notifications ───────────────────────────────────
+
+    public static function volunteerHrProfileSubmitted(int $profileId, string $fullName): void
+    {
+        $recipients = User::whereIn('role', ['super_admin', 'admin', 'hr_manager'])->pluck('id')->all();
+
+        self::send(
+            $recipients,
+            'volunteer_hr_profile_submitted',
+            'طلب انضمام متطوع جديد',
+            "قام {$fullName} بإرسال بيانات ملفه التعريفي كمتطوع.",
+            [
+                'entity_type'      => 'volunteer_hr_profile',
+                'entity_id'        => $profileId,
+                'idempotency_key'  => NotificationIdempotencyKey::forEntity('volunteer_hr_profile_submitted', $profileId),
+                'action_url'       => "/dashboard/hr/volunteers/{$profileId}",
+                'icon'             => 'user-plus',
+                'color'            => 'blue',
+            ]
+        );
+    }
+
+    public static function volunteerHrProfileApproved(int $profileId, string $fullName, ?int $volunteerUserId): void
+    {
+        if (! $volunteerUserId) {
+            return;
+        }
+
+        self::send(
+            [$volunteerUserId],
+            'volunteer_hr_profile_approved',
+            'تم قبول ملفك التعريفي',
+            'قامت إدارة الموارد البشرية بقبول ملفك التعريفي كمتطوع وإضافتك إلى الفريق.',
+            [
+                'entity_type'     => 'volunteer_hr_profile',
+                'entity_id'       => $profileId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('volunteer_hr_profile_approved', $profileId),
+                'icon'            => 'check-circle',
+                'color'           => 'green',
+            ]
+        );
+    }
+
+    public static function volunteerHrProfileRejected(int $profileId, string $fullName, ?int $volunteerUserId, string $reason): void
+    {
+        if (! $volunteerUserId) {
+            return;
+        }
+
+        self::send(
+            [$volunteerUserId],
+            'volunteer_hr_profile_rejected',
+            'تم رفض ملفك التعريفي',
+            "قامت إدارة الموارد البشرية برفض ملفك التعريفي. السبب: {$reason}",
+            [
+                'entity_type'     => 'volunteer_hr_profile',
+                'entity_id'       => $profileId,
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('volunteer_hr_profile_rejected', $profileId),
+                'icon'            => 'x-circle',
+                'color'           => 'red',
+            ]
+        );
+    }
+
     // ── Placement test notifications ─────────────────────────────────────────
 
     /** Notify enrolled students that an instructor or schedule was assigned to their course. */

@@ -80,14 +80,10 @@ class AmbassadorApplicationResource extends JsonResource
             'has_stable_internet'          => (bool) $this->has_stable_internet,
             'can_attend_weekly_meetings'   => (bool) $this->can_attend_weekly_meetings,
 
-            // File URLs (signed, admin-only)
-            'cv_download_url'       => $isAdmin && $this->cv_path
-                ? route('admin.ambassador.cv.download', $this->id) : null,
+            // File URLs (admin-only, preview only — no download route exists)
             'cv_view_url'           => $isAdmin && $this->cv_path
                 ? route('admin.ambassador.cv.view', $this->id) : null,
             'has_student_id'        => (bool) $this->student_id_path,
-            'student_id_download_url' => $isAdmin && $this->student_id_path
-                ? route('admin.ambassador.student-id.download', $this->id) : null,
             'has_photo'             => (bool) $this->photo_path,
             'photo_url'             => $isAdmin && $this->photo_path
                 ? route('admin.ambassador.photo.view', $this->id) : null,
