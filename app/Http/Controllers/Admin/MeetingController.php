@@ -170,4 +170,77 @@ class MeetingController extends Controller
             'data'    => ['task_id' => $task->id],
         ], 201);
     }
+
+    /** تحديث بند متابعة (إنجاز/نص) — تستهلكه صالة الاجتماعات. */
+    public function updateActionItem(Request $request, Meeting $meeting, MeetingActionItem $actionItem): \Illuminate\Http\JsonResponse
+    {
+        abort_if($actionItem->meeting_id !== $meeting->id, 404);
+
+        $data = $request->validate([
+            'done'   => 'nullable|boolean',
+            'text'   => 'nullable|string|max:255',
+            'status' => 'nullable|in:pending,in_progress,completed,cancelled',
+        ]);
+
+        $updates = [];
+        if (array_key_exists('done', $data)) {
+            $updates['status'] = $data['done'] ? 'completed' : 'pending';
+        }
+        if (! empty($data['status'])) {
+            $updates['status'] = $data['status'];
+        }
+        if (! empty($data['text'])) {
+            $updates['title'] = $data['text'];
+        }
+        $actionItem->update($updates);
+
+        return response()->json([
+            'success' => true,
+            'data'    => new MeetingActionItemResource($actionItem->fresh()->load('assignedTo')),
+        ]);
+    }
+
+    /**
+     * التقرير الدوري من صالة الاجتماعات — يُخزَّن في نظام «تقارير الاجتماعات»
+     * الموحد (meeting_reports) فيظهر في الأرشيف نفسه الذي يقرؤه المدراء.
+     */
+    public function report(Request $request, Meeting $meeting): \Illuminate\Http\JsonResponse
+    {
+        $data = $request->validate([
+            'absentees'               => 'nullable|array',
+            'team_commitment_score'   => 'nullable|numeric|min:0|max:10',
+            'team_commitment_notes'   => 'nullable|string',
+            'completed_tasks_summary' => 'nullable|string',
+            'kpi_percentage'          => 'nullable|numeric|min:0|max:100',
+            'top_interactive_member'  => 'nullable|string|max:255',
+            'challenges'              => 'nullable|string',
+            'executive_requests'      => 'nullable|string',
+            'next_month_goals'        => 'nullable|string',
+            'improvement_suggestions' => 'nullable|string',
+        ]);
+
+        $notesParts = array_filter([
+            isset($data['team_commitment_score']) ? "التزام الفريق: {$data['team_commitment_score']}/10" : null,
+            isset($data['kpi_percentage']) ? "نسبة KPI: {$data['kpi_percentage']}%" : null,
+            ! empty($data['top_interactive_member']) ? "الأكثر تفاعلاً: {$data['top_interactive_member']}" : null,
+            ! empty($data['absentees']) ? 'الغائبون: ' . implode('، ', $data['absentees']) : null,
+            $data['team_commitment_notes'] ?? null,
+            $data['improvement_suggestions'] ?? null,
+        ]);
+
+        $report = \App\Models\MeetingReport::create([
+            'department_id' => $meeting->department_id,
+            'meeting_id'    => $meeting->id,
+            'title'         => 'تقرير دوري — ' . $meeting->title,
+            'meeting_date'  => $meeting->meeting_date ?? now()->toDateString(),
+            'achieved'      => $data['completed_tasks_summary'] ?? null,
+            'planned'       => $data['next_month_goals'] ?? null,
+            'needs'         => $data['executive_requests'] ?? null,
+            'needs_reason'  => $data['challenges'] ?? null,
+            'notes'         => $notesParts ? implode("\n", $notesParts) : null,
+            'created_by'    => $request->user()->id,
+        ]);
+
+        return response()->json(['success' => true, 'data' => $report], 201);
+    }
 }

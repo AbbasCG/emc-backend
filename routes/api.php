@@ -1213,8 +1213,6 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::get('forms/{form}/submissions',                             [DynamicFormController::class,             'submissions']);
     Route::post('forms',                                               [DynamicFormController::class,             'store']);
     Route::put('forms/{form}',                                         [DynamicFormController::class,             'update']);
-    Route::get('volunteers',                                           [VolunteerController::class,               'index']);
-    Route::get('volunteers/{volunteer}',                               [VolunteerController::class,               'show']);
     Route::patch('volunteers/{volunteer}',                             [VolunteerController::class,               'update']);
     Route::get('partners',                                             [PartnerController::class,                 'index']);
     Route::post('partners',                                            [PartnerController::class,                 'store']);
@@ -1223,8 +1221,31 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::get('partnership-requests',                                 [PartnershipRequestAdminController::class, 'index']);
     Route::get('partnership-requests/{partnershipRequest}',            [PartnershipRequestAdminController::class, 'show']);
     Route::patch('partnership-requests/{partnershipRequest}',          [PartnershipRequestAdminController::class, 'updateStatus']);
-    Route::get('marketing',                                            [MarketingItemController::class,           'index']);
-    Route::patch('marketing/{marketingItem}',                          [MarketingItemController::class,           'update']);
+});
+
+
+// ─── Operations: volunteers read — HR/community dashboards consume this list ─
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,hr_manager,operations_manager,community_manager'])->prefix('operations')->group(function () {
+    Route::get('volunteers',             [VolunteerController::class, 'index']);
+    Route::get('volunteers/{volunteer}', [VolunteerController::class, 'show']);
+});
+
+// ─── Operations: marketing items — the marketing team manages its own board ──
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,marketing_manager,marketing,operations_manager'])->prefix('operations')->group(function () {
+    Route::get('marketing',                   [MarketingItemController::class, 'index']);
+    Route::patch('marketing/{marketingItem}', [MarketingItemController::class, 'update']);
+});
+
+// ─── Department meeting lounge (the frontend's /department/meetings surface) ─
+// كانت الواجهة تنادي هذه المسارات وهي غير موجودة إطلاقًا — 404 على كل صالة
+// الاجتماعات. تُدار بنفس متحكم الاجتماعات، والتقرير الدوري يُخزَّن في نظام
+// «تقارير الاجتماعات» الجديد فيصل الأرشيف نفسه.
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,programs_manager,instructor,hr_manager,finance_manager,marketing,marketing_manager,quality,quality_manager,support_agent,operations_manager,partnerships_manager,community_manager,department_manager'])->prefix('department')->group(function () {
+    Route::get('meetings',                                        [MeetingController::class, 'index']);
+    Route::post('meetings',                                       [MeetingController::class, 'store']);
+    Route::get('meetings/{meeting}',                              [MeetingController::class, 'show']);
+    Route::patch('meetings/{meeting}/action-items/{actionItem}',  [MeetingController::class, 'updateActionItem']);
+    Route::post('meetings/{meeting}/report',                      [MeetingController::class, 'report']);
 });
 
 // ─── Finance aliases (frontend uses /finance/*, backend uses /admin/finance/*) ─

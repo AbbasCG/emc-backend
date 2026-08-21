@@ -181,7 +181,10 @@ class AuthController extends Controller
         }
 
         if (! $request->hasSession()) {
-            abort(409, 'Cookie authentication is not configured for this frontend origin.');
+            // الواجهة فضّلت وضع الكوكي لكن هذا الأصل ليس ضمن النطاقات الحالة
+            // (SANCTUM_STATEFUL_DOMAINS) — نتدهور بأمان إلى token بدل رفض
+            // الدخول كليًا: تفضيل النقل لا يجوز أن يمنع المصادقة الصحيحة.
+            return $user->createToken('api-token')->plainTextToken;
         }
 
         Auth::guard('web')->login($user);
