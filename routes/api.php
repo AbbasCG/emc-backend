@@ -147,10 +147,14 @@ Route::prefix('auth')->middleware('throttle:auth')->group(function () {
     Route::post('/forgot-password', [\App\Http\Controllers\Auth\ForgotPasswordController::class, 'send']);
     Route::post('/reset-password',  [\App\Http\Controllers\Auth\ResetPasswordController::class, 'reset']);
 
-    Route::middleware('auth:sanctum')->group(function () {
-        Route::post('/logout', [AuthController::class, 'logout']);
-        Route::get('/me',      [AuthController::class, 'me']);
-    });
+});
+
+// Session probe + logout: called on every reload of an authenticated tab, so
+// they live under the standard API limiter — the 5/min brute-force limiter
+// above logged users out whenever /auth/me was refreshed a few times a minute.
+Route::prefix('auth')->middleware(['auth:sanctum', 'throttle:api'])->group(function () {
+    Route::post('/logout', [AuthController::class, 'logout']);
+    Route::get('/me',      [AuthController::class, 'me']);
 });
 
 // ─── Public: Certificate verification ────────────────────────────────────────
@@ -1142,7 +1146,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,support_ag
 
 // ─── Operations aliases (frontend uses /operations/*, backend uses /admin/*) ─
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('operations')->group(function () {
-    Route::get('dashboard',                                            [AdminController::class,                   'dashboard']);
+      Route::get('dashboard',                                            [AdminController::class,                   'operationsDashboard']);
     // NOTE: GET departments + departments/{id} are registered ABOVE this group with role:admin,department_manager
     // so that Dept. Managers can access their own department data.
     Route::get('tasks',                                                [TaskController::class,                    'index']);
@@ -1161,7 +1165,11 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::get('volunteers/{volunteer}',                               [VolunteerController::class,               'show']);
     Route::patch('volunteers/{volunteer}',                             [VolunteerController::class,               'update']);
     Route::get('partners',                                             [PartnerController::class,                 'index']);
+    Route::post('partners',                                            [PartnerController::class,                 'store']);
+    Route::get('partners/{partner}',                                   [PartnerController::class,                 'show']);
+    Route::put('partners/{partner}',                                   [PartnerController::class,                 'update']);
     Route::get('partnership-requests',                                 [PartnershipRequestAdminController::class, 'index']);
+    Route::get('partnership-requests/{partnershipRequest}',            [PartnershipRequestAdminController::class, 'show']);
     Route::patch('partnership-requests/{partnershipRequest}',          [PartnershipRequestAdminController::class, 'updateStatus']);
     Route::get('marketing',                                            [MarketingItemController::class,           'index']);
     Route::patch('marketing/{marketingItem}',                          [MarketingItemController::class,           'update']);
@@ -1691,6 +1699,8 @@ Route::middleware(['throttle:api', 'optional.sanctum'])->group(function () {
 // ─── Learning Path enrollment & status (auth:sanctum + role:student) ─────────
 Route::middleware(['auth:sanctum', 'role:student'])->group(function () {
     Route::post('/learning-paths/{slug}/enroll',             [\App\Http\Controllers\Student\StudentLearningPathController::class, 'enroll']);
+    Route::post('/learning-paths/{slug}/checkout',           [\App\Http\Controllers\LearningPathCheckoutController::class, 'checkout'])
+        ->middleware('throttle:payments');
     Route::get('/learning-paths/{slug}/enrollment-status',   [\App\Http\Controllers\Student\StudentLearningPathController::class, 'enrollmentStatus']);
 });
 
@@ -1769,14 +1779,16 @@ Route::middleware(['auth:sanctum', 'role:super_admin,admin,tech_admin'])->prefix
 });
 
 // ─── Impersonation ────────────────────────────────────────────────────────────
+// Stop: authenticated with the impersonation token (role is the target user's role)
+// Registered before the dynamic {user} route so "stop" is never model-bound as a user id.
+Route::middleware(['auth:sanctum'])->group(function () {
+    Route::post('/admin/impersonate/stop', [ImpersonationController::class, 'stop']);
+});
 // Start: role:super_admin,admin,tech_admin — permission check (users.impersonate) is enforced
 // in the controller, so having the role alone is not sufficient.
 Route::middleware(['auth:sanctum', 'role:super_admin,admin,tech_admin'])->group(function () {
-    Route::post('/admin/impersonate/{user}', [ImpersonationController::class, 'start']);
-});
-// Stop: authenticated with the impersonation token (role is the target user's role)
-Route::middleware(['auth:sanctum'])->group(function () {
-    Route::post('/admin/impersonate/stop', [ImpersonationController::class, 'stop']);
+    Route::post('/admin/impersonate/{user}', [ImpersonationController::class, 'start'])
+        ->whereNumber('user');
 });
 
 // ─── /me shortcut (impersonation-aware) ───────────────────────────────────────
