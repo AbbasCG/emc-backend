@@ -12,13 +12,14 @@ class Task extends Model
     protected $fillable = [
         'title', 'description', 'department_id', 'section_id', 'assigned_to',
         'created_by', 'priority', 'status', 'start_date', 'due_date',
-        'related_type', 'related_id', 'tags',
+        'related_type', 'related_id', 'tags', 'locked_at', 'locked_by',
     ];
 
     protected $casts = [
         'tags'       => 'array',
         'start_date' => 'date',
         'due_date'   => 'date',
+        'locked_at'  => 'datetime',
     ];
 
     public function department(): BelongsTo

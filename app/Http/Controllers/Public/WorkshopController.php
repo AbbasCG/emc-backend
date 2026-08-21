@@ -25,7 +25,8 @@ class WorkshopController extends Controller
         $query = Course::with(['instructor.user'])
             ->withCount('registrations')
             ->where('program_type', 'workshop')
-            ->where('status', 'published');
+            ->where('status', 'published')
+            ->financeApprovedForPublic();
 
         // Search across title, short_description, description
         if ($request->filled('search')) {
@@ -94,6 +95,7 @@ class WorkshopController extends Controller
             ->where('slug', $slug)
             ->where('program_type', 'workshop')
             ->where('status', 'published')
+            ->financeApprovedForPublic()
             ->firstOrFail();
 
         $enrollCount = $course->registrations_count ?? 0;

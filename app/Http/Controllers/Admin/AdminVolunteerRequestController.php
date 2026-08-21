@@ -254,15 +254,8 @@ class AdminVolunteerRequestController extends Controller
             return response()->json(['success' => false, 'message' => 'غير مصرح لك بهذا الإجراء.'], 403);
         }
 
-        // 1. Must be accepted before converting.
-        if ($volunteerRequest->status !== 'accepted') {
-            return response()->json([
-                'success' => false,
-                'message' => 'لا يمكن تحويل الطلب إلا إذا كان مقبولاً. الحالة الحالية: ' . $volunteerRequest->status,
-            ], 422);
-        }
-
-        // 2. Prevent duplicate conversion.
+        // 1. Prevent duplicate conversion before validating the current
+        // status; successful conversion intentionally changes it.
         if ($volunteerRequest->isConverted()) {
             return response()->json([
                 'success'           => false,
@@ -270,6 +263,14 @@ class AdminVolunteerRequestController extends Controller
                 'message'           => 'تم تحويل هذا الطلب مسبقاً إلى عضو.',
                 'volunteer_request' => new VolunteerRequestResource($volunteerRequest->load('reviewer')),
             ], 409);
+        }
+
+        // 2. Must be accepted before converting.
+        if ($volunteerRequest->status !== 'accepted') {
+            return response()->json([
+                'success' => false,
+                'message' => 'لا يمكن تحويل الطلب إلا إذا كان مقبولاً. الحالة الحالية: ' . $volunteerRequest->status,
+            ], 422);
         }
 
         try {

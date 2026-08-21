@@ -147,7 +147,7 @@ class StudentRegistrationsController extends Controller
             ->get()
             ->keyBy('course_id');
 
-        $bookingMap = OralAssessmentBooking::with(['slot', 'instructor.user'])
+        $bookingMap = OralAssessmentBooking::with(['slot', 'instructor.user', 'calendarEvents'])
             ->where('user_id', $user->id)
             ->whereIn('course_id', $courseIds->all())
             ->orderBy('id')
@@ -226,7 +226,12 @@ class StudentRegistrationsController extends Controller
                 'learning_path_title'      => $reg->learningPath?->title,
                 // Placement fields
                 'requires_placement_test' => $requiresPlacement,
+                'placement_status'        => $placementProgress['status'] ?? null,
                 'placement_progress'      => $placementProgress,
+                'placement_attempt'       => $attempt ? $this->placement->writtenTestShape($attempt) : null,
+                'oral_booking_status'     => $booking?->status,
+                'estimated_level'         => $attempt?->estimated_level,
+                'final_level'             => $booking?->final_level,
                 'can_start_learning'      => $canStartLearning,
                 // Production hotfix — same canonical access block as
                 // index(); always enrollment_active here since this
@@ -274,6 +279,14 @@ class StudentRegistrationsController extends Controller
             $booking = $attempt->oralBooking;
             return [
                 'id'                 => $attempt->id,
+                'status'             => $attempt->status,
+                'score'              => $attempt->score,
+                'total_questions'    => $attempt->total_questions,
+                'percentage'         => $attempt->percentage,
+                'estimated_level'    => $attempt->estimated_level,
+                'submitted_at'       => $attempt->submitted_at?->toIso8601String(),
+                'oral_booking_status'=> $booking?->status,
+                'final_level'        => $booking?->final_level,
                 'course'             => $attempt->course ? [
                     'id'    => $attempt->course->id,
                     'title' => $attempt->course->title,

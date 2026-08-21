@@ -271,6 +271,19 @@ class Course extends Model
         });
     }
 
+    /** Defense in depth: paid catalog entries are public only after finance approval. */
+    public function scopeFinanceApprovedForPublic($query)
+    {
+        return $query->where(function ($outer) {
+            $outer->where('finance_approval_status', 'approved')
+                ->orWhere(function ($free) {
+                    $free->where(fn ($q) => $q->whereNull('type')->orWhere('type', '!=', 'paid'))
+                        ->where(fn ($q) => $q->whereNull('is_paid')->orWhere('is_paid', false))
+                        ->where(fn ($q) => $q->whereNull('price')->orWhere('price', '<=', 0));
+                });
+        });
+    }
+
     public function classGroups(): HasMany
     {
         return $this->hasMany(ClassGroup::class);

@@ -226,9 +226,15 @@ class CourseAccessEligibilityPublicDetailTest extends TestCase
         $course = $this->paidCourse();
         $this->registration($student, $course, RegistrationStatus::PENDING_PAYMENT->value);
 
+        // This test is about idempotent registration reuse, not Stripe's HTTP
+        // client. Disable the gateway so the request stops before any network
+        // call while still exercising the existing-registration branch.
+        config(['services.stripe.secret' => '']);
+
         $this->actingAs($student, 'sanctum')
             ->postJson("/api/courses/{$course->id}/checkout")
-            ->assertStatus(422);
+            ->assertStatus(503)
+            ->assertJsonPath('code', 'stripe_not_configured');
 
         $this->assertSame(1, Registration::where('course_id', $course->id)->where('user_id', $student->id)->count());
     }

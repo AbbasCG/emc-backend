@@ -135,6 +135,12 @@ use App\Http\Controllers\Instructor\InstructorPlacementController;
 use App\Http\Controllers\Instructor\InstructorAvailabilityController;
 use App\Http\Controllers\Instructor\InstructorOralBookingController;
 use App\Http\Controllers\Admin\AdminPlacementController;
+use App\Http\Controllers\Public\ConsultantApplicationController as PublicConsultantApplicationController;
+use App\Http\Controllers\Admin\ConsultantApplicationController as AdminConsultantApplicationController;
+use App\Http\Controllers\Operations\MeetingReportController;
+use App\Http\Controllers\Operations\WeeklyReportController;
+use App\Http\Controllers\Operations\VolunteerPointsController;
+use App\Http\Controllers\Operations\OperationsBoardController;
 use Illuminate\Support\Facades\Route;
 
 // ─── Health (no throttle — used by uptime monitors) ──────────────────────────
@@ -683,6 +689,10 @@ Route::post('/partnership-requests', [PublicPartnershipRequestController::class,
 Route::post('/volunteer-requests', [PublicVolunteerRequestController::class, 'store'])
     ->middleware('throttle:workshop');
 
+// ─── Public: Consultant applications (نفس مُقيِّد التطوع) ─────────────────────
+Route::post('/consultant-applications', [PublicConsultantApplicationController::class, 'store'])
+    ->middleware('throttle:workshop');
+
 // ─── Public: Ambassador applications ─────────────────────────────────────────
 Route::post('/ambassador-applications', [PublicAmbassadorController::class, 'store'])
     ->middleware('throttle:workshop');
@@ -749,12 +759,47 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
         Route::get('export',                            [\App\Http\Controllers\Admin\ResourceCenterController::class, 'export']);
     });
 
+// ─── Operations shared surface: يراها كل الفريق (قراءة) + كتابة مقيَّدة ───────
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,programs_manager,instructor,hr_manager,finance_manager,marketing,marketing_manager,quality,quality_manager,support_agent,operations_manager,partnerships_manager,community_manager,volunteer,department_manager'])->prefix('operations')->group(function () {
+    // لوحة التشغيل المرئية للجميع + أعضاء الإدارات
+    Route::get('board',                              [OperationsBoardController::class, 'board']);
+    Route::get('departments/{department}/members',   [OperationsBoardController::class, 'departmentMembers']);
+
+    // تقارير ما بعد الاجتماع (محضر منظَّم + تقييم الحاضرين)
+    Route::get('meeting-reports',                    [MeetingReportController::class, 'index']);
+    Route::get('meeting-reports/{meetingReport}',    [MeetingReportController::class, 'show']);
+
+    // تقارير الإثنين الأسبوعية لكل إدارة
+    Route::get('weekly-reports',                     [WeeklyReportController::class, 'index']);
+    Route::get('weekly-reports/due',                 [WeeklyReportController::class, 'due']);
+
+    // نقاط أثر EMC — ملخصي وسجلي ولوحة الصدارة والسياسة
+    Route::get('volunteer-points/policy',            [VolunteerPointsController::class, 'policy']);
+    Route::get('volunteer-points/summary',           [VolunteerPointsController::class, 'mySummary']);
+    Route::get('volunteer-points/my-awards',         [VolunteerPointsController::class, 'myAwards']);
+    Route::get('volunteer-points/leaderboard',       [VolunteerPointsController::class, 'leaderboard']);
+
+    // كتابة التقارير ومنح النقاط: مدراء مخوَّلون فقط
+    Route::middleware('role:admin,super_admin,tech_admin,executive_admin,hr_manager,operations_manager,department_manager')->group(function () {
+        Route::post('meeting-reports',               [MeetingReportController::class, 'store']);
+        Route::post('weekly-reports',                [WeeklyReportController::class, 'store']);
+        Route::post('volunteer-points/awards',       [VolunteerPointsController::class, 'award']);
+        Route::post('volunteer-points/redemptions',  [VolunteerPointsController::class, 'redeem']);
+        Route::post('tasks/{task}/lock',             [\App\Http\Controllers\Admin\TaskController::class, 'lock']);
+        Route::post('tasks/{task}/unlock',           [\App\Http\Controllers\Admin\TaskController::class, 'unlock']);
+    });
+});
 // ─── Phase 3: Operations — auth:sanctum + role:admin ─────────────────────────
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('admin')->group(function () {
 
     // Departments
     Route::apiResource('departments', DepartmentController::class);
     Route::apiResource('department-sections', DepartmentSectionController::class);
+
+    // طلبات المستشارين — مراجعة واعتماد
+    Route::get('consultant-applications',                                [AdminConsultantApplicationController::class, 'index']);
+    Route::get('consultant-applications/{consultantApplication}',        [AdminConsultantApplicationController::class, 'show']);
+    Route::put('consultant-applications/{consultantApplication}/status', [AdminConsultantApplicationController::class, 'updateStatus']);
 
     // Tasks
     Route::get('tasks/my',      [TaskController::class, 'myTasks']);
@@ -764,6 +809,8 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::post('tasks/{task}/comments',               [TaskController::class, 'storeComment']);
     Route::post('tasks/{task}/checklist',              [TaskController::class, 'storeChecklist']);
     Route::put('tasks/{task}/checklist/{item}',        [TaskController::class, 'updateChecklist']);
+    Route::post('tasks/{task}/lock',                   [TaskController::class, 'lock']);
+    Route::post('tasks/{task}/unlock',                 [TaskController::class, 'unlock']);
 
     // Meetings
     Route::apiResource('meetings', MeetingController::class);

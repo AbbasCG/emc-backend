@@ -116,6 +116,13 @@ class TaskController extends Controller
 
     public function update(Request $request, Task $task): \Illuminate\Http\JsonResponse
     {
+        if ($task->locked_at !== null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'هذه المهمة مقفلة ولا يمكن تعديلها. اطلب فتحها من مدير مخوَّل.',
+            ], 423);
+        }
+
         $data = $request->validate([
             'title'        => 'string|max:255',
             'description'  => 'nullable|string',
@@ -143,6 +150,13 @@ class TaskController extends Controller
 
     public function destroy(Task $task, Request $request): \Illuminate\Http\JsonResponse
     {
+        if ($task->locked_at !== null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'هذه المهمة مقفلة ولا يمكن حذفها.',
+            ], 423);
+        }
+
         ActivityLogger::log('task.deleted', $task, [], $request);
         $task->delete();
 
@@ -194,6 +208,29 @@ class TaskController extends Controller
         return response()->json([
             'success' => true,
             'data'    => new TaskChecklistItemResource($item),
+        ]);
+    }
+
+    /** قفل مهمة مُسلَّمة: تصبح للقراءة فقط على لوحة التشغيل، ولا تُعدَّل حتى تُفتح. */
+    public function lock(Request $request, Task $task): \Illuminate\Http\JsonResponse
+    {
+        $task->update(['locked_at' => now(), 'locked_by' => $request->user()->id]);
+        ActivityLogger::log('task.locked', $task, [], $request);
+
+        return response()->json([
+            'success' => true,
+            'data'    => new TaskResource($task->load(['department', 'section', 'assignedTo', 'createdBy'])),
+        ]);
+    }
+
+    public function unlock(Request $request, Task $task): \Illuminate\Http\JsonResponse
+    {
+        $task->update(['locked_at' => null, 'locked_by' => null]);
+        ActivityLogger::log('task.unlocked', $task, [], $request);
+
+        return response()->json([
+            'success' => true,
+            'data'    => new TaskResource($task->load(['department', 'section', 'assignedTo', 'createdBy'])),
         ]);
     }
 }

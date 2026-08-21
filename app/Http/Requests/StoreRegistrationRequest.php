@@ -6,6 +6,7 @@ use App\Support\FakePaymentEnvironment;
 use App\Models\Course;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class StoreRegistrationRequest extends FormRequest
 {
@@ -48,7 +49,9 @@ class StoreRegistrationRequest extends FormRequest
         return [
             'course_id'        => ['required', 'exists:courses,id'],
             'full_name'        => ['required', 'string', 'max:255'],
-            'phone'            => ['required', 'string', 'max:30'],
+            // Guests still provide a contact number. Authenticated students may
+            // enroll immediately and complete their profile progressively.
+            'phone'            => [Rule::requiredIf(fn () => $this->user() === null), 'nullable', 'string', 'max:30'],
             'email'            => ['required', 'email', 'max:255'],
             'city'             => ['nullable', 'string', 'max:255'],
             'country'          => ['nullable', 'string', 'max:100'],

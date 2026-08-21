@@ -17,7 +17,10 @@ class CourseController extends Controller
 
         $query = Course::with(['instructor.user', 'features', 'track'])
             ->withCount('registrations')
-            ->where('status', 'published')
+            // "active" is the legacy published value. Keep existing catalog
+            // records visible while all new editorial flows use "published".
+            ->whereIn('status', ['published', 'active'])
+            ->financeApprovedForPublic()
             // Show active courses (registration_open true/null) OR ended courses (end_date in past).
             // Ended courses must remain visible publicly even if registration_open was flipped off.
             ->where(function ($q) {
@@ -63,7 +66,8 @@ class CourseController extends Controller
         $course = Course::with(['instructor.user', 'features', 'track'])
             ->withCount('registrations')
             ->where('slug', $slug)
-            ->where('status', 'published')
+            ->whereIn('status', ['published', 'active'])
+            ->financeApprovedForPublic()
             ->publiclyVisible()
             ->firstOrFail();
 
@@ -90,7 +94,7 @@ class CourseController extends Controller
             'start_date'       => 'nullable|date',
             'end_date'         => 'nullable|date|after_or_equal:start_date',
             'capacity'         => 'nullable|integer|min:1',
-            'status'           => 'nullable|in:active,draft,archived',
+            'status'           => 'nullable|in:active,published,draft,archived',
             'duration'         => 'nullable|string|max:255',
             'training_hours'   => 'nullable|integer|min:0',
             'target_audience'  => 'nullable|string|max:255',
@@ -158,7 +162,7 @@ class CourseController extends Controller
             'start_date'        => 'nullable|date',
             'end_date'          => 'nullable|date|after_or_equal:start_date',
             'capacity'          => 'nullable|integer|min:1',
-            'status'            => 'nullable|in:active,draft,archived',
+            'status'            => 'nullable|in:active,published,draft,archived',
             'duration'          => 'nullable|string|max:255',
             'training_hours'    => 'nullable|integer|min:0',
             'target_audience'   => 'nullable|string|max:255',

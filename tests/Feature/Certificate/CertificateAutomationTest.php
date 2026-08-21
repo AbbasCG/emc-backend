@@ -147,11 +147,12 @@ class CertificateAutomationTest extends TestCase
     public function test_course_completed_event_triggers_listener(): void
     {
         Queue::fake();
-        Event::fake([CertificateCreated::class]);
 
         event(new CourseCompleted($this->student, $this->course));
 
-        Queue::assertPushed(IssueCertificateAfterCourseCompletion::class);
+        Queue::assertPushed(\Illuminate\Events\CallQueuedListener::class, fn ($job) =>
+            $job->class === IssueCertificateAfterCourseCompletion::class
+        );
     }
 
     public function test_workshop_completed_event_triggers_listener(): void
@@ -161,7 +162,9 @@ class CertificateAutomationTest extends TestCase
 
         event(new WorkshopCompleted($this->student, $workshop));
 
-        Queue::assertPushed(IssueCertificateAfterWorkshopCompletion::class);
+        Queue::assertPushed(\Illuminate\Events\CallQueuedListener::class, fn ($job) =>
+            $job->class === IssueCertificateAfterWorkshopCompletion::class
+        );
     }
 
     // ── Job state machine ─────────────────────────────────────────────────────

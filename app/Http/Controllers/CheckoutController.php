@@ -230,7 +230,7 @@ class CheckoutController extends Controller
 
                     StudentProgress::firstOrCreate(
                         ['user_id' => $user->id, 'course_id' => $course->id],
-                        ['status' => 'in_progress', 'progress_percent' => 0, 'registration_id' => $registration->id],
+                        ['status' => 'in_progress', 'progress_percentage' => 0],
                     );
 
                     return ['checkout_url' => null, 'free' => true, 'order_id' => $order->id];

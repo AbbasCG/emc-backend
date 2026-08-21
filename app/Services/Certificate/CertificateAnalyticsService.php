@@ -58,7 +58,7 @@ class CertificateAnalyticsService
     {
         // Sort keys so different insertion orders produce the same cache key.
         ksort($filters);
-        return 'cert_analytics.' . $section . '.' . md5(json_encode($filters, JSON_SORT_KEYS));
+        return 'cert_analytics.' . $section . '.' . md5(json_encode($filters, JSON_THROW_ON_ERROR));
     }
 
     // ── Part 1: Overview ─────────────────────────────────────────────────────
@@ -96,18 +96,18 @@ class CertificateAnalyticsService
                 ->count();
 
             // Average approval time: issued_at - created_at for issued certs (in hours)
-            $avgApprovalHours = (clone $base)
-                ->where('status', 'issued')
-                ->whereNotNull('issued_at')
-                ->selectRaw('AVG(TIMESTAMPDIFF(HOUR, created_at, issued_at)) as avg_hours')
-                ->value('avg_hours');
+            $avgApprovalHours = $this->averageDuration(
+                (clone $base)->where('status', 'issued')->whereNotNull('issued_at'),
+                'issued_at',
+                'hours',
+            );
 
             // Average PDF generation time (pdf_generated_at - created_at for ready PDFs)
-            $avgPdfHours = (clone $base)
-                ->where('pdf_generation_status', 'ready')
-                ->whereNotNull('pdf_generated_at')
-                ->selectRaw('AVG(TIMESTAMPDIFF(MINUTE, created_at, pdf_generated_at)) as avg_minutes')
-                ->value('avg_minutes');
+            $avgPdfHours = $this->averageDuration(
+                (clone $base)->where('pdf_generation_status', 'ready')->whereNotNull('pdf_generated_at'),
+                'pdf_generated_at',
+                'minutes',
+            );
 
             // Downloads this period
             $range = $this->resolveDateRange($filters);
@@ -143,6 +143,39 @@ class CertificateAnalyticsService
         });
     }
 
+    /** Database-portable average used by MySQL in production and SQLite tests. */
+    private function averageDuration(
+        \Illuminate\Database\Eloquent\Builder $query,
+        string $endColumn,
+        string $unit,
+    ): ?float {
+        $expression = 'AVG(' . $this->durationSql($endColumn, $unit) . ')';
+
+        $value = $query->selectRaw("{$expression} as average_duration")->value('average_duration');
+
+        return $value === null ? null : (float) $value;
+    }
+
+    private function durationSql(string $endColumn, string $unit): string
+    {
+        $driver = DB::connection()->getDriverName();
+        $secondsDivisor = match ($unit) {
+            'hours' => 3600,
+            'minutes' => 60,
+            default => 1,
+        };
+
+        return match ($driver) {
+            'sqlite' => "((julianday({$endColumn}) - julianday(created_at)) * 86400 / {$secondsDivisor})",
+            'pgsql' => "(EXTRACT(EPOCH FROM ({$endColumn} - created_at)) / {$secondsDivisor})",
+            default => "TIMESTAMPDIFF(" . match ($unit) {
+                'hours' => 'HOUR',
+                'minutes' => 'MINUTE',
+                default => 'SECOND',
+            } . ", created_at, {$endColumn})",
+        };
+    }
+
     // ── Part 2: Trends ───────────────────────────────────────────────────────
 
     public function getTrendStats(array $filters = []): array
@@ -151,10 +184,23 @@ class CertificateAnalyticsService
             $range       = $this->resolveDateRange($filters);
             $granularity = $filters['granularity'] ?? 'daily';
 
-            $groupFormat = match ($granularity) {
-                'weekly'  => "DATE(DATE_SUB(created_at, INTERVAL WEEKDAY(created_at) DAY))",
-                'monthly' => "DATE_FORMAT(created_at, '%Y-%m-01')",
-                default   => "DATE(created_at)",
+            $driver = DB::connection()->getDriverName();
+            $groupFormat = match ($driver) {
+                'sqlite' => match ($granularity) {
+                    'weekly'  => "date(created_at, '-' || ((strftime('%w', created_at) + 6) % 7) || ' days')",
+                    'monthly' => "strftime('%Y-%m-01', created_at)",
+                    default   => 'date(created_at)',
+                },
+                'pgsql' => match ($granularity) {
+                    'weekly'  => "date_trunc('week', created_at)::date",
+                    'monthly' => "date_trunc('month', created_at)::date",
+                    default   => 'created_at::date',
+                },
+                default => match ($granularity) {
+                    'weekly'  => "DATE(DATE_SUB(created_at, INTERVAL WEEKDAY(created_at) DAY))",
+                    'monthly' => "DATE_FORMAT(created_at, '%Y-%m-01')",
+                    default   => 'DATE(created_at)',
+                },
             };
 
             $certs = Certificate::query()
@@ -240,17 +286,19 @@ class CertificateAnalyticsService
                 ->whereIn('approval_status', ['pending_approval', 'program_manager_approved', 'admin_approved'])
                 ->count();
 
-            $avgFirstApprovalHours = (clone $base)
-                ->whereIn('approval_status', ['program_manager_approved', 'admin_approved', 'both_approved'])
-                ->whereNotNull('updated_at')
-                ->selectRaw('AVG(TIMESTAMPDIFF(HOUR, created_at, updated_at)) as avg_hours')
-                ->value('avg_hours');
+            $avgFirstApprovalHours = $this->averageDuration(
+                (clone $base)
+                    ->whereIn('approval_status', ['program_manager_approved', 'admin_approved', 'both_approved'])
+                    ->whereNotNull('updated_at'),
+                'updated_at',
+                'hours',
+            );
 
-            $avgFinalApprovalHours = (clone $base)
-                ->where('approval_status', 'both_approved')
-                ->whereNotNull('issued_at')
-                ->selectRaw('AVG(TIMESTAMPDIFF(HOUR, created_at, issued_at)) as avg_hours')
-                ->value('avg_hours');
+            $avgFinalApprovalHours = $this->averageDuration(
+                (clone $base)->where('approval_status', 'both_approved')->whereNotNull('issued_at'),
+                'issued_at',
+                'hours',
+            );
 
             $completedThisMonth = Certificate::where('approval_status', 'both_approved')
                 ->whereYear('updated_at', now()->year)
@@ -306,6 +354,7 @@ class CertificateAnalyticsService
     {
         return Cache::remember($this->cacheKey('pdf', $filters), 60, function () use ($filters) {
             $base = $this->baseQuery($filters);
+            $durationSeconds = $this->durationSql('pdf_generated_at', 'seconds');
 
             $stats = (clone $base)
                 ->selectRaw("
@@ -317,7 +366,7 @@ class CertificateAnalyticsService
                     SUM(pdf_path IS NOT NULL AND pdf_generation_status = 'ready') as has_pdf,
                     SUM(pdf_path IS NULL AND status = 'issued') as issued_missing_pdf,
                     AVG(CASE WHEN pdf_generation_status = 'ready' AND pdf_generated_at IS NOT NULL
-                        THEN TIMESTAMPDIFF(SECOND, created_at, pdf_generated_at) END) as avg_seconds,
+                        THEN {$durationSeconds} END) as avg_seconds,
                     SUM(pdf_file_size) as total_size_bytes
                 ")
                 ->first();
@@ -421,6 +470,7 @@ class CertificateAnalyticsService
     {
         return Cache::remember($this->cacheKey('templates', $filters), 300, function () use ($filters) {
             $range = $this->resolveDateRange($filters);
+            $durationSeconds = $this->durationSql('pdf_generated_at', 'seconds');
 
             // Two queries instead of withCount (3 JOINs) + correlated subqueries per template.
             // Query 1: all aggregate stats grouped by template in one pass.
@@ -432,7 +482,7 @@ class CertificateAnalyticsService
                     SUM(pdf_generation_status = 'failed') as pdf_failures,
                     MAX(created_at) as last_used_at,
                     AVG(CASE WHEN pdf_generation_status = 'ready' AND pdf_generated_at IS NOT NULL
-                        THEN TIMESTAMPDIFF(SECOND, created_at, pdf_generated_at) END) as avg_pdf_seconds
+                        THEN {$durationSeconds} END) as avg_pdf_seconds
                 ")
                 ->groupBy('certificate_template_id')
                 ->get()
@@ -596,6 +646,7 @@ class CertificateAnalyticsService
     {
         return Cache::remember($this->cacheKey('batches', $filters), 300, function () use ($filters) {
             $range = $this->resolveDateRange($filters);
+            $durationMinutes = $this->durationSql('completed_at', 'minutes');
 
             $stats = CertificateGenerationBatch::query()
                 ->when($range['from'], fn ($q) => $q->where('created_at', '>=', $range['from']))
@@ -610,7 +661,7 @@ class CertificateAnalyticsService
                     SUM(generated_count) as total_generated,
                     SUM(failed_count) as total_failed,
                     MAX(total_recipients) as largest_batch,
-                    AVG(CASE WHEN completed_at IS NOT NULL THEN TIMESTAMPDIFF(MINUTE, created_at, completed_at) END) as avg_completion_minutes
+                    AVG(CASE WHEN completed_at IS NOT NULL THEN {$durationMinutes} END) as avg_completion_minutes
                 ")
                 ->first();
 

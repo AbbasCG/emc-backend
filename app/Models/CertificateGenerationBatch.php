@@ -32,6 +32,9 @@ class CertificateGenerationBatch extends Model
             if (empty($batch->batch_code)) {
                 $batch->batch_code = 'BATCH-' . date('Ymd') . '-' . strtoupper(Str::random(6));
             }
+            if (empty($batch->certificate_type)) {
+                $batch->certificate_type = 'course_completion';
+            }
         });
     }
 

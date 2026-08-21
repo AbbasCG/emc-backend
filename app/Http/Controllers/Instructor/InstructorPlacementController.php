@@ -151,7 +151,7 @@ class InstructorPlacementController extends Controller
         // Eager-load slot/instructor.user/editedBy so oralAssessmentFullShape()
         // below can build the rubric/notes/interview shape without N+1 queries.
         $attemptUserIds  = $attempts->pluck('user_id')->filter()->unique()->all();
-        $bookingsByCourseUser = OralAssessmentBooking::with(['slot', 'instructor.user', 'editedBy'])
+        $bookingsByCourseUser = OralAssessmentBooking::with(['slot', 'instructor.user', 'editedBy', 'calendarEvents'])
             ->whereIn('course_id', $courseIds)
             ->whereIn('user_id', $attemptUserIds)
             ->get()

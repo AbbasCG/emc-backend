@@ -11,7 +11,7 @@ class CertificateVerificationController extends Controller
     public function verify(string $code): \Illuminate\Http\JsonResponse
     {
         $certificate = Certificate::with(['user', 'course', 'track', 'workshop'])
-            ->where('verification_code', strtoupper($code))
+            ->whereRaw('UPPER(verification_code) = ?', [strtoupper($code)])
             ->first();
 
         if (! $certificate) {

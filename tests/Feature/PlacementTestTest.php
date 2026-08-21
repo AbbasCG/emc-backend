@@ -670,7 +670,7 @@ class PlacementTestTest extends TestCase
         ]);
     }
 
-    public function test_instructor_cannot_complete_already_completed_booking(): void
+    public function test_instructor_can_correct_completed_booking_with_audit_snapshot(): void
     {
         $instructorU = $this->instructor();
         $instructorP = $this->instructorProfile($instructorU);
@@ -690,6 +690,7 @@ class PlacementTestTest extends TestCase
             'status'                   => 'completed',
             'oral_score'               => 80,
             'final_level'              => 'C1',
+            'evaluated_at'             => now()->subMinute(),
         ]);
 
         $this->actingAs($instructorU, 'sanctum')
@@ -697,7 +698,16 @@ class PlacementTestTest extends TestCase
                 'oral_score'  => 50,
                 'final_level' => 'Starter',
             ])
-            ->assertStatus(422);
+            ->assertOk();
+
+        $this->assertDatabaseHas('oral_assessment_bookings', [
+            'id'                   => $booking->id,
+            'oral_score'           => 50,
+            'final_level'          => 'Starter',
+            'previous_oral_score'  => 80,
+            'previous_final_level' => 'C1',
+            'edited_by'            => $instructorU->id,
+        ]);
     }
 
     public function test_status_oral_booked_after_booking(): void

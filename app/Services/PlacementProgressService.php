@@ -134,10 +134,12 @@ class PlacementProgressService
         // creates on booking — lets the frontend offer an ICS download
         // without a new endpoint, matching the polymorphic eventable lookup
         // pattern used everywhere else calendar events are queried.
-        $calendarEventId = \App\Models\CalendarEvent::where('eventable_type', OralAssessmentBooking::class)
-            ->where('eventable_id', $booking->id)
-            ->where('user_id', $booking->user_id)
-            ->value('id');
+        $calendarEventId = $booking->relationLoaded('calendarEvents')
+            ? $booking->calendarEvents->firstWhere('user_id', $booking->user_id)?->id
+            : \App\Models\CalendarEvent::where('eventable_type', OralAssessmentBooking::class)
+                ->where('eventable_id', $booking->id)
+                ->where('user_id', $booking->user_id)
+                ->value('id');
 
         return [
             'id'                => $booking->id,
@@ -284,7 +286,7 @@ class PlacementProgressService
             ->get()
             ->keyBy(fn ($a) => (string) $a->user_id);
 
-        $bookings = OralAssessmentBooking::with(['slot', 'instructor.user', 'editedBy'])
+        $bookings = OralAssessmentBooking::with(['slot', 'instructor.user', 'editedBy', 'calendarEvents'])
             ->where('course_id', $course->id)
             ->whereIn('user_id', $userIds)
             ->get()
@@ -331,6 +333,11 @@ class PlacementProgressService
                 'enrollment_status'   => strtolower($reg->status),
                 'registration_status' => strtolower($reg->status),
                 'status_label'        => $this->statusLabel($progress['status']),
+                // Compatibility aliases used by the original instructor UI.
+                // The canonical lifecycle remains available in placement_status.
+                'status'              => $this->legacyInstructorStatus($progress['status']),
+                'placement_attempt'   => $attempt ? $this->writtenTestShape($attempt) : null,
+                'oral_booking'        => $booking ? $this->oralAssessmentShape($booking) : null,
                 // Flat IDs — normalizer uses these directly before falling back to nested progress
                 'attempt_id'          => $attempt?->id,
                 'booking_id'          => $booking?->id,
@@ -353,7 +360,22 @@ class PlacementProgressService
             ];
         })->values()->all();
 
+        // Keep legacy counters beside the canonical status keys so older
+        // instructor screens can migrate without losing the new lifecycle.
+        $statusCounts['waiting_oral'] = $statusCounts[self::STATUS_WRITTEN_COMPLETED];
+        $statusCounts['oral_scheduled'] = $statusCounts[self::STATUS_ORAL_BOOKED];
+
         return ['students' => $students, 'status_counts' => $statusCounts];
+    }
+
+    private function legacyInstructorStatus(string $status): string
+    {
+        return match ($status) {
+            self::STATUS_WRITTEN_COMPLETED => 'waiting_oral',
+            self::STATUS_ORAL_BOOKED => 'oral_scheduled',
+            self::STATUS_ORAL_COMPLETED, self::STATUS_COMPLETED => 'completed',
+            default => $status,
+        };
     }
 
     /**

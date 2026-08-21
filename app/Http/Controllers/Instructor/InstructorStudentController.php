@@ -32,7 +32,8 @@ class InstructorStudentController extends Controller
         $instructor = Instructor::where('user_id', $request->user()->id)->first();
         abort_if(! $instructor, 403, 'ليس لديك صلاحية الوصول إلى بيانات الطلاب.');
 
-        $courseIds = Course::where('instructor_id', $instructor->id)->pluck('id')->all();
+        $courses = Course::where('instructor_id', $instructor->id)->get()->keyBy('id');
+        $courseIds = $courses->keys()->all();
 
         if (empty($courseIds)) {
             return response()->json([
@@ -41,8 +42,6 @@ class InstructorStudentController extends Controller
                 'meta'    => ['total' => 0],
             ]);
         }
-
-        $courses = Course::whereIn('id', $courseIds)->get()->keyBy('id');
 
         $query = Registration::with('user')
             ->whereIn('course_id', $courseIds)
@@ -74,7 +73,7 @@ class InstructorStudentController extends Controller
 
         // Eager-load slot/instructor.user/editedBy — required by
         // oralAssessmentFullShape() below, same relations studentsForCourse() loads.
-        $bookings = OralAssessmentBooking::with(['slot', 'instructor.user', 'editedBy'])
+        $bookings = OralAssessmentBooking::with(['slot', 'instructor.user', 'editedBy', 'calendarEvents'])
             ->whereIn('course_id', $courseIds)
             ->whereIn('user_id', $userIds)
             ->get()

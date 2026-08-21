@@ -424,6 +424,7 @@ class AdminLearningPathController extends Controller
         $query = LearningPath::with(['instructor.user'])
             ->withCount('courses')
             ->where('status', 'published')
+            ->financeApprovedForPublic()
             ->where('enrollment_open', true);
 
         if ($request->filled('level')) {
@@ -484,6 +485,7 @@ class AdminLearningPathController extends Controller
             ->withCount('courses')
             ->where('slug', $slug)
             ->where('status', 'published')
+            ->financeApprovedForPublic()
             ->firstOrFail();
 
         // Enrollment status for authenticated users (optional.sanctum applies).

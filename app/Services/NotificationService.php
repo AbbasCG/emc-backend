@@ -95,7 +95,7 @@ class NotificationService
     {
         return Registration::where('course_id', $courseId)
             ->whereNotNull('user_id')
-            ->whereIn('status', [RegistrationStatus::REGISTERED->value, RegistrationStatus::PENDING_PAYMENT->value, RegistrationStatus::PAYMENT_CONFIRMED->value])
+            ->whereIn('status', RegistrationStatus::activeEnrollment())
             ->pluck('user_id')
             ->all();
     }

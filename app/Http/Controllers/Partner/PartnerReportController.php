@@ -21,6 +21,7 @@ class PartnerReportController extends Controller
                 'summary' => $r->summary,
                 'period'  => $r->period,
                 'data'    => $r->data,
+                'at'      => $r->created_at?->toISOString(),
             ]),
         ]);
     }

@@ -12,12 +12,22 @@ class EmailSetting extends Model
 
     protected $casts = ['enabled' => 'boolean'];
 
+    protected static function booted(): void
+    {
+        // The setting is cached for read-heavy notification dispatch. Keep the
+        // cache coherent when an administrator changes or removes a toggle.
+        static::saved(fn (self $setting) => static::clearCache($setting->key));
+        static::deleted(fn (self $setting) => static::clearCache($setting->key));
+    }
+
     public static function isEnabled(string $key): bool
     {
-        return Cache::remember("email_setting_{$key}", 300, function () use ($key) {
-            $setting = static::where('key', $key)->first();
-            return $setting === null || (bool) $setting->enabled;
-        });
+        // These switches are operational controls; a five-minute stale value
+        // can send an email an administrator has just disabled. The table is
+        // tiny, so correctness is preferable to caching this single-row read.
+        $setting = static::where('key', $key)->first();
+
+        return $setting === null || (bool) $setting->enabled;
     }
 
     public static function clearCache(string $key): void

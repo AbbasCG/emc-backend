@@ -71,7 +71,7 @@ class StudentDashboardController extends Controller
             ->get()
             ->keyBy('course_id');
 
-        $bookingMap = OralAssessmentBooking::with(['slot', 'instructor.user'])
+        $bookingMap = OralAssessmentBooking::with(['slot', 'instructor.user', 'calendarEvents'])
             ->where('user_id', $user->id)
             ->whereIn('course_id', $regCourseIds)
             ->orderBy('id')

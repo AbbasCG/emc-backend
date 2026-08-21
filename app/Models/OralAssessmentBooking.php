@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\MorphMany;
 
 class OralAssessmentBooking extends Model
 {
@@ -100,6 +101,11 @@ class OralAssessmentBooking extends Model
     {
         return $this->hasMany(OralAssessmentBookingStatusHistory::class, 'oral_assessment_booking_id')
             ->latest('changed_at');
+    }
+
+    public function calendarEvents(): MorphMany
+    {
+        return $this->morphMany(CalendarEvent::class, 'eventable');
     }
 
     public function isCompleted(): bool

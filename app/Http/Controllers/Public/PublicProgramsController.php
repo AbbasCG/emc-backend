@@ -38,9 +38,9 @@ class PublicProgramsController extends Controller
 
         // ── Stats ─────────────────────────────────────────────────────────────
 
-        $coursesCount       = Course::whereIn('status', self::COURSE_STATUSES)->count();
+        $coursesCount       = Course::whereIn('status', self::COURSE_STATUSES)->financeApprovedForPublic()->count();
         $workshopsCount     = Workshop::whereIn('status', self::WORKSHOP_STATUSES)->count();
-        $learningPathsCount = LearningPath::whereIn('status', self::LP_STATUS)->count();
+        $learningPathsCount = LearningPath::whereIn('status', self::LP_STATUS)->financeApprovedForPublic()->count();
 
         // Distinct enrolled students across all programs (courses + learning paths)
         $courseStudents = Registration::whereIn('status', ['confirmed', 'Confirmed', 'attended', 'Attended', 'active'])
@@ -83,6 +83,7 @@ class PublicProgramsController extends Controller
         $lpQuery = LearningPath::with(['instructor.user'])
             ->withCount('courses')
             ->whereIn('status', self::LP_STATUS)
+            ->financeApprovedForPublic()
             ->where('enrollment_open', true);
 
         if ($search) {
@@ -106,6 +107,7 @@ class PublicProgramsController extends Controller
         $courseQuery = Course::with(['instructor.user', 'features', 'track'])
             ->withCount('registrations')
             ->whereIn('status', self::COURSE_STATUSES)
+            ->financeApprovedForPublic()
             ->where(function ($q) {
                 $q->whereNull('registration_open')
                     ->orWhere('registration_open', true)
@@ -162,6 +164,7 @@ class PublicProgramsController extends Controller
         $latestCourses = Course::with(['instructor.user'])
             ->withCount('registrations')
             ->whereIn('status', self::COURSE_STATUSES)
+            ->financeApprovedForPublic()
             ->where(function ($q) {
                 $q->whereNull('registration_open')
                     ->orWhere('registration_open', true)

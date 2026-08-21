@@ -10,6 +10,7 @@ class LearningPathEnrollment extends Model
     protected $fillable = [
         'learning_path_id',
         'user_id',
+        'order_id',
         'status',
         'enrolled_at',
         'completed_at',
@@ -28,5 +29,10 @@ class LearningPathEnrollment extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function order(): BelongsTo
+    {
+        return $this->belongsTo(Order::class);
     }
 }

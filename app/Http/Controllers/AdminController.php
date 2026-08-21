@@ -8,11 +8,18 @@ use App\Http\Resources\RegistrationResource;
 use App\Models\Course;
 use App\Models\Department;
 use App\Models\Instructor;
+use App\Models\LearningPath;
+use App\Models\MarketingItem;
+use App\Models\Meeting;
 use App\Models\Payment;
+use App\Models\PartnershipRequest;
 use App\Models\Registration;
 use App\Models\StudentProgress;
+use App\Models\SupportTicket;
+use App\Models\Task;
 use App\Models\Track;
 use App\Models\User;
+use App\Models\VolunteerRequest;
 use App\Models\Workshop;
 use App\Models\WorkshopRequest;
 use App\Services\AuditLogService;
@@ -71,6 +78,159 @@ class AdminController extends Controller
                 'recent_registrations' => $recent,
             ],
         ]);
+    }
+
+    /**
+     * A real, cross-department operations contract. Kept separate from the
+     * legacy admin dashboard so both frontend surfaces can evolve safely.
+     */
+    public function operationsDashboard(): JsonResponse
+    {
+        $terminalTaskStatuses = ['completed', 'done', 'cancelled'];
+        $openTasks = Task::query()->whereNotIn('status', $terminalTaskStatuses);
+        $overdueTasks = (clone $openTasks)
+            ->whereNotNull('due_date')
+            ->whereDate('due_date', '<', today());
+
+        $openSupport = SupportTicket::query()->whereNotIn('status', ['resolved', 'closed']);
+        $pendingPartnerships = PartnershipRequest::query()->whereIn('status', ['new', 'under_review']);
+        $pendingVolunteers = VolunteerRequest::query()->whereIn('status', ['pending', 'reviewing', 'reviewed']);
+        $marketingReview = MarketingItem::query()->whereIn('status', ['review', 'approval']);
+
+        $financeApprovalPending = Course::query()->where('finance_approval_status', 'pending')->count()
+            + LearningPath::query()->where('finance_approval_status', 'pending')->count();
+
+        $todayItems = Task::query()
+            ->whereNotIn('status', $terminalTaskStatuses)
+            ->whereDate('due_date', today())
+            ->orderByRaw("CASE WHEN priority IN ('urgent', 'critical') THEN 0 WHEN priority = 'high' THEN 1 ELSE 2 END")
+            ->limit(5)
+            ->get(['id', 'title', 'priority', 'due_date'])
+            ->map(fn (Task $task) => [
+                'id' => 'task-'.$task->id,
+                'label' => $task->title,
+                'at' => $task->due_date?->toDateString(),
+                'kind' => 'مهمة مستحقة اليوم',
+                'key' => 'tasks',
+            ])
+            ->concat(
+                Meeting::query()
+                    ->whereNotIn('status', ['completed', 'cancelled'])
+                    ->whereDate('meeting_date', today())
+                    ->orderBy('start_time')
+                    ->limit(5)
+                    ->get(['id', 'title', 'start_time'])
+                    ->map(fn (Meeting $meeting) => [
+                        'id' => 'meeting-'.$meeting->id,
+                        'label' => $meeting->title,
+                        'at' => $meeting->start_time,
+                        'kind' => 'اجتماع اليوم',
+                        'key' => 'meetings',
+                    ])
+            )
+            ->values();
+
+        $recentActivity = collect()
+            ->concat(Task::latest()->limit(3)->get(['id', 'title', 'created_at'])->map(
+                fn (Task $item) => $this->operationsActivity('task-'.$item->id, 'مهمة: '.$item->title, 'مهمة', $item->created_at)
+            ))
+            ->concat(PartnershipRequest::latest()->limit(3)->get(['id', 'partner_name', 'created_at'])->map(
+                fn (PartnershipRequest $item) => $this->operationsActivity('partnership-'.$item->id, 'طلب شراكة: '.$item->partner_name, 'شراكة', $item->created_at)
+            ))
+            ->concat(VolunteerRequest::latest()->limit(3)->get(['id', 'full_name', 'created_at'])->map(
+                fn (VolunteerRequest $item) => $this->operationsActivity('volunteer-'.$item->id, 'طلب تطوع: '.$item->full_name, 'تطوع', $item->created_at)
+            ))
+            ->concat(SupportTicket::latest()->limit(3)->get(['id', 'subject', 'created_at'])->map(
+                fn (SupportTicket $item) => $this->operationsActivity('support-'.$item->id, 'تذكرة دعم: '.$item->subject, 'دعم', $item->created_at)
+            ))
+            ->sortByDesc('sort_at')
+            ->take(8)
+            ->map(fn (array $item) => collect($item)->except('sort_at')->all())
+            ->values();
+
+        $departmentHealth = Department::query()
+            ->withCount([
+                'tasks as open_tasks_count' => fn ($query) => $query->whereNotIn('status', $terminalTaskStatuses),
+                'tasks as overdue_tasks_count' => fn ($query) => $query
+                    ->whereNotIn('status', $terminalTaskStatuses)
+                    ->whereNotNull('due_date')
+                    ->whereDate('due_date', '<', today()),
+            ])
+            ->orderBy('sort_order')
+            ->get()
+            ->map(fn (Department $department) => [
+                'department_id' => (string) $department->id,
+                'title' => $department->name_ar ?: $department->name ?: $department->slug,
+                'score' => max(0, 100 - ((int) $department->open_tasks_count * 3) - ((int) $department->overdue_tasks_count * 15)),
+            ])
+            ->values();
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'active_departments' => Department::query()
+                    ->where(fn ($query) => $query->where('is_active', true)->orWhere('status', 'active'))
+                    ->count(),
+                'open_tasks' => (clone $openTasks)->count(),
+                'overdue_tasks' => (clone $overdueTasks)->count(),
+                'upcoming_meetings' => Meeting::query()
+                    ->whereNotIn('status', ['completed', 'cancelled'])
+                    ->whereDate('meeting_date', '>=', today())
+                    ->count(),
+                'pending_partnership_requests' => (clone $pendingPartnerships)->count(),
+                'volunteer_applications' => (clone $pendingVolunteers)->count(),
+                'support_tickets_open' => (clone $openSupport)->count(),
+                'marketing_in_review' => (clone $marketingReview)->count(),
+                'finance_approval_pending' => $financeApprovalPending,
+                'priority_queues' => [
+                    [
+                        'key' => 'tasks',
+                        'label' => 'المهام المتأخرة',
+                        'count' => (clone $overdueTasks)->count(),
+                        'urgent_count' => (clone $overdueTasks)->whereIn('priority', ['urgent', 'critical'])->count(),
+                    ],
+                    [
+                        'key' => 'support',
+                        'label' => 'تذاكر الدعم المفتوحة',
+                        'count' => (clone $openSupport)->count(),
+                        'urgent_count' => (clone $openSupport)->whereIn('priority', ['urgent', 'high'])->count(),
+                    ],
+                    [
+                        'key' => 'partnerships',
+                        'label' => 'طلبات الشراكة',
+                        'count' => (clone $pendingPartnerships)->count(),
+                        'urgent_count' => (clone $pendingPartnerships)->where('status', 'new')->count(),
+                    ],
+                    [
+                        'key' => 'volunteers',
+                        'label' => 'طلبات التطوع',
+                        'count' => (clone $pendingVolunteers)->count(),
+                        'urgent_count' => (clone $pendingVolunteers)->where('status', 'pending')->count(),
+                    ],
+                    [
+                        'key' => 'finance',
+                        'label' => 'اعتماد البرامج المدفوعة',
+                        'count' => $financeApprovalPending,
+                        'urgent_count' => 0,
+                    ],
+                ],
+                'today_items' => $todayItems,
+                'recent_activity' => $recentActivity,
+                'department_health' => $departmentHealth,
+                'generated_at' => now()->toIso8601String(),
+            ],
+        ]);
+    }
+
+    private function operationsActivity(string $id, string $label, string $kind, $createdAt): array
+    {
+        return [
+            'id' => $id,
+            'label' => $label,
+            'at' => $createdAt?->toIso8601String() ?? '',
+            'kind' => $kind,
+            'sort_at' => $createdAt?->getTimestamp() ?? 0,
+        ];
     }
 
     public function registrations(Request $request): AnonymousResourceCollection

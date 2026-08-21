@@ -105,7 +105,10 @@ class ClassSessionGenerationService
     private function existingDateKeys(ClassGroup $group, CarbonInterface $from, CarbonInterface $to): array
     {
         return LmsSession::where('class_group_id', $group->id)
-            ->whereBetween('session_date', [$from->toDateString(), $to->toDateString()])
+            // Inclusive date bounds also work when SQLite stores a cast date
+            // with a midnight time component (whereBetween would omit `to`).
+            ->whereDate('session_date', '>=', $from->toDateString())
+            ->whereDate('session_date', '<=', $to->toDateString())
             ->get(['session_date', 'start_time', 'end_time'])
             ->map(fn ($s) => $this->dedupKey($group->id, $s->session_date->toDateString(), $s->start_time, $s->end_time))
             ->all();
@@ -113,7 +116,16 @@ class ClassSessionGenerationService
 
     private function dedupKey(int $groupId, string $date, string $start, string $end): string
     {
-        return "{$groupId}|{$date}|{$start}|{$end}";
+        // SQL time columns are returned as HH:MM:SS, while schedule input may
+        // arrive as HH:MM. Normalize both sides so a repeated generation run
+        // cannot miss an existing slot only because of display precision.
+        $normaliseTime = static function (string $time): string {
+            $parts = array_pad(explode(':', $time), 3, '00');
+
+            return implode(':', array_slice($parts, 0, 3));
+        };
+
+        return "{$groupId}|{$date}|{$normaliseTime($start)}|{$normaliseTime($end)}";
     }
 
     /**

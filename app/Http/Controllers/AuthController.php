@@ -10,6 +10,7 @@ use App\Services\AuditLogService;
 use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 
@@ -30,7 +31,7 @@ class AuthController extends Controller
             'how_did_you_hear_about_us' => $request->how_did_you_hear_about_us,
         ]);
 
-        $token = $user->createToken('api-token')->plainTextToken;
+        $token = $this->establishAuthentication($request, $user);
 
         NotificationService::accountCreated($user->id, $user->name);
 
@@ -74,12 +75,13 @@ class AuthController extends Controller
             ], 403);
         }
 
-        // Revoke previous tokens (single-session enforcement)
+        // Revoke previous API tokens (the existing single-token contract).
+        // Cookie sessions are invalidated through the session store on logout.
         $user->tokens()->delete();
 
         $user->update(['last_login_at' => now()]);
 
-        $token = $user->createToken('api-token')->plainTextToken;
+        $token = $this->establishAuthentication($request, $user);
 
         AuditLogService::logLogin($user, $request);
 
@@ -99,7 +101,17 @@ class AuthController extends Controller
     public function logout(Request $request): JsonResponse
     {
         $user = $request->user();
-        $request->user()->currentAccessToken()?->delete();
+        $accessToken = $user?->currentAccessToken();
+
+        if ($request->bearerToken() && $accessToken && method_exists($accessToken, 'delete')) {
+            $accessToken->delete();
+        }
+
+        if ($request->hasSession()) {
+            Auth::guard('web')->logout();
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+        }
 
         AuditLogService::logLogout($user, $request);
 
@@ -156,5 +168,25 @@ class AuthController extends Controller
     private function hasEnglishCourses(User $user): bool
     {
         return $user->instructorProfile?->hasEnglishCourses() ?? false;
+    }
+
+    /**
+     * Browser clients explicitly request an HttpOnly session. API/mobile
+     * clients that omit the header retain the existing Sanctum token response.
+     */
+    private function establishAuthentication(Request $request, User $user): ?string
+    {
+        if (strtolower((string) $request->header('X-EMC-Auth-Mode')) !== 'cookie') {
+            return $user->createToken('api-token')->plainTextToken;
+        }
+
+        if (! $request->hasSession()) {
+            abort(409, 'Cookie authentication is not configured for this frontend origin.');
+        }
+
+        Auth::guard('web')->login($user);
+        $request->session()->regenerate();
+
+        return null;
     }
 }

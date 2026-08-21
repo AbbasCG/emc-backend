@@ -102,7 +102,7 @@ class VolunteerRequestTest extends TestCase
 
     public function test_valid_pdf_cv_is_stored_with_safe_name(): void
     {
-        Storage::fake('public');
+        Storage::fake('private');
 
         $response = $this->postJson('/api/volunteer-requests', $this->validPayload([
             'cv_file' => UploadedFile::fake()->create('my_cv.pdf', 500, 'application/pdf'),
@@ -115,7 +115,7 @@ class VolunteerRequestTest extends TestCase
         // filename must be a UUID-based safe name, not the original
         $this->assertStringNotContainsString('my_cv', $row->cv_file_path);
         $this->assertStringStartsWith('volunteer-cvs/cv_', $row->cv_file_path);
-        Storage::disk('public')->assertExists($row->cv_file_path);
+        Storage::disk('private')->assertExists($row->cv_file_path);
     }
 
     public function test_agree_terms_must_be_accepted(): void
@@ -210,7 +210,7 @@ class VolunteerRequestTest extends TestCase
             ->getJson('/api/admin/volunteer-requests')
             ->assertOk()
             ->assertJson(['success' => true])
-            ->assertJsonStructure(['data' => ['data']]);
+            ->assertJsonStructure(['data', 'meta', 'statistics']);
     }
 
     public function test_admin_list_filters_by_status(): void
@@ -224,7 +224,7 @@ class VolunteerRequestTest extends TestCase
             ->getJson('/api/admin/volunteer-requests?status=accepted')
             ->assertOk();
 
-        $names = collect($response->json('data.data'))->pluck('full_name')->all();
+        $names = collect($response->json('data'))->pluck('full_name')->all();
         $this->assertContains('Accepted Person', $names);
         $this->assertNotContains('Pending Person', $names);
     }
@@ -305,7 +305,7 @@ class VolunteerRequestTest extends TestCase
             ->getJson('/api/admin/volunteer-requests')
             ->assertOk();
 
-        $row = collect($response->json('data.data'))->first();
+        $row = collect($response->json('data'))->first();
         $this->assertNotNull($row);
         $this->assertArrayHasKey('cv_url', $row);
         $this->assertArrayHasKey('cv_file_url', $row);

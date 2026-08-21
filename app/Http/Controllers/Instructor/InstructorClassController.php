@@ -1022,7 +1022,7 @@ class InstructorClassController extends Controller
             ->get()
             ->keyBy(fn ($a) => (string) $a->user_id);
 
-        $bookings = OralAssessmentBooking::with(['slot', 'instructor.user', 'editedBy'])
+        $bookings = OralAssessmentBooking::with(['slot', 'instructor.user', 'editedBy', 'calendarEvents'])
             ->where('course_id', $group->course_id)
             ->whereIn('user_id', $userIds)
             ->get()

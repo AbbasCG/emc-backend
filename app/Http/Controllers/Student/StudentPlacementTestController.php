@@ -45,15 +45,13 @@ class StudentPlacementTestController extends Controller
 
         return response()->json([
             'success' => true,
-            'data'    => [
-                'requires_placement'    => $course->requires_placement_test,
-                'placement_progress'    => $progress,
-                'can_take_written_test' => in_array($status, [
-                    PlacementProgressService::STATUS_NOT_STARTED,
-                    PlacementProgressService::STATUS_IN_PROGRESS,
-                ]),
-                'can_book_oral' => $status === PlacementProgressService::STATUS_WRITTEN_COMPLETED,
-            ],
+            'data'    => $this->placementResponseData(
+                $course,
+                $attempt,
+                $booking,
+                $status,
+                $progress,
+            ),
         ]);
     }
 
@@ -81,11 +79,13 @@ class StudentPlacementTestController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'لقد أكملت اختبار تحديد المستوى لهذه الدورة مسبقاً.',
-                'data'    => [
-                    'placement_progress'    => $this->placement->progress($existing, $existingBooking),
-                    'can_take_written_test' => false,
-                    'can_book_oral'         => $status === PlacementProgressService::STATUS_WRITTEN_COMPLETED,
-                ],
+                'data'    => $this->placementResponseData(
+                    $course,
+                    $existing,
+                    $existingBooking,
+                    $status,
+                    $this->placement->progress($existing, $existingBooking),
+                ),
             ], 409);
         }
 
@@ -168,10 +168,13 @@ class StudentPlacementTestController extends Controller
 
         return response()->json([
             'success' => true,
-            'data'    => [
-                'placement_progress' => $this->placement->progress($attempt, $booking),
-                'can_book_oral'      => $status === PlacementProgressService::STATUS_WRITTEN_COMPLETED,
-            ],
+            'data'    => $this->placementResponseData(
+                $course,
+                $attempt,
+                $booking,
+                $status,
+                $this->placement->progress($attempt, $booking),
+            ),
         ]);
     }
 
@@ -206,11 +209,13 @@ class StudentPlacementTestController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'لقد قدّمت هذا الاختبار مسبقاً. لا يمكن إعادة تقديمه.',
-                'data'    => [
-                    'placement_progress'    => $this->placement->progress($attempt, $existingBooking),
-                    'can_take_written_test' => false,
-                    'can_book_oral'         => $status === PlacementProgressService::STATUS_WRITTEN_COMPLETED,
-                ],
+                'data'    => $this->placementResponseData(
+                    $course,
+                    $attempt,
+                    $existingBooking,
+                    $status,
+                    $this->placement->progress($attempt, $existingBooking),
+                ),
             ], 409);
         }
 
@@ -255,6 +260,7 @@ class StudentPlacementTestController extends Controller
             'success' => true,
             'message' => 'تم تسليم الاختبار بنجاح.',
             'data'    => [
+                'attempt'          => new PlacementTestAttemptResource($fresh),
                 'score'            => $fresh->score,
                 'total_questions'  => $fresh->total_questions,
                 'percentage'       => $fresh->percentage,
@@ -345,6 +351,39 @@ class StudentPlacementTestController extends Controller
             422,
             'هذه الدورة لا تتطلب اختبار تحديد مستوى.'
         );
+    }
+
+    /**
+     * Keep the canonical placement_progress contract while retaining the
+     * established flat fields consumed by older student screens and mobile
+     * clients. The legacy placement_status used `oral_completed` for a fully
+     * evaluated oral booking; the canonical nested status remains `completed`.
+     */
+    private function placementResponseData(
+        Course $course,
+        ?PlacementTestAttempt $attempt,
+        ?OralAssessmentBooking $booking,
+        string $status,
+        ?array $progress,
+    ): array {
+        $legacyStatus = $status === PlacementProgressService::STATUS_COMPLETED
+            ? PlacementProgressService::STATUS_ORAL_COMPLETED
+            : $status;
+
+        return [
+            'requires_placement'    => $course->requires_placement_test,
+            'placement_status'      => $legacyStatus,
+            'placement_progress'    => $progress,
+            'can_take_written_test' => in_array($status, [
+                PlacementProgressService::STATUS_NOT_STARTED,
+                PlacementProgressService::STATUS_IN_PROGRESS,
+            ], true),
+            'can_book_oral'         => $status === PlacementProgressService::STATUS_WRITTEN_COMPLETED,
+            'can_start_learning'    => $status === PlacementProgressService::STATUS_COMPLETED,
+            'attempt'               => $attempt ? new PlacementTestAttemptResource($attempt) : null,
+            'oral_booking'          => $booking ? $this->placement->oralAssessmentShape($booking) : null,
+            'final_level'           => $booking?->final_level,
+        ];
     }
 
     private function testResponse(PlacementTest $test, PlacementTestAttempt $attempt, int $status = 200): JsonResponse

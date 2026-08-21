@@ -91,6 +91,16 @@ class LearningPath extends Model
         return $this->isPaid();
     }
 
+    /** Defense in depth: paid paths cannot leak into the public catalog before approval. */
+    public function scopeFinanceApprovedForPublic($query)
+    {
+        return $query->where(function ($q) {
+            $q->whereNull('price')
+                ->orWhere('price', '<=', 0)
+                ->orWhere('finance_approval_status', 'approved');
+        });
+    }
+
     public function courses(): BelongsToMany
     {
         return $this->belongsToMany(Course::class, 'learning_path_items')

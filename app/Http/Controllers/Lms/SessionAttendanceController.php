@@ -692,7 +692,8 @@ class SessionAttendanceController extends Controller
         $status = $request->query('status');
 
         $sessionQuery = LmsSession::whereIn('course_id', $courseIds)
-            ->whereBetween('session_date', [$from, $to]);
+            ->whereDate('session_date', '>=', $from)
+            ->whereDate('session_date', '<=', $to);
         if ($classGroupId) {
             $sessionQuery->where('class_group_id', $classGroupId);
         }

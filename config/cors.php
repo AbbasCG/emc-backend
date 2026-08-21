@@ -17,7 +17,10 @@ return [
      *   CORS_ALLOWED_ORIGINS=http://localhost:5173
      *   CORS_ALLOWED_ORIGINS=http://localhost:5173,https://app.emc.sa
      */
-    'allowed_origins' => ['*'],
+    'allowed_origins' => array_values(array_filter(array_map(
+        'trim',
+        explode(',', env('CORS_ALLOWED_ORIGINS', env('FRONTEND_URL', 'http://localhost:5173')))
+    ))),
 
     'allowed_origins_patterns' => [],
 
@@ -28,7 +31,8 @@ return [
     // Preflight cache in seconds (24 h in production, 0 in dev)
     'max_age' => (int) env('CORS_MAX_AGE', 0),
 
-    // We use Bearer tokens, not cookies — keep this false
-    'supports_credentials' => false,
+    // Required by Sanctum's first-party SPA cookie authentication. Origins
+    // above are explicit; credentialed requests are never combined with `*`.
+    'supports_credentials' => true,
 
 ];

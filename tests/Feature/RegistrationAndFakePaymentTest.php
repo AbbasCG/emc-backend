@@ -51,6 +51,39 @@ class RegistrationAndFakePaymentTest extends TestCase
         $this->assertDatabaseCount('payments', 0);
     }
 
+    public function test_authenticated_student_can_join_a_free_course_without_profile_phone(): void
+    {
+        Mail::fake();
+
+        $student = User::factory()->create([
+            'role' => 'student',
+            'phone' => null,
+            'city' => null,
+            'country' => null,
+        ]);
+        $course = Course::factory()->free()->create();
+
+        $response = $this->actingAs($student, 'sanctum')->postJson(
+            "/api/courses/{$course->id}/register",
+            [],
+        );
+
+        $response->assertCreated()
+            ->assertJson([
+                'success' => true,
+                'type' => 'free',
+            ])
+            ->assertJsonPath('registration.status', 'registered');
+
+        $this->assertDatabaseHas('registrations', [
+            'course_id' => $course->id,
+            'user_id' => $student->id,
+            'email' => $student->email,
+            'phone' => null,
+            'status' => 'registered',
+        ]);
+    }
+
     public function test_paid_registration_with_fake_creates_pending_payment_and_checkout_url(): void
     {
         Mail::fake();
@@ -133,14 +166,18 @@ class RegistrationAndFakePaymentTest extends TestCase
             ]);
     }
 
-    public function test_paid_course_without_payment_provider_returns_422(): void
+    public function test_paid_course_without_payment_provider_requires_checkout(): void
     {
         $course = Course::factory()->paid()->create();
 
         $response = $this->postJson('/api/register', $this->registrationPayload($course->id));
 
-        $response->assertStatus(422)
-            ->assertJson(['success' => false]);
+        $response->assertStatus(402)
+            ->assertJson([
+                'success' => false,
+                'requires_checkout' => true,
+                'checkout_endpoint' => "/api/courses/{$course->id}/checkout",
+            ]);
     }
 
     public function test_invalid_payment_provider_returns_422(): void

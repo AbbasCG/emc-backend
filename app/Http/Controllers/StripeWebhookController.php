@@ -9,12 +9,15 @@ use App\Models\CouponUsage;
 use App\Models\FinanceAccount;
 use App\Models\FinanceAccountTransaction;
 use App\Models\Invoice;
+use App\Models\LearningPathEnrollment;
 use App\Models\Order;
 use App\Models\Payment;
 use App\Models\Registration;
 use App\Models\StudentProgress;
 use App\Services\AuditLogService;
 use App\Services\EmailService;
+use App\Services\LearningPathEnrollmentService;
+use App\Services\NotificationService;
 use App\Services\Payments\StripePaymentMethodResolver;
 use App\Support\PaymentStatuses;
 use Illuminate\Http\JsonResponse;
@@ -27,8 +30,10 @@ use Throwable;
 
 class StripeWebhookController extends Controller
 {
-    public function __construct(private readonly StripePaymentMethodResolver $paymentMethodResolver)
-    {
+    public function __construct(
+        private readonly StripePaymentMethodResolver $paymentMethodResolver,
+        private readonly LearningPathEnrollmentService $learningPathEnrollments,
+    ) {
     }
 
     /**
@@ -141,6 +146,7 @@ class StripeWebhookController extends Controller
         $sessionId      = (string) $session->id;
         $orderId        = (int) ($meta['order_id']        ?? 0);
         $registrationId = (int) ($meta['registration_id'] ?? 0);
+        $pathEnrollmentId = (int) ($meta['learning_path_enrollment_id'] ?? 0);
         $courseId       = (int) ($meta['course_id']       ?? 0);
         $userId         = (int) ($meta['user_id']         ?? 0);
         $paymentStatus  = $session->payment_status ?? null;
@@ -150,6 +156,7 @@ class StripeWebhookController extends Controller
             'session_id'      => $sessionId,
             'order_id'        => $orderId,
             'registration_id' => $registrationId,
+            'learning_path_enrollment_id' => $pathEnrollmentId,
             'course_id'       => $courseId,
             'user_id'         => $userId,
             'payment_status'  => $paymentStatus,
@@ -176,12 +183,14 @@ class StripeWebhookController extends Controller
 
         $order        = null;
         $registration = null;
+        $pathEnrollment = null;
+        $pathActivated = false;
         $payment      = null;
         $shouldMail   = false;
 
         DB::transaction(function () use (
-            $session, $sessionId, $orderId, $registrationId,
-            &$order, &$registration, &$payment, &$shouldMail
+            $session, $sessionId, $orderId, $registrationId, $pathEnrollmentId,
+            &$order, &$registration, &$pathEnrollment, &$pathActivated, &$payment, &$shouldMail
         ) {
             // ── Primary lookup: metadata IDs are the canonical source ─────────
             if ($orderId > 0) {
@@ -190,10 +199,14 @@ class StripeWebhookController extends Controller
             if ($registrationId > 0) {
                 $registration = Registration::lockForUpdate()->find($registrationId);
             }
+            if ($pathEnrollmentId > 0) {
+                $pathEnrollment = LearningPathEnrollment::lockForUpdate()->find($pathEnrollmentId);
+            }
 
             Log::info('Stripe order found', [
                 'order'        => $order?->id,
                 'registration' => $registration?->id,
+                'learning_path_enrollment' => $pathEnrollment?->id,
                 'order_status' => $order?->status,
             ]);
 
@@ -312,11 +325,15 @@ class StripeWebhookController extends Controller
                         ],
                         [
                             'status'           => 'in_progress',
-                            'progress_percent' => 0,
-                            'registration_id'  => $registration->id,
+                            'progress_percentage' => 0,
                         ]
                     );
                 }
+            }
+
+            if ($pathEnrollment && $order?->type === 'learning_path') {
+                $pathActivated = ! in_array($pathEnrollment->status, ['active', 'completed'], true);
+                $pathEnrollment = $this->learningPathEnrollments->activate($pathEnrollment);
             }
 
             // ── Update order + create invoice ─────────────────────────────────
@@ -358,11 +375,11 @@ class StripeWebhookController extends Controller
                     FinanceAccountTransaction::create([
                         'finance_account_id' => $stripeAccount->id,
                         'type'               => 'revenue',
-                        'category'           => 'course_revenue',
+                        'category'           => $order?->type === 'learning_path' ? 'learning_path_revenue' : 'course_revenue',
                         'amount'             => (float) $payment->amount,
                         'currency'           => $stripeAccount->currency,
                         'status'             => 'confirmed',
-                        'description'        => 'Stripe — ' . ($order?->order_number ?? $sessionId),
+                        'description'        => 'Stripe - ' . ($order?->order_number ?? $sessionId),
                         'payment_method'     => $storedPaymentMethod,
                         'reference_type'     => 'payment',
                         'reference_id'       => $payment->id,
@@ -408,6 +425,22 @@ class StripeWebhookController extends Controller
                 $registration->user_id,
                 PaymentConfirmedMail::fromRegistration($registration),
                 'تأكيد الدفع وإتمام التسجيل — ' . ($registration->course?->title ?? ''),
+            );
+        }
+
+        if ($pathActivated && $pathEnrollment) {
+            $pathEnrollment->loadMissing('learningPath.courses');
+            NotificationService::learningPathEnrolled(
+                $pathEnrollment->user_id,
+                $pathEnrollment->learningPath->title,
+                $pathEnrollment->learningPath->courses->count(),
+                $pathEnrollment->learning_path_id,
+                $pathEnrollment->learningPath->duration,
+            );
+            AuditLogService::log(
+                'student_enrolled_after_payment',
+                'LearningPathEnrollment',
+                $pathEnrollment->id,
             );
         }
     }

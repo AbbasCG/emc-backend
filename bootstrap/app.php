@@ -13,6 +13,11 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Allow first-party browser clients to authenticate through Sanctum's
+        // encrypted HttpOnly session cookie. Bearer-token clients remain
+        // supported by auth:sanctum as a compatibility fallback.
+        $middleware->statefulApi();
+
         $middleware->alias([
             'role'               => \App\Http\Middleware\RoleMiddleware::class,
             'permission'         => \App\Http\Middleware\PermissionMiddleware::class,
@@ -65,7 +70,7 @@ return Application::configure(basePath: dirname(__DIR__))
         ) {
             return response()->json([
                 'success' => false,
-                'message' => 'Unauthenticated. Please provide a valid Bearer token.',
+                'message' => 'Unauthenticated. Please provide a valid session or Bearer token.',
             ], 401);
         });
 
@@ -79,7 +84,7 @@ return Application::configure(basePath: dirname(__DIR__))
             if ($request->is('api/*')) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Unauthenticated. Please provide a valid Bearer token.',
+                    'message' => 'Unauthenticated. Please provide a valid session or Bearer token.',
                 ], 401);
             }
         });

@@ -13,6 +13,7 @@ class Payment extends Model
     protected $fillable = [
         'order_id',
         'registration_id',
+        'learning_path_enrollment_id',
         'amount',
         'coupon_id',
         'discount_amount',
@@ -33,6 +34,11 @@ class Payment extends Model
     public function registration()
     {
         return $this->belongsTo(Registration::class);
+    }
+
+    public function learningPathEnrollment()
+    {
+        return $this->belongsTo(LearningPathEnrollment::class);
     }
 
     public function order()

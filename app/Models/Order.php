@@ -12,6 +12,7 @@ class Order extends Model
     protected $fillable = [
         'user_id',
         'course_id',
+        'learning_path_id',
         'order_number',
         'type',
         'subtotal',
@@ -49,6 +50,11 @@ class Order extends Model
     public function course(): BelongsTo
     {
         return $this->belongsTo(Course::class);
+    }
+
+    public function learningPath(): BelongsTo
+    {
+        return $this->belongsTo(LearningPath::class);
     }
 
     public function coupon(): BelongsTo

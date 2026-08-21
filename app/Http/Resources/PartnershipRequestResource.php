@@ -25,10 +25,22 @@ class PartnershipRequestResource extends JsonResource
             'message'                => $this->message,
             'privacy_accepted'       => (bool) $this->privacy_accepted,
             'status'                 => $this->status,
+            'review_notes'           => $this->review_notes,
+            'reviewed_at'            => $this->reviewed_at,
             'reviewed_by'  => $this->whenLoaded('reviewedBy', fn () => [
                 'id'   => $this->reviewedBy?->id,
                 'name' => $this->reviewedBy?->name,
             ]),
+            'converted_partner' => $this->whenLoaded('convertedPartner', fn () => $this->convertedPartner ? [
+                'id' => $this->convertedPartner->id,
+                'name' => $this->convertedPartner->name,
+                'status' => $this->convertedPartner->status,
+            ] : null),
+            'converted_user' => $this->whenLoaded('convertedUser', fn () => $this->convertedUser ? [
+                'id' => $this->convertedUser->id,
+                'name' => $this->convertedUser->name,
+                'email' => $this->convertedUser->email,
+            ] : null),
             'created_at'   => $this->created_at,
         ];
     }

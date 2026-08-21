@@ -32,8 +32,9 @@ class StripeWebhookTest extends TestCase
 
         $payload   = json_encode($eventData);
         $timestamp = time();
-        $rawSecret = substr($this->webhookSecret, 6); // strip 'whsec_'
-        $sig       = hash_hmac('sha256', "{$timestamp}.{$payload}", $rawSecret);
+        // Stripe signs with the complete endpoint secret, including the
+        // conventional `whsec_` prefix.
+        $sig       = hash_hmac('sha256', "{$timestamp}.{$payload}", $this->webhookSecret);
         $header    = "t={$timestamp},v1={$sig}";
 
         return $this->call(

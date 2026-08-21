@@ -29,7 +29,7 @@ class VolunteerRequestController extends Controller
             'availability'        => 'required|string|max:100',
             'motivation'          => 'required|string|min:20',
             'previous_experience' => 'nullable|string',
-            'cv_file'             => 'required|file|mimes:pdf,doc,docx|max:5120',
+            'cv_file'             => 'nullable|file|mimes:pdf,doc,docx|max:5120',
             'notes'               => 'nullable|string',
             'agree_terms'         => 'accepted',
         ]);

@@ -17,7 +17,13 @@ class PartnerDashboardController extends Controller
             return response()->json(['success' => false, 'message' => 'No active partner profile found.'], 404);
         }
 
-        $partner = $partnerUser->partner->load(['programs', 'reports', 'documents']);
+        $partner = $partnerUser->partner->load([
+            'programs',
+            'reports' => fn ($query) => $query->where('status', 'published')->latest(),
+            'documents',
+        ]);
+
+        $participantsTotal = (int) $partner->programs->sum('participant_count');
 
         return response()->json([
             'success' => true,
@@ -35,6 +41,18 @@ class PartnerDashboardController extends Controller
                 'reports_count'    => $partner->reports->count(),
                 'documents_count'  => $partner->documents->count(),
                 'your_role'        => $partnerUser->role_title,
+                'partnership_status' => $partner->status,
+                'joint_programs_count' => $partner->programs->count(),
+                'participants_total' => $participantsTotal,
+                // No canonical impact formula exists yet. Null is deliberate:
+                // the portal must not present an invented percentage as real data.
+                'impact_score' => null,
+                'upcoming_meetings' => [],
+                'recent_reports' => $partner->reports->take(5)->map(fn ($report) => [
+                    'id' => $report->id,
+                    'title' => $report->title,
+                    'at' => $report->created_at?->toISOString(),
+                ])->values(),
             ],
         ]);
     }

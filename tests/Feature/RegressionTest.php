@@ -104,11 +104,9 @@ class RegressionTest extends TestCase
             'Regression: course.instructor_id must reference instructors.id, not users.id'
         );
 
-        $this->assertNotEquals(
-            $instructorUser->id,
-            $course->instructor_id,
-            'Regression: course.instructor_id must NOT be the users.id directly'
-        );
+        // IDs from separate tables can legitimately have the same numeric
+        // value. Verify the relationship target instead of comparing numbers.
+        $this->assertTrue($course->instructor->is($profile));
     }
 
     // ─── Regression: notification action_url preserved ────────────────────────

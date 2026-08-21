@@ -34,6 +34,31 @@ class ImpersonationMiddleware
             return $next($request);
         }
 
+        if ($request->hasSession() && $request->session()->has('emc_impersonator_id')) {
+            $actorId = (int) $request->session()->get('emc_impersonator_id');
+            $expiresAt = (int) $request->session()->get('emc_impersonation_expires_at', 0);
+
+            if ($expiresAt > 0 && now()->timestamp > $expiresAt) {
+                $actor = \App\Models\User::find($actorId);
+                if ($actor && $actor->is_active && ! $actor->trashed()) {
+                    Auth::guard('web')->login($actor);
+                    $request->session()->forget([
+                        'emc_impersonator_id',
+                        'emc_impersonation_target_id',
+                        'emc_impersonation_expires_at',
+                    ]);
+                    $request->session()->regenerate();
+                }
+
+                return $next($request);
+            }
+
+            $request->attributes->set('is_impersonating', true);
+            $request->attributes->set('impersonator_id', $actorId);
+
+            return $next($request);
+        }
+
         $token = $user->currentAccessToken();
 
         if (! $token || ! in_array('via-impersonation', $token->abilities ?? [], true)) {

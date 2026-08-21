@@ -3,6 +3,9 @@
 namespace Tests\Feature;
 
 use App\Models\PartnershipRequest;
+use App\Models\PartnerProgram;
+use App\Models\PartnerReport;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -208,5 +211,168 @@ class PartnershipRequestTest extends TestCase
         $response = $this->postJson('/api/partnership-requests', $this->validPayload(['message' => 'hi']));
 
         $response->assertStatus(422)->assertJsonValidationErrors(['message']);
+    }
+
+    public function test_admin_approval_creates_partner_account_and_portal_membership(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin', 'is_active' => true]);
+        $application = PartnershipRequest::create($this->validPayload([
+            'email' => 'approved-partner@example.com',
+        ]));
+
+        $response = $this->actingAs($admin, 'sanctum')
+            ->patchJson("/api/operations/partnership-requests/{$application->id}", [
+                'status' => 'approved',
+                'review_notes' => 'طلب متوافق مع أهداف المركز.',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.status', 'approved')
+            ->assertJsonPath('onboarding.account_created', true)
+            ->assertJsonPath('onboarding.credential_setup', 'password_reset');
+
+        $partnerId = (int) $response->json('onboarding.partner_id');
+        $userId = (int) $response->json('onboarding.user_id');
+
+        $this->assertDatabaseHas('partners', [
+            'id' => $partnerId,
+            'source_request_id' => $application->id,
+            'name' => $application->partner_name,
+            'status' => 'active',
+            'onboarding_status' => 'account_ready',
+        ]);
+        $this->assertDatabaseHas('users', [
+            'id' => $userId,
+            'email' => 'approved-partner@example.com',
+            'role' => 'partner',
+            'must_change_password' => 1,
+        ]);
+        $this->assertDatabaseHas('partner_users', [
+            'partner_id' => $partnerId,
+            'user_id' => $userId,
+            'status' => 'active',
+        ]);
+        $this->assertDatabaseHas('partnership_requests', [
+            'id' => $application->id,
+            'converted_partner_id' => $partnerId,
+            'converted_user_id' => $userId,
+            'reviewed_by' => $admin->id,
+        ]);
+    }
+
+    public function test_approval_is_idempotent_and_does_not_duplicate_partner_or_account(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin', 'is_active' => true]);
+        $application = PartnershipRequest::create($this->validPayload([
+            'email' => 'idempotent-partner@example.com',
+        ]));
+
+        $endpoint = "/api/operations/partnership-requests/{$application->id}";
+        $this->actingAs($admin, 'sanctum')->patchJson($endpoint, ['status' => 'approved'])->assertOk();
+        $this->actingAs($admin, 'sanctum')->patchJson($endpoint, ['status' => 'approved'])
+            ->assertOk()
+            ->assertJsonPath('onboarding.account_created', false);
+
+        $this->assertDatabaseCount('partners', 1);
+        $this->assertSame(1, User::where('email', 'idempotent-partner@example.com')->count());
+        $this->assertDatabaseCount('partner_users', 1);
+    }
+
+    public function test_approval_stops_when_email_belongs_to_an_incompatible_role(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin', 'is_active' => true]);
+        User::factory()->create(['role' => 'student', 'email' => 'existing-student@example.com']);
+        $application = PartnershipRequest::create($this->validPayload([
+            'email' => 'existing-student@example.com',
+        ]));
+
+        $this->actingAs($admin, 'sanctum')
+            ->patchJson("/api/operations/partnership-requests/{$application->id}", ['status' => 'approved'])
+            ->assertUnprocessable()
+            ->assertJsonPath('code', 'partner_onboarding_conflict');
+
+        $this->assertDatabaseCount('partners', 0);
+        $this->assertDatabaseCount('partner_users', 0);
+        $this->assertDatabaseHas('partnership_requests', [
+            'id' => $application->id,
+            'status' => 'new',
+        ]);
+    }
+
+    public function test_partner_dashboard_returns_real_program_and_report_metrics(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin', 'is_active' => true]);
+        $application = PartnershipRequest::create($this->validPayload([
+            'email' => 'portal-partner@example.com',
+        ]));
+        $approval = $this->actingAs($admin, 'sanctum')
+            ->patchJson("/api/operations/partnership-requests/{$application->id}", ['status' => 'approved'])
+            ->assertOk();
+
+        $partnerId = (int) $approval->json('onboarding.partner_id');
+        $partnerUser = User::findOrFail((int) $approval->json('onboarding.user_id'));
+        PartnerProgram::create([
+            'partner_id' => $partnerId,
+            'title' => 'برنامج قيادي مشترك',
+            'status' => 'active',
+            'participant_count' => 42,
+        ]);
+        PartnerReport::create([
+            'partner_id' => $partnerId,
+            'created_by' => $admin->id,
+            'title' => 'تقرير الربع الأول',
+            'status' => 'published',
+        ]);
+
+        $this->actingAs($partnerUser, 'sanctum')
+            ->getJson('/api/partner/dashboard')
+            ->assertOk()
+            ->assertJsonPath('data.partner.name', $application->partner_name)
+            ->assertJsonPath('data.joint_programs_count', 1)
+            ->assertJsonPath('data.active_programs', 1)
+            ->assertJsonPath('data.participants_total', 42)
+            ->assertJsonPath('data.reports_count', 1)
+            ->assertJsonPath('data.impact_score', null)
+            ->assertJsonPath('data.recent_reports.0.title', 'تقرير الربع الأول');
+    }
+
+    public function test_partner_crm_preserves_operational_fields_and_returns_real_kpis(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin', 'is_active' => true]);
+
+        $created = $this->actingAs($admin, 'sanctum')
+            ->postJson('/api/operations/partners', [
+                'name' => 'جهة تقنية تجريبية',
+                'type' => 'company',
+                'project_scope' => 'HACKATHON',
+                'classification' => 'Under Negotiation',
+                'field_of_work' => 'التقنية التعليمية',
+                'contact_person' => 'ليان خالد',
+                'contact_position' => 'مديرة الشراكات',
+                'email' => 'crm-partner@example.com',
+                'assigned_to' => 'فريق العلاقات',
+                'first_contact_date' => '2026-08-01',
+                'last_contact_date' => '2026-08-20',
+                'status' => 'active',
+            ])
+            ->assertCreated()
+            ->assertJsonPath('data.project_scope', 'HACKATHON')
+            ->assertJsonPath('data.classification', 'Under Negotiation')
+            ->assertJsonPath('data.contact_position', 'مديرة الشراكات');
+
+        $partnerId = (int) $created->json('data.id');
+        $this->actingAs($admin, 'sanctum')
+            ->getJson('/api/operations/partners?project_scope=HACKATHON')
+            ->assertOk()
+            ->assertJsonPath('kpis.total', 1)
+            ->assertJsonPath('kpis.negotiation', 1)
+            ->assertJsonPath('data.data.0.id', $partnerId);
+
+        $this->actingAs($admin, 'sanctum')
+            ->putJson("/api/operations/partners/{$partnerId}", [
+                'classification' => 'Actual Partner',
+                'project_scope' => 'HACKATHON',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.classification', 'Actual Partner');
     }
 }

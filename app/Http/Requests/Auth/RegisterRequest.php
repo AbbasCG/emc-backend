@@ -22,12 +22,13 @@ class RegisterRequest extends FormRequest
             // Admin accounts are created by seeder or existing admin (Phase 3+).
             'role'                  => 'nullable|in:student,teacher',
 
-            // Profile fields — required at signup
-            'country_code'          => 'required|string|max:5',
-            'phone_country_code'    => 'required|string|max:10',
-            'phone'                 => 'required|string|max:30',
-            'city'                  => 'required|string|max:100',
-            'gender'                => 'required|string|in:male,female',
+            // Keep public signup short. Profile details are completed later,
+            // at the point where a certificate, payment or contact flow needs them.
+            'country_code'          => 'nullable|string|max:5',
+            'phone_country_code'    => 'nullable|string|max:10',
+            'phone'                 => 'nullable|string|max:30',
+            'city'                  => 'nullable|string|max:100',
+            'gender'                => 'nullable|string|in:male,female',
             'how_did_you_hear_about_us' => 'nullable|string|max:255',
         ];
     }

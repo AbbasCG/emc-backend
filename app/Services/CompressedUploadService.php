@@ -310,7 +310,7 @@ class CompressedUploadService
         $profile    = self::IMAGE_PROFILES[$profileKey];
 
         $manager = new ImageManager(new GdDriver());
-        $img     = $manager->read($sourcePath);
+        $img     = $manager->decodePath($sourcePath);
 
         // Scale down to profile dimensions, preserving aspect ratio.
         if ($img->width() > $profile['max_width'] || $img->height() > $profile['max_height']) {
@@ -344,7 +344,7 @@ class CompressedUploadService
         string $context
     ): string {
         foreach ([$quality, 70, 50] as $q) {
-            $candidate = (string) $img->toWebp($q);
+            $candidate = (string) $img->encodeUsingMediaType('image/webp', quality: $q);
             if (strlen($candidate) <= $maxOutput) {
                 return $candidate;
             }
@@ -370,11 +370,11 @@ class CompressedUploadService
         string $hash
     ): string {
         $manager = new ImageManager(new GdDriver());
-        $img     = $manager->read($sourcePath);
+        $img     = $manager->decodePath($sourcePath);
 
         $img->cover($thumbConfig['width'], $thumbConfig['height']);
 
-        $bytes    = (string) $img->toWebp(85);
+        $bytes    = (string) $img->encodeUsingMediaType('image/webp', quality: 85);
         $filename = substr($hash, 0, 12) . '_thumb.webp';
         $path     = $prefix . '/thumbs/' . $filename;
 

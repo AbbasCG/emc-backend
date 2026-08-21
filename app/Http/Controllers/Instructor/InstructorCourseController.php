@@ -120,6 +120,7 @@ class InstructorCourseController extends Controller
 
             $resource['enrolled_students_count']  = $enrolled;
             $resource['written_tests_count']      = $writtenCount;
+            $resource['written_completed_count']  = $writtenCount;
             $resource['oral_pending_count']       = max(0, $writtenCount - $withBooking);
             $resource['oral_booked_count']        = (int) ($oralBookedCounts[$course->id] ?? 0);
             $resource['oral_completed_count']     = (int) ($oralCompletedCounts[$course->id] ?? 0);

@@ -2,18 +2,22 @@
 
 namespace App\Http\Controllers\Student;
 
-use App\Enums\RegistrationStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\LearningPathResource;
 use App\Models\LearningPath;
 use App\Models\LearningPathEnrollment;
-use App\Models\Registration;
+use App\Services\LearningPathEnrollmentService;
+use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
 class StudentLearningPathController extends Controller
 {
+    public function __construct(private readonly LearningPathEnrollmentService $enrollments)
+    {
+    }
+
     // ─── POST /api/learning-paths/{slug}/enroll ───────────────────────────────
     public function enroll(Request $request, string $slug): JsonResponse
     {
@@ -29,6 +33,16 @@ class StudentLearningPathController extends Controller
             ->first();
 
         if ($existing) {
+            if ($existing->status === 'pending_payment') {
+                return response()->json([
+                    'success' => false,
+                    'enrolled' => false,
+                    'requires_checkout' => true,
+                    'checkout_endpoint' => "/api/learning-paths/{$path->slug}/checkout",
+                    'message' => 'أكمل الدفع لتفعيل هذا المسار.',
+                ], 402);
+            }
+
             return response()->json([
                 'success'    => false,
                 'enrolled'   => true,
@@ -41,43 +55,28 @@ class StudentLearningPathController extends Controller
             ], 409);
         }
 
-        $enrollment = LearningPathEnrollment::create([
-            'learning_path_id' => $path->id,
-            'user_id'          => $userId,
-            'status'           => 'active',
-            'enrolled_at'      => now(),
-        ]);
-
-        // Auto-register the student into every included course so they get immediate access.
-        // ⚠ Note: this grants access to paid courses without payment. If that changes,
-        //   gate creation on $course->type !== 'paid'.
         $user = Auth::user();
-        $path->load('courses');
 
-        foreach ($path->courses as $course) {
-            try {
-                $alreadyRegistered = Registration::where('course_id', $course->id)
-                    ->where('user_id', $userId)
-                    ->whereNotIn('status', [RegistrationStatus::CANCELLED->value])
-                    ->exists();
-
-                if (! $alreadyRegistered) {
-                    Registration::create([
-                        'course_id'        => $course->id,
-                        'user_id'          => $userId,
-                        'learning_path_id' => $path->id,
-                        'full_name'        => $user->name,
-                        'email'            => $user->email,
-                        'phone'            => $user->phone ?? null,
-                        'city'             => $user->city ?? null,
-                        'country'          => $user->country ?? null,
-                        'status'           => RegistrationStatus::REGISTERED->value,
-                    ]);
-                }
-            } catch (\Throwable) {
-                // Per-course failure is non-fatal; path enrollment already succeeded.
-            }
+        if ($path->isPaid()) {
+            return response()->json([
+                'success' => false,
+                'enrolled' => false,
+                'requires_checkout' => true,
+                'checkout_endpoint' => "/api/learning-paths/{$path->slug}/checkout",
+                'message' => 'هذا مسار مدفوع. أكمل الدفع لتفعيل التسجيل.',
+            ], 402);
         }
+
+        $enrollment = $this->enrollments->enrollFree($user, $path);
+        $path->loadCount('courses');
+
+        NotificationService::learningPathEnrolled(
+            $userId,
+            $path->title,
+            (int) $path->courses_count,
+            $path->id,
+            $path->duration,
+        );
 
         return response()->json([
             'success'    => true,
@@ -132,6 +131,15 @@ class StudentLearningPathController extends Controller
             ->where('learning_path_id', $id)
             ->firstOrFail();
 
+        if ($enrollment->status === 'pending_payment') {
+            return response()->json([
+                'success' => false,
+                'requires_checkout' => true,
+                'checkout_endpoint' => "/api/learning-paths/{$enrollment->learningPath->slug}/checkout",
+                'message' => 'أكمل الدفع للوصول إلى محتوى المسار.',
+            ], 402);
+        }
+
         $path = $enrollment->learningPath;
         $path->loadCount('courses');
 
@@ -152,13 +160,19 @@ class StudentLearningPathController extends Controller
 
         $userId = Auth::id();
 
-        $enrollment = LearningPathEnrollment::where('learning_path_id', $path->id)
+        $enrollment = LearningPathEnrollment::with('order.payments')
+            ->where('learning_path_id', $path->id)
             ->where('user_id', $userId)
             ->first();
 
+        $isActive = $enrollment && in_array($enrollment->status, ['active', 'completed'], true);
+        $latestPayment = $enrollment?->order?->payments?->sortByDesc('id')->first();
+
         return response()->json([
             'success'  => true,
-            'enrolled' => (bool) $enrollment,
+            'enrolled' => (bool) $isActive,
+            'requires_checkout' => $enrollment?->status === 'pending_payment',
+            'checkout_url' => $latestPayment?->checkout_url,
             'enrollment' => $enrollment ? [
                 'id'          => $enrollment->id,
                 'status'      => $enrollment->status,
