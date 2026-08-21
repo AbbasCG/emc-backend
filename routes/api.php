@@ -689,6 +689,10 @@ Route::post('/partnership-requests', [PublicPartnershipRequestController::class,
 Route::post('/volunteer-requests', [PublicVolunteerRequestController::class, 'store'])
     ->middleware('throttle:workshop');
 
+// ─── Public: Visitor analytics ingest (sendBeacon، خلف موافقة المتصفح) ───────
+Route::post('/analytics/events', [\App\Http\Controllers\Public\AnalyticsIngestController::class, 'store'])
+    ->middleware('throttle:120,1');
+
 // ─── Public: Consultant applications (نفس مُقيِّد التطوع) ─────────────────────
 Route::post('/consultant-applications', [PublicConsultantApplicationController::class, 'store'])
     ->middleware('throttle:workshop');
@@ -804,6 +808,11 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     // Departments
     Route::apiResource('departments', DepartmentController::class);
     Route::apiResource('department-sections', DepartmentSectionController::class);
+
+    // تحليلات الزوار — قراءة اللوحة
+    Route::get('visitor-analytics/overview', [\App\Http\Controllers\Admin\VisitorAnalyticsController::class, 'overview']);
+    Route::get('visitor-analytics/top',      [\App\Http\Controllers\Admin\VisitorAnalyticsController::class, 'top']);
+    Route::get('visitor-analytics/errors',   [\App\Http\Controllers\Admin\VisitorAnalyticsController::class, 'errors']);
 
     // طلبات المستشارين — مراجعة واعتماد
     Route::get('consultant-applications',                                [AdminConsultantApplicationController::class, 'index']);
