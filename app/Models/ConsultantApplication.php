@@ -11,7 +11,7 @@ class ConsultantApplication extends Model
 
     protected $fillable = [
         'full_name', 'email', 'phone', 'country', 'city',
-        'specialty', 'years_experience', 'linkedin_url', 'cv_file_path',
+        'specialty', 'desired_department', 'years_experience', 'linkedin_url', 'cv_file_path',
         'motivation', 'availability',
         'status', 'reviewer_note', 'reviewed_by', 'reviewed_at',
     ];

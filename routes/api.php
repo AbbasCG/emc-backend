@@ -708,6 +708,11 @@ Route::get('admin/volunteer-requests/{volunteerRequest}/cv/view', [AdminVoluntee
     ->middleware('signed')
     ->name('admin.volunteer-requests.cv.view');
 
+// Signed consultant CV inline view (نفس سياسة سير المتطوعين: معاينة فقط)
+Route::get('admin/consultant-applications/{consultantApplication}/cv/view', [AdminConsultantApplicationController::class, 'viewCv'])
+    ->middleware('signed')
+    ->name('admin.consultant-applications.cv.view');
+
 // Ambassador application file routes (auth:sanctum — role check done in controller)
 // Privacy policy: staff may preview applicant CV/student-ID/photo in-app but
 // never download the raw file — downloadCv()/downloadStudentId() routes removed.
