@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Operations;
 
 use App\Http\Controllers\Controller;
 use App\Models\MeetingReport;
+use App\Services\ImpactPoints;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -41,7 +42,8 @@ class MeetingReportController extends Controller
             'ratings'                => 'array',
             'ratings.*.user_id'      => 'required|exists:users,id',
             'ratings.*.attended'     => 'boolean',
-            'ratings.*.rating'       => 'nullable|integer|min:1|max:5',
+            'ratings.*.scores'       => 'nullable|array',
+            'ratings.*.scores.*'     => 'integer|min:1|max:10',
             'ratings.*.note'         => 'nullable|string|max:500',
         ]);
 
@@ -51,14 +53,40 @@ class MeetingReportController extends Controller
         ]);
 
         foreach ($data['ratings'] ?? [] as $row) {
+            $attended = $row['attended'] ?? true;
+            $scores   = $attended ? array_filter($row['scores'] ?? []) : [];
+            $avg      = $scores !== [] ? round(array_sum($scores) / count($scores), 1) : null;
+
             $report->ratings()->updateOrCreate(
                 ['user_id' => $row['user_id']],
                 [
-                    'attended' => $row['attended'] ?? true,
-                    'rating'   => $row['rating'] ?? null,
-                    'note'     => $row['note'] ?? null,
+                    'attended'  => $attended,
+                    'scores'    => $scores !== [] ? $scores : null,
+                    'avg_score' => $avg,
+                    'note'      => $row['note'] ?? null,
                 ],
             );
+
+            // ربط التقييم بنقاط الأثر: حضور (§12 بسقفه الشهري) + مكافأة تميز التقييم.
+            if ($attended) {
+                ImpactPoints::awardMeetingAttendance(
+                    $row['user_id'],
+                    $report->title,
+                    $request->user()->id,
+                    'meeting_report',
+                    $report->id,
+                );
+                if ($avg !== null) {
+                    ImpactPoints::awardEvaluationBonus(
+                        $row['user_id'],
+                        $avg,
+                        "اجتماع: {$report->title}",
+                        $request->user()->id,
+                        'meeting_report',
+                        $report->id,
+                    );
+                }
+            }
         }
 
         return response()->json([

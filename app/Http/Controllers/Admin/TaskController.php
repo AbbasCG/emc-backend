@@ -233,4 +233,39 @@ class TaskController extends Controller
             'data'    => new TaskResource($task->load(['department', 'section', 'assignedTo', 'createdBy'])),
         ]);
     }
+
+    /**
+     * تغيير حالة سريع من لوحة التشغيل: المدراء المخوَّلون يحركون أي مهمة،
+     * والعضو يحرك المهمة المعيَّنة له فقط. المهام المقفلة لا تتحرك.
+     */
+    public function updateStatus(Request $request, Task $task): IlluminateHttpJsonResponse
+    {
+        if ($task->locked_at !== null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'هذه المهمة مقفلة ولا يمكن تحريكها.',
+            ], 423);
+        }
+
+        $managerRoles = ['admin', 'super_admin', 'tech_admin', 'executive_admin', 'hr_manager', 'operations_manager', 'department_manager'];
+        $user = $request->user();
+        if (! in_array($user->role, $managerRoles, true) && $task->assigned_to !== $user->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'يمكنك تحريك المهام المعيَّنة لك فقط.',
+            ], 403);
+        }
+
+        $data = $request->validate([
+            'status' => 'required|in:idea,under_review,planning,waiting_approval,in_progress,completed,postponed,cancelled,needs_evaluation',
+        ]);
+
+        $task->update($data);
+        ActivityLogger::log('task.status_changed', $task, $data, $request);
+
+        return response()->json([
+            'success' => true,
+            'data'    => new TaskResource($task->load(['department', 'section', 'assignedTo', 'createdBy'])),
+        ]);
+    }
 }

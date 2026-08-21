@@ -7,11 +7,13 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class MeetingReportRating extends Model
 {
-    protected $fillable = ['meeting_report_id', 'user_id', 'attended', 'rating', 'note'];
+    protected $fillable = ['meeting_report_id', 'user_id', 'attended', 'rating', 'scores', 'avg_score', 'note'];
 
     protected $casts = [
         'attended' => 'boolean',
-        'rating'   => 'integer',
+        'rating'    => 'integer',
+        'scores'    => 'array',
+        'avg_score' => 'float',
     ];
 
     public function report(): BelongsTo

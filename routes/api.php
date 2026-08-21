@@ -784,12 +784,16 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
     Route::get('volunteer-points/my-awards',         [VolunteerPointsController::class, 'myAwards']);
     Route::get('volunteer-points/leaderboard',       [VolunteerPointsController::class, 'leaderboard']);
 
+    // لوحة التشغيل: تحريك الحالة — العضو لمهامه والمدير للجميع (منطق المتحكم)
+    Route::patch('board/tasks/{task}/status',        [\App\Http\Controllers\Admin\TaskController::class, 'updateStatus']);
+
     // كتابة التقارير ومنح النقاط: مدراء مخوَّلون فقط
     Route::middleware('role:admin,super_admin,tech_admin,executive_admin,hr_manager,operations_manager,department_manager')->group(function () {
         Route::post('meeting-reports',               [MeetingReportController::class, 'store']);
         Route::post('weekly-reports',                [WeeklyReportController::class, 'store']);
         Route::post('volunteer-points/awards',       [VolunteerPointsController::class, 'award']);
         Route::post('volunteer-points/redemptions',  [VolunteerPointsController::class, 'redeem']);
+        Route::post('board/tasks',                   [\App\Http\Controllers\Admin\TaskController::class, 'store']);
         Route::post('tasks/{task}/lock',             [\App\Http\Controllers\Admin\TaskController::class, 'lock']);
         Route::post('tasks/{task}/unlock',           [\App\Http\Controllers\Admin\TaskController::class, 'unlock']);
     });

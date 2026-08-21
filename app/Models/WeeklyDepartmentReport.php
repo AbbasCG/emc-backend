@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class WeeklyDepartmentReport extends Model
 {
@@ -25,5 +26,10 @@ class WeeklyDepartmentReport extends Model
     public function submitter(): BelongsTo
     {
         return $this->belongsTo(User::class, 'submitted_by');
+    }
+
+    public function ratings(): HasMany
+    {
+        return $this->hasMany(WeeklyReportRating::class);
     }
 }
