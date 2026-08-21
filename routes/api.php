@@ -809,6 +809,9 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::apiResource('departments', DepartmentController::class);
     Route::apiResource('department-sections', DepartmentSectionController::class);
 
+    // استيراد الكتالوج من قالب الإكسل (معاينة ثم اعتماد)
+    Route::post('catalog-import', [\App\Http\Controllers\Admin\CatalogImportController::class, 'store']);
+
     // تحليلات الزوار — قراءة اللوحة
     Route::get('visitor-analytics/overview', [\App\Http\Controllers\Admin\VisitorAnalyticsController::class, 'overview']);
     Route::get('visitor-analytics/top',      [\App\Http\Controllers\Admin\VisitorAnalyticsController::class, 'top']);
