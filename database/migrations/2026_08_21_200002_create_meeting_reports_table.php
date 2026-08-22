@@ -1,34 +1,25 @@
 <?php
 
 use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
+    /**
+     * No-op — superseded by 2026_08_16_000850_create_meeting_reports_table,
+     * which was widened during the EMC-NEW-BACK merge to create the
+     * `meeting_reports` table with columns for both report features (see
+     * that migration's docblock). This file is kept only so the later
+     * 2026_08_21_200003/2026_08_21_220001 migrations that depend on it
+     * running first (by timestamp order) still find `meeting_reports`
+     * already present.
+     */
     public function up(): void
     {
-        Schema::create('meeting_reports', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('department_id')->constrained('departments')->cascadeOnDelete();
-            $table->foreignId('meeting_id')->nullable()->constrained('meetings')->nullOnDelete();
-            $table->string('title');
-            $table->date('meeting_date');
-            $table->text('achieved')->nullable();       // ماذا أنجزوا
-            $table->text('planned')->nullable();        // ماذا سينجزون
-            $table->text('needs')->nullable();          // ماذا يحتاجون/يريدون
-            $table->text('needs_reason')->nullable();   // ولماذا
-            $table->text('decisions')->nullable();      // قرارات المحضر
-            $table->text('notes')->nullable();
-            $table->foreignId('created_by')->constrained('users')->cascadeOnDelete();
-            $table->timestamps();
-
-            $table->index(['department_id', 'meeting_date']);
-        });
+        // Intentionally empty — table created earlier, see docblock above.
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('meeting_reports');
+        // Intentionally empty — 2026_08_16_000850 owns dropping the table.
     }
 };

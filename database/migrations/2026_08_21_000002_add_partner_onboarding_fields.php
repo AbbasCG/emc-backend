@@ -8,6 +8,11 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // project_scope/classification/field_of_work/contact_position/assigned_to/
+        // first_contact_date/last_contact_date/rejection_reason/attachment_url were
+        // already added by 2026_08_16_015310_add_crm_fields_to_partners_table — only
+        // add the columns genuinely new to this migration to avoid a duplicate-column
+        // error when both run.
         Schema::table('partners', function (Blueprint $table) {
             $table->foreignId('source_request_id')
                 ->nullable()
@@ -16,15 +21,6 @@ return new class extends Migration
                 ->constrained('partnership_requests')
                 ->nullOnDelete();
             $table->string('partnership_type', 50)->nullable()->after('type');
-            $table->string('project_scope', 30)->default('EMC_GENERAL')->after('partnership_type');
-            $table->string('classification', 30)->nullable()->after('project_scope');
-            $table->string('field_of_work')->nullable()->after('classification');
-            $table->string('contact_position')->nullable()->after('contact_person');
-            $table->string('assigned_to')->nullable()->after('city');
-            $table->date('first_contact_date')->nullable()->after('assigned_to');
-            $table->date('last_contact_date')->nullable()->after('first_contact_date');
-            $table->text('rejection_reason')->nullable()->after('last_contact_date');
-            $table->string('attachment_url')->nullable()->after('rejection_reason');
             $table->string('onboarding_status', 30)->default('account_ready')->after('status');
             $table->timestamp('activated_at')->nullable()->after('onboarding_status');
         });
@@ -55,11 +51,7 @@ return new class extends Migration
 
         Schema::table('partners', function (Blueprint $table) {
             $table->dropConstrainedForeignId('source_request_id');
-            $table->dropColumn([
-                'partnership_type', 'project_scope', 'classification', 'field_of_work',
-                'contact_position', 'assigned_to', 'first_contact_date', 'last_contact_date',
-                'rejection_reason', 'attachment_url', 'onboarding_status', 'activated_at',
-            ]);
+            $table->dropColumn(['partnership_type', 'onboarding_status', 'activated_at']);
         });
     }
 };

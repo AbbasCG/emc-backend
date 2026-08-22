@@ -8,6 +8,7 @@ use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Notifications\ResetPasswordNotification;
 use Illuminate\Foundation\Auth\User as Authenticatable;
@@ -145,28 +146,34 @@ class User extends Authenticatable
      * 1. DB role-permission mapping (authoritative after seeding)
      * 2. Static Permissions::forRole() fallback (before DB is seeded)
      */
-    public function allPermissions(): array
+    public function basePermissions(): array
     {
-        if ($this->permissionCache !== null) {
-            return $this->permissionCache;
-        }
-
         // super_admin and tech_admin get all standard permissions plus any DB-granted
         // extras excluded from Permissions::all() (e.g. users.impersonate).
         if ($this->isSuperAdmin() || $this->isTechAdmin()) {
             $base   = Permissions::all();
             $dbRole = Role::with('permissions')->where('name', $this->role)->first();
             $extra  = $dbRole ? $dbRole->permissions->pluck('name')->diff($base)->values()->all() : [];
-            return $this->permissionCache = array_values(array_unique(array_merge($base, $extra)));
+            return array_values(array_unique(array_merge($base, $extra)));
         }
 
         $dbRole = Role::with('permissions')
             ->where('name', $this->effectiveRole())
             ->first();
 
-        $this->permissionCache = $dbRole
+        return $dbRole
             ? $dbRole->permissions->pluck('name')->toArray()
             : Permissions::forRole($this->role);
+    }
+
+    public function allPermissions(): array
+    {
+        if ($this->permissionCache !== null) {
+            return $this->permissionCache;
+        }
+
+        $service = app(\App\Services\PermissionDelegationService::class);
+        $this->permissionCache = $service->getEffectivePermissions($this);
 
         return $this->permissionCache;
     }
@@ -257,6 +264,24 @@ class User extends Authenticatable
     public function scholarships(): HasMany
     {
         return $this->hasMany(Scholarship::class);
+    }
+
+    public function departments(): BelongsToMany
+    {
+        return $this->belongsToMany(Department::class, 'user_departments')
+                    ->withPivot('is_primary')
+                    ->withTimestamps();
+    }
+
+    public function inDepartment(int|string $departmentIdOrSlug): bool
+    {
+        return $this->departments()->where(function ($query) use ($departmentIdOrSlug) {
+            if (is_numeric($departmentIdOrSlug)) {
+                $query->where('departments.id', $departmentIdOrSlug);
+            } else {
+                $query->where('departments.slug', $departmentIdOrSlug);
+            }
+        })->exists();
     }
 
     // ─── Internal Helpers ────────────────────────────────────────────────────

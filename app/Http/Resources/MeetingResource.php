@@ -34,6 +34,7 @@ class MeetingResource extends JsonResource
             ]),
             'decisions'     => MeetingDecisionResource::collection($this->whenLoaded('decisions')),
             'action_items'  => MeetingActionItemResource::collection($this->whenLoaded('actionItems')),
+            'report'        => new MeetingReportResource($this->whenLoaded('report')),
             'created_at'    => $this->created_at,
         ];
     }

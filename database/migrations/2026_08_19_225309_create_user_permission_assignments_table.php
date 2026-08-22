@@ -1,0 +1,37 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('user_permission_assignments', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+            $table->foreignId('permission_id')->constrained()->cascadeOnDelete();
+            $table->string('state'); // allow, deny
+            $table->string('scope_type'); // global, department, section, own_records
+            $table->unsignedBigInteger('scope_id')->nullable();
+            $table->string('source_type'); // role, delegation, direct_admin
+            $table->unsignedBigInteger('source_id')->nullable();
+            $table->foreignId('granted_by')->nullable()->constrained('users')->nullOnDelete();
+            $table->timestamp('expires_at')->nullable();
+            $table->string('reason')->nullable();
+            $table->timestamps();
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::dropIfExists('user_permission_assignments');
+    }
+};

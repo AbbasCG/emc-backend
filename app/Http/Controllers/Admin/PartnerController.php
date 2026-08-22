@@ -11,6 +11,8 @@ class PartnerController extends Controller
 {
     public function index(Request $request): \Illuminate\Http\JsonResponse
     {
+        // KPIs are scoped only by project_scope so they stay stable while the
+        // user narrows the list further with type/status/classification/search.
         $base = Partner::query()
             ->when($request->project_scope, fn ($q) => $q->where('project_scope', $request->project_scope));
 
@@ -24,6 +26,7 @@ class PartnerController extends Controller
         $partners = $base
             ->when($request->type, fn ($q) => $q->where('type', $request->type))
             ->when($request->status, fn ($q) => $q->where('status', $request->status))
+            ->when($request->classification, fn ($q) => $q->where('classification', $request->classification))
             ->when($request->search, fn ($q) => $q->where('name', 'like', '%' . $request->search . '%'))
             ->latest()
             ->paginate(20);
@@ -38,26 +41,26 @@ class PartnerController extends Controller
     public function store(Request $request): \Illuminate\Http\JsonResponse
     {
         $data = $request->validate([
-            'name'           => 'required|string|max:255',
-            'type'           => 'in:university,school,company,institution,donor,community',
+            'name'              => 'required|string|max:255',
+            'type'              => 'nullable|in:university,school,company,institution,donor,community',
             'partnership_type' => 'nullable|string|max:50',
-            'project_scope' => 'required|in:EMC_GENERAL,HACKATHON,BOOTCAMP',
-            'classification' => 'nullable|in:Actual Partner,Potential,Under Negotiation,Rejected',
-            'field_of_work' => 'nullable|string|max:255',
-            'contact_person' => 'nullable|string|max:255',
-            'contact_position' => 'nullable|string|max:255',
-            'email'          => 'nullable|email',
-            'phone'          => 'nullable|string|max:50',
-            'website'        => 'nullable|url',
-            'country'        => 'nullable|string|max:100',
-            'city'           => 'nullable|string|max:100',
-            'assigned_to' => 'nullable|string|max:255',
-            'first_contact_date' => 'nullable|date',
-            'last_contact_date' => 'nullable|date|after_or_equal:first_contact_date',
-            'rejection_reason' => 'nullable|string|max:2000',
-            'attachment_url' => 'nullable|url|max:2048',
-            'status'         => 'in:active,inactive,archived',
-            'notes'          => 'nullable|string',
+            'project_scope'    => 'required|in:EMC_GENERAL,HACKATHON,BOOTCAMP',
+            'classification'   => 'nullable|in:Actual Partner,Potential,Under Negotiation,Rejected',
+            'field_of_work'    => 'nullable|string',
+            'contact_person'   => 'nullable|string|max:255',
+            'contact_position' => 'nullable|string|max:150',
+            'email'            => 'nullable|email',
+            'phone'            => 'nullable|string|max:50',
+            'website'          => 'nullable|url',
+            'country'          => 'nullable|string|max:100',
+            'city'             => 'nullable|string|max:100',
+            'assigned_to'         => 'nullable|string|max:100',
+            'first_contact_date'  => 'nullable|date',
+            'last_contact_date'   => 'nullable|date|after_or_equal:first_contact_date',
+            'rejection_reason'    => 'nullable|string',
+            'attachment_url'      => 'nullable|url|max:2048',
+            'status'           => 'nullable|in:active,inactive,archived',
+            'notes'            => 'nullable|string',
         ]);
 
         $partner = Partner::create($data);
@@ -79,26 +82,26 @@ class PartnerController extends Controller
     public function update(Request $request, Partner $partner): \Illuminate\Http\JsonResponse
     {
         $data = $request->validate([
-            'name'           => 'string|max:255',
-            'type'           => 'in:university,school,company,institution,donor,community',
+            'name'              => 'string|max:255',
+            'type'              => 'nullable|in:university,school,company,institution,donor,community',
             'partnership_type' => 'nullable|string|max:50',
-            'project_scope' => 'sometimes|in:EMC_GENERAL,HACKATHON,BOOTCAMP',
-            'classification' => 'nullable|in:Actual Partner,Potential,Under Negotiation,Rejected',
-            'field_of_work' => 'nullable|string|max:255',
-            'contact_person' => 'nullable|string|max:255',
-            'contact_position' => 'nullable|string|max:255',
-            'email'          => 'nullable|email',
-            'phone'          => 'nullable|string|max:50',
-            'website'        => 'nullable|url',
-            'country'        => 'nullable|string|max:100',
-            'city'           => 'nullable|string|max:100',
-            'assigned_to' => 'nullable|string|max:255',
-            'first_contact_date' => 'nullable|date',
-            'last_contact_date' => 'nullable|date|after_or_equal:first_contact_date',
-            'rejection_reason' => 'nullable|string|max:2000',
-            'attachment_url' => 'nullable|url|max:2048',
-            'status'         => 'in:active,inactive,archived',
-            'notes'          => 'nullable|string',
+            'project_scope'    => 'sometimes|in:EMC_GENERAL,HACKATHON,BOOTCAMP',
+            'classification'   => 'nullable|in:Actual Partner,Potential,Under Negotiation,Rejected',
+            'field_of_work'    => 'nullable|string',
+            'contact_person'   => 'nullable|string|max:255',
+            'contact_position' => 'nullable|string|max:150',
+            'email'            => 'nullable|email',
+            'phone'            => 'nullable|string|max:50',
+            'website'          => 'nullable|url',
+            'country'          => 'nullable|string|max:100',
+            'city'             => 'nullable|string|max:100',
+            'assigned_to'         => 'nullable|string|max:100',
+            'first_contact_date'  => 'nullable|date',
+            'last_contact_date'   => 'nullable|date|after_or_equal:first_contact_date',
+            'rejection_reason'    => 'nullable|string',
+            'attachment_url'      => 'nullable|url|max:2048',
+            'status'           => 'nullable|in:active,inactive,archived',
+            'notes'            => 'nullable|string',
         ]);
 
         $partner->update($data);
