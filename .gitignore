@@ -43,3 +43,6 @@ database/schema/mysql-schema.sql.bak
 database/schema/mysql-schema.sql
 
 ./STATUS_WAAR_WE_NU_STAAN.txt
+# النسخ الاحتياطية المحلية للبيئة ومخلفات الاختبار — لا تُرفع أبداً
+.env.backup*
+/storage/test-results.xml
