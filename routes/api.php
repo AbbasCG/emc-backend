@@ -689,6 +689,10 @@ Route::post('/partnership-requests', [PublicPartnershipRequestController::class,
 Route::post('/volunteer-requests', [PublicVolunteerRequestController::class, 'store'])
     ->middleware('throttle:workshop');
 
+// ─── Public: AI Level Assessment — النتيجة + مكافأة 7% (كوبون حقيقي) ─────────
+Route::post('/ai-assessment/results', [\App\Http\Controllers\Public\AiAssessmentController::class, 'store'])
+    ->middleware('throttle:30,1');
+
 // ─── Public: Visitor analytics ingest (sendBeacon، خلف موافقة المتصفح) ───────
 Route::post('/analytics/events', [\App\Http\Controllers\Public\AnalyticsIngestController::class, 'store'])
     ->middleware('throttle:120,1');

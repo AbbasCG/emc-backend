@@ -21,6 +21,7 @@ class LearningPath extends Model
         'updated_by',
         'title',
         'slug',
+        'catalog_code',
         'short_description',
         'full_description',
         'featured_image',

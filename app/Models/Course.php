@@ -28,6 +28,7 @@ class Course extends Model
         'assigned_by',
         'title',
         'slug',
+        'catalog_code',
         'description',
         'short_description',
         'type',
