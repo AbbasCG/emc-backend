@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Operations;
 
 use App\Http\Controllers\Controller;
 use App\Models\MeetingReport;
+use App\Services\DepartmentAccessService;
 use App\Services\ImpactPoints;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -14,9 +15,14 @@ use Illuminate\Http\Request;
  */
 class MeetingReportController extends Controller
 {
+    public function __construct(private readonly DepartmentAccessService $departmentAccess)
+    {
+    }
+
     public function index(Request $request): JsonResponse
     {
-        $reports = MeetingReport::query()
+        $reports = $this->departmentAccess
+            ->scopeQuery(MeetingReport::query(), $request->user())
             ->with(['department:id,name', 'author:id,name'])
             ->withCount('ratings')
             ->when($request->department_id, fn ($q) => $q->where('department_id', $request->department_id))
@@ -46,6 +52,10 @@ class MeetingReportController extends Controller
             'ratings.*.scores.*'     => 'integer|min:1|max:10',
             'ratings.*.note'         => 'nullable|string|max:500',
         ]);
+
+        if (! $this->departmentAccess->canAccessDepartment($request->user(), (int) $data['department_id'])) {
+            return response()->json(['success' => false, 'message' => 'ليست لديك صلاحية إنشاء تقرير لهذه الإدارة.'], 403);
+        }
 
         $report = MeetingReport::create([
             ...collect($data)->except('ratings')->all(),
@@ -95,8 +105,12 @@ class MeetingReportController extends Controller
         ], 201);
     }
 
-    public function show(MeetingReport $meetingReport): JsonResponse
+    public function show(Request $request, MeetingReport $meetingReport): JsonResponse
     {
+        if (! $this->departmentAccess->canAccessDepartment($request->user(), (int) $meetingReport->department_id)) {
+            return response()->json(['success' => false, 'message' => 'ليست لديك صلاحية عرض هذا التقرير.'], 403);
+        }
+
         return response()->json([
             'success' => true,
             'data'    => $meetingReport->load([

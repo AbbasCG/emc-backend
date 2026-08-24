@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Operations;
 use App\Http\Controllers\Controller;
 use App\Models\Department;
 use App\Models\WeeklyDepartmentReport;
+use App\Services\DepartmentAccessService;
 use App\Services\ImpactPoints;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
@@ -16,6 +17,10 @@ use Illuminate\Http\Request;
  */
 class WeeklyReportController extends Controller
 {
+    public function __construct(private readonly DepartmentAccessService $departmentAccess)
+    {
+    }
+
     /** إثنين الأسبوع الحالي — التقرير يُنسب دائمًا إلى أسبوعٍ يبدأ بإثنين. */
     private function currentWeekStart(): CarbonImmutable
     {
@@ -24,7 +29,8 @@ class WeeklyReportController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        $reports = WeeklyDepartmentReport::query()
+        $reports = $this->departmentAccess
+            ->scopeQuery(WeeklyDepartmentReport::query(), $request->user())
             ->with(['department:id,name', 'submitter:id,name', 'ratings.user:id,name'])
             ->when($request->department_id, fn ($q) => $q->where('department_id', $request->department_id))
             ->when($request->week_start, fn ($q) => $q->whereDate('week_start', $request->week_start))
@@ -34,8 +40,8 @@ class WeeklyReportController extends Controller
         return response()->json(['success' => true, 'data' => $reports]);
     }
 
-    /** أي الإدارات لم تسلِّم تقرير هذا الأسبوع بعد؟ يغذي لافتة الاستحقاق يوم الإثنين. */
-    public function due(): JsonResponse
+    /** أي الإدارات (ضمن نطاق المستخدم) لم تسلِّم تقرير هذا الأسبوع بعد؟ يغذي لافتة الاستحقاق يوم الإثنين. */
+    public function due(Request $request): JsonResponse
     {
         $weekStart = $this->currentWeekStart();
 
@@ -43,7 +49,8 @@ class WeeklyReportController extends Controller
             ->whereDate('week_start', $weekStart)
             ->pluck('department_id');
 
-        $missing = Department::query()
+        $missing = $this->departmentAccess
+            ->scopeQuery(Department::query(), $request->user(), 'id')
             ->whereNotIn('id', $submitted)
             ->orderBy('sort_order')
             ->get(['id', 'name']);
@@ -74,6 +81,10 @@ class WeeklyReportController extends Controller
             'ratings.*.scores.*'     => 'integer|min:1|max:10',
             'ratings.*.note'         => 'nullable|string|max:500',
         ]);
+
+        if (! $this->departmentAccess->canAccessDepartment($request->user(), (int) $data['department_id'])) {
+            return response()->json(['success' => false, 'message' => 'ليست لديك صلاحية إنشاء تقرير لهذه الإدارة.'], 403);
+        }
 
         $weekStart = isset($data['week_start'])
             ? CarbonImmutable::parse($data['week_start'])->startOfWeek(CarbonImmutable::MONDAY)

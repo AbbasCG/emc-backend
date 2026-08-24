@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\TaskResource;
 use App\Models\Department;
 use App\Models\Task;
+use App\Services\DepartmentAccessService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -16,6 +17,19 @@ use Illuminate\Http\Request;
  */
 class OperationsBoardController extends Controller
 {
+    public function __construct(private readonly DepartmentAccessService $departmentAccess)
+    {
+    }
+
+    /** ما نطاق الإدارات المتاح لهذا المستخدم — تُبنى عليه واجهة اختيار الإدارة. */
+    public function myDepartmentAccess(Request $request): JsonResponse
+    {
+        return response()->json([
+            'success' => true,
+            'data'    => $this->departmentAccess->manifest($request->user()),
+        ]);
+    }
+
     public function board(Request $request): JsonResponse
     {
         $statuses = [
@@ -38,9 +52,14 @@ class OperationsBoardController extends Controller
     }
 
     /** أعضاء إدارة (القائد + الفريق) — يغذي قائمة الحضور في تقرير الاجتماع. */
-    public function departmentMembers(Department $department): JsonResponse
+    public function departmentMembers(Request $request, Department $department): JsonResponse
     {
+        if (! $this->departmentAccess->canAccessDepartment($request->user(), $department->id)) {
+            return response()->json(['success' => false, 'message' => 'ليست لديك صلاحية على هذه الإدارة.'], 403);
+        }
+
         $team = $department->teamMembers()
+            ->where('status', 'active')
             ->with('user:id,name,role')
             ->get()
             ->filter(fn ($member) => $member->user !== null)
