@@ -817,9 +817,11 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
     });
 
     // كتابة تقارير الاجتماعات/الأسبوعية: أي مدير إدارة حقيقي — التحقق الفعلي
-    // من نطاق الإدارة (هل يدير هذه الإدارة تحديدًا) يتم داخل
-    // DepartmentAccessService::canAccessDepartment، وليس عبر قائمة الأدوار هنا.
-    Route::middleware('role:admin,super_admin,tech_admin,executive_admin,department_manager,section_lead,hr_manager,finance_manager,marketing_manager,quality_manager,programs_manager,operations_manager,partnerships_manager,community_manager,support_agent')->group(function () {
+    // من نطاق الإدارة (هل يقود هذه الإدارة تحديدًا) يتم داخل
+    // DepartmentAccessService::canManageDepartment، وليس عبر قائمة الأدوار هنا.
+    // القائمة هنا مجرد تصفية خشنة (استبعاد الأدوار غير التشغيلية)؛ التحقق
+    // الفعلي من القيادة الحقيقية للإدارة يبقى في المتحكم.
+    Route::middleware('role:admin,super_admin,tech_admin,executive_admin,department_manager,section_lead,hr_manager,finance_manager,marketing_manager,quality_manager,programs_manager,operations_manager,partnerships_manager,community_manager,support_agent,ai_manager')->group(function () {
         Route::post('meeting-reports',               [MeetingReportController::class, 'store']);
         Route::post('weekly-reports',                [WeeklyReportController::class, 'store']);
     });

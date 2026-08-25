@@ -29,9 +29,19 @@ class WeeklyReportController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        $reports = $this->departmentAccess
-            ->scopeQuery(WeeklyDepartmentReport::query(), $request->user())
+        $user = $request->user();
+
+        // Quality & Governance is a cross-department oversight function — its
+        // members read every department's weekly reports. Everyone else is
+        // scoped to their accessible departments (membership ∪ leadership ∪
+        // the full privileged-role bypass) via DepartmentAccessService, which
+        // already no-ops for super_admin/tech_admin/executive_admin/admin.
+        $reports = WeeklyDepartmentReport::query()
             ->with(['department:id,name', 'submitter:id,name', 'ratings.user:id,name'])
+            ->when(
+                ! $user->inDepartment('quality-governance'),
+                fn ($q) => $this->departmentAccess->scopeQuery($q, $user)
+            )
             ->when($request->department_id, fn ($q) => $q->where('department_id', $request->department_id))
             ->when($request->week_start, fn ($q) => $q->whereDate('week_start', $request->week_start))
             ->orderByDesc('week_start')

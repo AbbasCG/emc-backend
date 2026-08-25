@@ -73,11 +73,23 @@ class OperationsBoardController extends Controller
 
         $leader = $department->leader()->first(['id', 'name', 'role']);
 
+        $usersPivot = $department->users()
+            ->select('users.id', 'users.name', 'users.role')
+            ->get()
+            ->map(fn ($user) => [
+                'id'         => $user->id,
+                'name'       => $user->name,
+                'role'       => $user->role,
+                'role_title' => null,
+                'kind'       => 'team',
+            ]);
+
         $members = collect($leader ? [[
             'id' => $leader->id, 'name' => $leader->name, 'role' => $leader->role,
             'role_title' => null, 'kind' => 'leader',
         ]] : [])
             ->concat($team)
+            ->concat($usersPivot)
             ->unique('id')
             ->values();
 
