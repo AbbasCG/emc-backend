@@ -53,8 +53,10 @@ class MeetingReportController extends Controller
             'ratings.*.note'         => 'nullable|string|max:500',
         ]);
 
-        if (! $this->departmentAccess->canAccessDepartment($request->user(), (int) $data['department_id'])) {
-            return response()->json(['success' => false, 'message' => 'ليست لديك صلاحية إنشاء تقرير لهذه الإدارة.'], 403);
+        // Report creation requires actual department LEADERSHIP (departments.leader_id),
+        // not mere active membership — see DepartmentAccessService::canManageDepartment.
+        if (! $this->departmentAccess->canManageDepartment($request->user(), (int) $data['department_id'])) {
+            return response()->json(['success' => false, 'message' => 'ليست لديك صلاحية إنشاء تقرير لهذه الإدارة — هذا الإجراء متاح لقائد الإدارة فقط.'], 403);
         }
 
         $report = MeetingReport::create([

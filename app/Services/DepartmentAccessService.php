@@ -9,20 +9,29 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 
 /**
- * Single source of truth for "which departments can this user act within" —
- * reused by every department-scoped surface (meeting reports, weekly reports,
- * department member listing, board filtering) so access rules never live in
- * per-role if/else chains scattered across controllers.
+ * Single source of truth for department scoping — reused by every
+ * department-scoped surface (meeting reports, weekly reports, department
+ * member listing, board filtering) so access rules never live in per-role
+ * if/else chains scattered across controllers.
  *
- * A user's departments are read from every real membership signal already in
- * the schema, since no one of them is consistently populated for every
- * department-scoped role yet:
- *   - Department::leader_id      — the department's designated single leader
- *   - user_departments (pivot)   — general many-to-many assignment
- *   - team_members (status=active) — the department roster used for meeting
- *     attendance elsewhere in the app
- * This deliberately does not branch on role name — a user with no department
- * assignment at all gets zero departments regardless of their role slug.
+ * Two deliberately separate concepts, per EMC policy:
+ *
+ *   MEMBERSHIP — "does this user belong to the department" (roster/
+ *   attendance visibility). Read from `user_departments` (pivot) and active
+ *   `team_members` rows. Grants read access (view reports, view the member
+ *   roster) but NEVER report-creation rights.
+ *
+ *   LEADERSHIP — "is this user responsible for the department" (may create
+ *   and manage its reports). Read exclusively from the canonical
+ *   `departments.leader_id` column — the schema's single-leader-per-
+ *   department relationship. A user can lead several departments (several
+ *   Department rows sharing their `leader_id`), but being an active team
+ *   member never implies leadership, and a department-scoped role name
+ *   (e.g. "programs_manager") never implies leadership by itself — only an
+ *   actual `leader_id` assignment does.
+ *
+ * Privileged system roles (super_admin/tech_admin/executive_admin/admin)
+ * bypass both checks — existing platform-wide admin override.
  */
 class DepartmentAccessService
 {
@@ -34,55 +43,95 @@ class DepartmentAccessService
         return in_array($user->role, self::GLOBAL_ROLES, true);
     }
 
-    /** Department IDs this user may read/write within. All departments for global roles. */
-    public function getAllowedDepartmentIds(User $user): Collection
+    /**
+     * Departments this user is the configured leader of — the canonical
+     * leadership relationship (departments.leader_id). This is the ONLY
+     * signal that grants report-creation rights for non-global users.
+     */
+    public function getLedDepartmentIds(User $user): Collection
     {
-        if ($this->isGlobal($user)) {
-            return Department::query()->pluck('id');
-        }
+        return Department::query()->where('leader_id', $user->id)->pluck('id');
+    }
 
-        $ledIds = Department::query()->where('leader_id', $user->id)->pluck('id');
+    /**
+     * Departments this user merely belongs to — roster/attendance
+     * membership only, never a source of report-creation rights.
+     */
+    public function getMemberDepartmentIds(User $user): Collection
+    {
         $pivotIds = $user->departments()->pluck('departments.id');
         $teamIds = TeamMember::query()
             ->where('user_id', $user->id)
             ->where('status', 'active')
             ->pluck('department_id');
 
-        return $ledIds->merge($pivotIds)->merge($teamIds)->unique()->values();
+        return $pivotIds->merge($teamIds)->unique()->values();
     }
 
+    /** Departments this user may READ (view reports/members) for: member ∪ leader ∪ all-if-global. */
+    public function getAccessibleDepartmentIds(User $user): Collection
+    {
+        if ($this->isGlobal($user)) {
+            return Department::query()->pluck('id');
+        }
+
+        return $this->getLedDepartmentIds($user)->merge($this->getMemberDepartmentIds($user))->unique()->values();
+    }
+
+    /** May this user READ this department's reports/roster? Membership OR leadership OR global. */
     public function canAccessDepartment(User $user, int $departmentId): bool
     {
         if ($this->isGlobal($user)) {
             return true;
         }
 
-        return $this->getAllowedDepartmentIds($user)->contains($departmentId);
+        return $this->getAccessibleDepartmentIds($user)->contains($departmentId);
     }
 
-    /** The department to auto-select/lock the UI to when a scoped user has exactly one. Null otherwise (0, 2+, or global). */
-    public function resolveSoleDepartmentId(User $user): ?int
+    /**
+     * May this user CREATE/manage reports for this department? Leadership
+     * (or global override) ONLY — active membership is not sufficient, and
+     * neither is holding a department-scoped role name without an actual
+     * leader_id assignment.
+     */
+    public function canManageDepartment(User $user, int $departmentId): bool
     {
         if ($this->isGlobal($user)) {
-            return null;
+            return true;
         }
 
-        $ids = $this->getAllowedDepartmentIds($user);
-
-        return $ids->count() === 1 ? $ids->first() : null;
+        return $this->getLedDepartmentIds($user)->contains($departmentId);
     }
 
-    /** Restrict a list query to the user's allowed departments. No-op for global roles. */
+    /** Restrict a list (read) query to the user's accessible departments. No-op for global roles. */
     public function scopeQuery(Builder $query, User $user, string $column = 'department_id'): Builder
     {
         if ($this->isGlobal($user)) {
             return $query;
         }
 
-        return $query->whereIn($column, $this->getAllowedDepartmentIds($user));
+        return $query->whereIn($column, $this->getAccessibleDepartmentIds($user));
     }
 
-    /** The manifest shape the frontend uses to decide dropdown vs. locked field vs. full selector. */
+    /** The department to auto-select/lock the create-report UI to when a leader leads exactly one. Null otherwise (0, 2+, or global). */
+    public function resolveSoleLedDepartmentId(User $user): ?int
+    {
+        if ($this->isGlobal($user)) {
+            return null;
+        }
+
+        $ids = $this->getLedDepartmentIds($user);
+
+        return $ids->count() === 1 ? $ids->first() : null;
+    }
+
+    /**
+     * The manifest the frontend uses to build the report-CREATION UI —
+     * always leadership-scoped (or global), never membership-scoped, since
+     * only leaders (and global admins) may create reports. An empty
+     * `allowed_departments` for a non-global user means they lead nothing
+     * and the create action must be hidden, not shown with an empty field.
+     */
     public function manifest(User $user): array
     {
         if ($this->isGlobal($user)) {
@@ -96,7 +145,7 @@ class DepartmentAccessService
             ];
         }
 
-        $ids = $this->getAllowedDepartmentIds($user);
+        $ids = $this->getLedDepartmentIds($user);
 
         return [
             'department_scope' => 'restricted',

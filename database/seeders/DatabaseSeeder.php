@@ -45,8 +45,13 @@ class DatabaseSeeder extends Seeder
 
         // ── Departments ───────────────────────────────────────────────────────
         // المسميات الرسمية للإدارات الـ13 — مصدر واحد: OfficialDepartmentsSeeder
+        // leader_id is intentionally left null here — it is now the canonical
+        // department-leadership relationship that gates report creation
+        // (DepartmentAccessService::canManageDepartment). Blanket-assigning it
+        // to the seed Admin account would make every fresh environment think
+        // Admin leads all 13 departments, which is not real leadership data.
+        // Assign real leaders per department via the Department Management UI.
         $this->call(OfficialDepartmentsSeeder::class);
-        Department::query()->update(['leader_id' => $admin->id]);
 
         // ── Sections for "Programs & Tracks" department ───────────────────────
         $programs = Department::where('slug', 'programs-tracks')->first();
