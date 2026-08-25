@@ -23,6 +23,7 @@ class DemoUserSeeder extends Seeder
         ['name' => 'Volunteer',         'email' => 'volunteer@emc.test',   'role' => 'volunteer'],
         ['name' => 'Dept. Manager',     'email' => 'deptmanager@emc.test', 'role' => 'department_manager'],
         ['name' => 'AI Manager',        'email' => 'ai@emc.test',          'role' => 'ai_manager'],
+        ['name' => 'Ambassadors Mgr',   'email' => 'ambassadors@emc.test', 'role' => 'department_manager'],
     ];
 
     public function run(): void

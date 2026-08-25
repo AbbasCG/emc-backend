@@ -9,6 +9,18 @@ class UserResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
+        $departmentId = null;
+        if ($this->relationLoaded('departments') && $this->departments->count() > 0) {
+            $departmentId = $this->departments->where('pivot.is_primary', true)->first()->id ?? $this->departments->first()->id;
+        } elseif ($this->department) {
+            if (is_numeric($this->department)) {
+                $departmentId = (int) $this->department;
+            } else {
+                $dept = \App\Models\Department::where('slug', $this->department)->first();
+                if ($dept) $departmentId = $dept->id;
+            }
+        }
+
         return [
             'id'                         => $this->id,
             'name'                       => $this->name,
@@ -17,6 +29,7 @@ class UserResource extends JsonResource
             'phone_country_code'         => $this->phone_country_code,
             'role'                       => $this->effectiveRole(),
             'department'                 => $this->department,
+            'department_id'              => $departmentId,
             'is_active'                  => $this->is_active ?? true,
             'city'                       => $this->city,
             'gender'                     => $this->gender,

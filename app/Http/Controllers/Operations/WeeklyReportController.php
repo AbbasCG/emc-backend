@@ -24,8 +24,14 @@ class WeeklyReportController extends Controller
 
     public function index(Request $request): JsonResponse
     {
+        $user = $request->user();
+
         $reports = WeeklyDepartmentReport::query()
             ->with(['department:id,name', 'submitter:id,name', 'ratings.user:id,name'])
+            ->when(! $user->isAdmin() && ! $user->inDepartment('quality-governance'), function ($q) use ($user) {
+                $userDepartmentIds = $user->departments()->pluck('departments.id');
+                $q->whereIn('department_id', $userDepartmentIds);
+            })
             ->when($request->department_id, fn ($q) => $q->where('department_id', $request->department_id))
             ->when($request->week_start, fn ($q) => $q->whereDate('week_start', $request->week_start))
             ->orderByDesc('week_start')

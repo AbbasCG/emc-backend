@@ -807,7 +807,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
     Route::patch('board/tasks/{task}/status',        [\App\Http\Controllers\Admin\TaskController::class, 'updateStatus']);
 
     // كتابة التقارير ومنح النقاط: مدراء مخوَّلون فقط
-    Route::middleware('role:admin,super_admin,tech_admin,executive_admin,hr_manager,operations_manager,department_manager')->group(function () {
+    Route::middleware('role:admin,super_admin,tech_admin,executive_admin,hr_manager,operations_manager,department_manager,finance_manager,marketing_manager,quality_manager,programs_manager,partnerships_manager,community_manager,ai_manager')->group(function () {
         Route::post('meeting-reports',               [MeetingReportController::class, 'store']);
         Route::post('weekly-reports',                [WeeklyReportController::class, 'store']);
         Route::post('volunteer-points/awards',       [VolunteerPointsController::class, 'award']);

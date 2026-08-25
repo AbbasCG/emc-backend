@@ -26,6 +26,7 @@ class OfficialDepartmentsSeeder extends Seeder
         'human-resources'      => ['إدارة الموارد البشرية والشؤون القانونية',      'HR & Legal Affairs',                '#6d6875', 'users',           10],
         'marketing-media'      => ['إدارة الإعلام والتسويق',                       'Media & Marketing',                 '#e94560', 'megaphone',       11],
         'ai-transformation'    => ['إدارة الذكاء الاصطناعي والتحول الرقمي',        'AI & Digital Transformation',       '#0E5A8A', 'cpu',             12],
+        'digital-ambassadors'  => ['إدارة سفراء التحول الرقمي',                    'Digital Transformation Ambassadors', '#2A9D8F', 'globe',           13],
         'advisors'             => ['إدارة الاستشارات والمستشارين',                 'Advisory & Consultants',            '#0077B6', 'user-check',      13],
     ];
 

@@ -147,6 +147,10 @@ class AdminUserController extends Controller
             'is_active'                 => $data['is_active'] ?? true,
         ]);
 
+        if (isset($data['department']) && is_numeric($data['department'])) {
+            $user->departments()->sync([$data['department'] => ['is_primary' => true]]);
+        }
+
         // Auto-create instructor profile so user appears in the instructors module
         if (in_array($user->role, ['instructor', 'teacher'], true)) {
             AdminInstructorController::ensureProfile($user);
@@ -255,6 +259,14 @@ class AdminUserController extends Controller
         unset($data['remove_avatar']);
 
         $user->update($data);
+
+        if (array_key_exists('department', $data)) {
+            if (is_numeric($data['department'])) {
+                $user->departments()->sync([$data['department'] => ['is_primary' => true]]);
+            } elseif (empty($data['department'])) {
+                $user->departments()->detach();
+            }
+        }
 
         if (in_array($user->fresh()->role, ['instructor', 'teacher'], true)) {
             AdminInstructorController::ensureProfile($user->fresh());
