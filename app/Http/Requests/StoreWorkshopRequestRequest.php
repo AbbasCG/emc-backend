@@ -44,7 +44,7 @@ class StoreWorkshopRequestRequest extends FormRequest
             'location_types'       => 'required|array|min:1',
             'location_types.*'     => 'required|string|max:255',
             'price_type'           => 'required|in:free,paid',
-            'price_amount'         => 'required_if:price_type,paid|nullable|numeric|min:0',
+            'price_amount'         => 'required_if:price_type,paid|nullable|numeric|gt:0',
         ];
     }
 
@@ -86,7 +86,7 @@ class StoreWorkshopRequestRequest extends FormRequest
             'price_type.in'              => 'نوع الرسوم يجب أن يكون مجاني أو مدفوع',
             'price_amount.required_if'   => 'قيمة الرسوم مطلوبة للبرامج المدفوعة',
             'price_amount.numeric'       => 'قيمة الرسوم يجب أن تكون رقماً',
-            'price_amount.min'           => 'قيمة الرسوم يجب أن تكون صفراً أو أكثر',
+            'price_amount.gt'            => 'قيمة الرسوم يجب أن تكون أكبر من صفر',
         ];
     }
 }
