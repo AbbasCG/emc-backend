@@ -10,7 +10,7 @@ class TeamMember extends Model
 {
     use Auditable;
     protected $fillable = [
-        'user_id', 'department_id', 'section_id', 'role_title', 'status', 'joined_at',
+        'user_id', 'department_id', 'section_id', 'unit_id', 'role_title', 'status', 'joined_at',
     ];
 
     protected $casts = [
@@ -30,5 +30,10 @@ class TeamMember extends Model
     public function section(): BelongsTo
     {
         return $this->belongsTo(DepartmentSection::class, 'section_id');
+    }
+
+    public function unit(): BelongsTo
+    {
+        return $this->belongsTo(DepartmentalUnit::class, 'unit_id');
     }
 }

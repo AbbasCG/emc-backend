@@ -73,17 +73,54 @@ class TicketController extends Controller
         return $ticket->assigned_to_id !== null && $ticket->assigned_to_id === $user->id;
     }
 
+    /**
+     * Is $assignee eligible to be assigned a ticket in $departmentId, optionally
+     * scoped to a specific technical unit? When $unitId is given, membership must
+     * be exact — an active team_members row for that user in that unit AND
+     * department (never just "somewhere in the department"), closing the ID-
+     * manipulation path where a caller sends a valid unit alongside a user who
+     * belongs to a *different* unit. Global roles bypass both checks, same as
+     * every other authorization path in this controller.
+     */
+    private function assigneeEligible(User $assignee, int $departmentId, ?int $unitId): bool
+    {
+        if ($this->departmentAccess->isGlobal($assignee)) {
+            return true;
+        }
+
+        if ($unitId) {
+            return \App\Models\TeamMember::where('user_id', $assignee->id)
+                ->where('unit_id', $unitId)
+                ->where('department_id', $departmentId)
+                ->where('status', 'active')
+                ->exists();
+        }
+
+        return $this->departmentAccess->canAccessDepartment($assignee, $departmentId);
+    }
+
     private function forbidden(string $message = 'ليست لديك صلاحية للوصول إلى هذه التذكرة.')
     {
         return response()->json(['success' => false, 'message' => $message], 403);
     }
 
     /**
-     * System metadata for the ticket forms. Authenticated only. The
-     * assignable-users list is scoped to users eligible for the given
-     * department (its members/leader) plus Tech Support staff, never the
-     * entire user table — and email is only included for privileged roles
-     * building the approval/assignment UI.
+     * System metadata for the ticket forms. Authenticated only.
+     *
+     * `tech_units` (kept under its original key for frontend-contract
+     * stability) is now genuinely department-scoped: pass `department_id`
+     * (normally the target ticket's own department) to get that
+     * department's active units — never a hardcoded "Technology department"
+     * lookup, and never every unit in the system. Omitted, it returns none
+     * — a caller should always know which department it's asking about.
+     *
+     * `users` (the assignable-employee list) is scoped the same way it
+     * always was by department alone, but now additionally narrows to a
+     * specific technical unit when `unit_id` is passed alongside
+     * `department_id` — active team_members of that exact unit, never the
+     * whole department or the whole platform. Only privileged roles ever
+     * receive this list; email is intentionally omitted (least privilege —
+     * the UI only needs id/name to let someone search and select).
      */
     public function meta(Request $request)
     {
@@ -92,13 +129,12 @@ class TicketController extends Controller
 
         $departments = Department::where('is_active', true)->get(['id', 'name', 'name_ar', 'slug']);
 
-        $techDepartment = Department::where('slug', 'tech-support')
-            ->orWhere('name_ar', 'LIKE', '%التقنية%')
-            ->first();
+        $departmentId = $request->integer('department_id') ?: null;
+        $unitId = $request->integer('unit_id') ?: null;
 
         $techUnits = [];
-        if ($techDepartment) {
-            $techUnits = DepartmentalUnit::where('department_id', $techDepartment->id)
+        if ($departmentId) {
+            $techUnits = DepartmentalUnit::where('department_id', $departmentId)
                 ->where('is_active', true)
                 ->get();
         }
@@ -106,11 +142,16 @@ class TicketController extends Controller
         // Assignable users: only relevant when building the admin/assignment UI.
         // Least privilege — no email, no full user table for ordinary submitters.
         $assignableUsers = [];
-        if ($isPrivileged) {
-            $departmentId = $request->integer('department_id') ?: null;
-            $query = User::query()->select('id', 'name', 'role')->where('is_active', true);
-
-            if ($departmentId) {
+        if ($isPrivileged && $departmentId) {
+            // A unit was chosen: eligibility is exact unit membership, nothing
+            // broader — this is what stops "unit A selected, user from unit B
+            // sent anyway" from ever appearing as an option in the first place.
+            if ($unitId) {
+                $memberIds = \App\Models\TeamMember::where('department_id', $departmentId)
+                    ->where('unit_id', $unitId)
+                    ->where('status', 'active')
+                    ->pluck('user_id');
+            } else {
                 $memberIds = collect();
                 $dept = Department::find($departmentId);
                 if ($dept) {
@@ -123,7 +164,11 @@ class TicketController extends Controller
                             ->pluck('user_id')
                     );
                 }
-                // Tech Support staff can always be assigned (they run the ticket desk).
+                // Tech Support staff can always be assigned (they run the ticket
+                // desk) when no specific unit was chosen — unchanged from before.
+                $techDepartment = Department::where('slug', 'technology')
+                    ->orWhere('name_ar', 'LIKE', '%التقنية%')
+                    ->first();
                 if ($techDepartment) {
                     $memberIds = $memberIds->merge(
                         \App\Models\TeamMember::where('department_id', $techDepartment->id)
@@ -131,10 +176,14 @@ class TicketController extends Controller
                             ->pluck('user_id')
                     );
                 }
-                $query->whereIn('id', $memberIds->unique()->values());
             }
 
-            $assignableUsers = $query->limit(200)->get();
+            $assignableUsers = User::query()
+                ->select('id', 'name', 'role')
+                ->where('is_active', true)
+                ->whereIn('id', $memberIds->unique()->values())
+                ->limit(200)
+                ->get();
         }
 
         return response()->json([
@@ -416,14 +465,18 @@ class TicketController extends Controller
             }
         }
 
-        // The assignee must actually be eligible for this department (member/leader) or global staff.
+        // The assignee must actually be eligible: an active member of the selected
+        // unit (when a unit was chosen) or, absent a unit, of the department itself.
         if ($request->filled('assigned_to_id')) {
             $assignee = User::find($request->assigned_to_id);
-            if (! $assignee || ! $this->departmentAccess->canAccessDepartment($assignee, (int) $ticket->department_id)) {
+            $unitId = $request->filled('unit_id') ? (int) $request->unit_id : null;
+            if (! $assignee || ! $this->assigneeEligible($assignee, (int) $ticket->department_id, $unitId)) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'المستخدم المحدد غير مؤهل لإسناد تذاكر هذه الإدارة إليه.',
-                    'errors' => ['assigned_to_id' => ['المستخدم المحدد غير مؤهل لإسناد تذاكر هذه الإدارة إليه.']],
+                    'message' => $unitId
+                        ? 'المستخدم المحدد ليس عضواً فعالاً في الوحدة التقنية المختارة.'
+                        : 'المستخدم المحدد غير مؤهل لإسناد تذاكر هذه الإدارة إليه.',
+                    'errors' => ['assigned_to_id' => ['المستخدم المحدد غير مؤهل للتكليف بناءً على الوحدة/الإدارة المحددة.']],
                 ], 422);
             }
         }
@@ -800,15 +853,6 @@ class TicketController extends Controller
             'reason'         => 'nullable|string|max:500',
         ]);
 
-        $assignee = User::find($request->assigned_to_id);
-        if (! $this->departmentAccess->canAccessDepartment($assignee, (int) $ticket->department_id)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'المستخدم المحدد غير مؤهل لإسناد تذاكر هذه الإدارة إليه.',
-                'errors' => ['assigned_to_id' => ['المستخدم المحدد غير مؤهل لإسناد تذاكر هذه الإدارة إليه.']],
-            ], 422);
-        }
-
         if ($request->filled('unit_id')) {
             $unitBelongs = DepartmentalUnit::where('id', $request->unit_id)
                 ->where('department_id', $ticket->department_id)
@@ -820,6 +864,22 @@ class TicketController extends Controller
                     'errors' => ['unit_id' => ['الوحدة المحددة لا تتبع إدارة هذه التذكرة.']],
                 ], 422);
             }
+        }
+
+        // Effective unit for eligibility purposes: the one being set now, else the
+        // ticket's existing unit (a reassign that doesn't touch unit_id must still
+        // enforce membership in whatever unit the ticket already carries).
+        $effectiveUnitId = $request->filled('unit_id') ? (int) $request->unit_id : $ticket->unit_id;
+
+        $assignee = User::find($request->assigned_to_id);
+        if (! $this->assigneeEligible($assignee, (int) $ticket->department_id, $effectiveUnitId)) {
+            return response()->json([
+                'success' => false,
+                'message' => $effectiveUnitId
+                    ? 'المستخدم المحدد ليس عضواً فعالاً في الوحدة التقنية المختارة.'
+                    : 'المستخدم المحدد غير مؤهل لإسناد تذاكر هذه الإدارة إليه.',
+                'errors' => ['assigned_to_id' => ['المستخدم المحدد غير مؤهل للتكليف بناءً على الوحدة/الإدارة المحددة.']],
+            ], 422);
         }
 
         $prevState = $ticket->status;

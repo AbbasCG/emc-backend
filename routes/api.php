@@ -1860,6 +1860,16 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::delete('team-members/{teamMember}',  [AdminTeamMemberController::class, 'destroy']);
 });
 
+// ─── Departmental (technical) units — no hard delete, only deactivate; write
+// access is further gated per-department inside the controller via
+// DepartmentAccessService::canManageDepartment (department leader or global) ──
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,department_manager,section_lead,hr_manager,finance_manager,marketing_manager,quality_manager,programs_manager,operations_manager,partnerships_manager,community_manager,ai_manager'])->prefix('admin')->group(function () {
+    Route::get('departmental-units',                    [\App\Http\Controllers\Admin\AdminDepartmentalUnitController::class, 'index']);
+    Route::post('departmental-units',                   [\App\Http\Controllers\Admin\AdminDepartmentalUnitController::class, 'store']);
+    Route::put('departmental-units/{departmentalUnit}',   [\App\Http\Controllers\Admin\AdminDepartmentalUnitController::class, 'update']);
+    Route::patch('departmental-units/{departmentalUnit}', [\App\Http\Controllers\Admin\AdminDepartmentalUnitController::class, 'update']);
+});
+
 // ─── Workshop Requests: list — any authenticated user (controller filters by role/dept) ──────
 Route::middleware(['auth:sanctum'])->prefix('admin')->group(function () {
     Route::get('workshop-requests', [WorkshopRequestController::class, 'index']);

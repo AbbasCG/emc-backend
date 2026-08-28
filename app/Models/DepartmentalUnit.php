@@ -29,4 +29,9 @@ class DepartmentalUnit extends Model
     {
         return $this->hasMany(Ticket::class, 'unit_id');
     }
+
+    public function teamMembers(): HasMany
+    {
+        return $this->hasMany(TeamMember::class, 'unit_id');
+    }
 }

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\DepartmentalUnit;
 use App\Models\TeamMember;
 use App\Services\AuditLogService;
 use Illuminate\Http\JsonResponse;
@@ -13,9 +14,16 @@ class AdminTeamMemberController extends Controller
     // GET /api/admin/team-members
     public function index(Request $request): JsonResponse
     {
-        $members = TeamMember::with(['user:id,name,email,role', 'department:id,name', 'section:id,name'])
+        $members = TeamMember::with(['user:id,name,email,role', 'department:id,name', 'section:id,name', 'unit:id,name_ar,name_en,department_id'])
             ->when($request->department_id, fn ($q) => $q->where('department_id', $request->department_id))
             ->when($request->status, fn ($q) => $q->where('status', $request->status))
+            ->when($request->filled('unit_id'), function ($q) use ($request) {
+                if ($request->unit_id === 'null') {
+                    $q->whereNull('unit_id');
+                } else {
+                    $q->where('unit_id', $request->unit_id);
+                }
+            })
             ->when($request->search, function ($q) use ($request) {
                 $q->whereHas('user', fn ($u) => $u->where('name', 'like', "%{$request->search}%")
                     ->orWhere('email', 'like', "%{$request->search}%"));
@@ -41,6 +49,7 @@ class AdminTeamMemberController extends Controller
             'user_id'       => 'required|exists:users,id',
             'department_id' => 'required|exists:departments,id',
             'section_id'    => 'nullable|exists:department_sections,id',
+            'unit_id'       => 'nullable|exists:departmental_units,id',
             'role_title'    => 'nullable|string|max:255',
             'status'        => 'nullable|in:active,inactive,on_leave',
             'joined_at'     => 'nullable|date',
@@ -48,8 +57,15 @@ class AdminTeamMemberController extends Controller
 
         $data['status'] = $data['status'] ?? 'active';
 
+        if (! empty($data['unit_id']) && ! $this->unitBelongsToDepartment($data['unit_id'], $data['department_id'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'الوحدة التقنية المختارة لا تتبع الإدارة المحددة.',
+            ], 422);
+        }
+
         $member = TeamMember::create($data);
-        $member->load(['user:id,name,email,role', 'department:id,name', 'section:id,name']);
+        $member->load(['user:id,name,email,role', 'department:id,name', 'section:id,name', 'unit:id,name_ar,name_en,department_id']);
 
         AuditLogService::log('created', 'TeamMember', $member->id,
             $member->user?->name ?? "member#{$member->id}",
@@ -76,16 +92,25 @@ class AdminTeamMemberController extends Controller
         $data = $request->validate([
             'department_id' => 'sometimes|exists:departments,id',
             'section_id'    => 'nullable|exists:department_sections,id',
+            'unit_id'       => 'nullable|exists:departmental_units,id',
             'role_title'    => 'nullable|string|max:255',
             'status'        => 'sometimes|in:active,inactive,on_leave',
             'joined_at'     => 'nullable|date',
         ]);
 
+        $effectiveDepartmentId = $data['department_id'] ?? $teamMember->department_id;
+        if (! empty($data['unit_id']) && ! $this->unitBelongsToDepartment($data['unit_id'], $effectiveDepartmentId)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'الوحدة التقنية المختارة لا تتبع الإدارة المحددة.',
+            ], 422);
+        }
+
         $oldSnap = $this->format($teamMember);
         $oldStatus = $teamMember->status;
 
         $teamMember->update($data);
-        $teamMember->load(['user:id,name,email,role', 'department:id,name', 'section:id,name']);
+        $teamMember->load(['user:id,name,email,role', 'department:id,name', 'section:id,name', 'unit:id,name_ar,name_en,department_id']);
 
         $action = isset($data['status']) && $data['status'] !== $oldStatus ? 'status_changed' : 'updated';
         AuditLogService::log($action, 'TeamMember', $teamMember->id,
@@ -120,10 +145,21 @@ class AdminTeamMemberController extends Controller
             'user'          => $m->user ? ['id' => $m->user->id, 'name' => $m->user->name, 'email' => $m->user->email, 'role' => $m->user->role] : null,
             'department'    => $m->department ? ['id' => $m->department->id, 'name' => $m->department->name] : null,
             'section'       => $m->section ? ['id' => $m->section->id, 'name' => $m->section->name] : null,
+            'unit'          => $m->unit ? ['id' => $m->unit->id, 'name_ar' => $m->unit->name_ar, 'name_en' => $m->unit->name_en] : null,
             'role_title'    => $m->role_title,
             'status'        => $m->status,
             'joined_at'     => $m->joined_at,
             'created_at'    => $m->created_at,
         ];
+    }
+
+    /** Phase 4 consistency rule: a unit can only be assigned to a member of the SAME department. */
+    private function unitBelongsToDepartment(int $unitId, ?int $departmentId): bool
+    {
+        if (! $departmentId) {
+            return false;
+        }
+
+        return DepartmentalUnit::where('id', $unitId)->where('department_id', $departmentId)->exists();
     }
 }

@@ -392,4 +392,178 @@ class TicketTest extends TestCase
             'sla_hours' => 24, 'assigned_to_id' => $ineligible->id,
         ])->assertStatus(422);
     }
+
+    // ── Unit membership (team_members.unit_id) ──────────────────────────────
+
+    private function makeUnit(Department $dept, array $overrides = []): DepartmentalUnit
+    {
+        return DepartmentalUnit::create(array_merge([
+            'department_id' => $dept->id,
+            'code' => 'UNIT-' . Str::random(6),
+            'name_ar' => 'وحدة تجريبية',
+            'is_active' => true,
+        ], $overrides));
+    }
+
+    private function makeUnitMember(Department $dept, DepartmentalUnit $unit, array $overrides = []): User
+    {
+        $user = $this->makeUser();
+        \App\Models\TeamMember::create(array_merge([
+            'user_id' => $user->id,
+            'department_id' => $dept->id,
+            'unit_id' => $unit->id,
+            'status' => 'active',
+        ], $overrides));
+
+        return $user;
+    }
+
+    public function test_meta_returns_units_only_for_the_requested_department(): void
+    {
+        $dept = $this->makeDepartment();
+        $otherDept = $this->makeDepartment();
+        $this->makeUnit($dept, ['code' => 'MINE']);
+        $this->makeUnit($otherDept, ['code' => 'THEIRS']);
+        $admin = $this->makeUser('super_admin');
+
+        $res = $this->actingAs($admin)->getJson('/api/v1/tickets/meta?department_id=' . $dept->id);
+
+        $res->assertOk();
+        $codes = collect($res->json('tech_units'))->pluck('code');
+        $this->assertTrue($codes->contains('MINE'));
+        $this->assertFalse($codes->contains('THEIRS'));
+    }
+
+    public function test_meta_returns_no_units_without_a_department_id(): void
+    {
+        $dept = $this->makeDepartment();
+        $this->makeUnit($dept);
+        $admin = $this->makeUser('super_admin');
+
+        $res = $this->actingAs($admin)->getJson('/api/v1/tickets/meta');
+
+        $res->assertOk();
+        $this->assertSame([], $res->json('tech_units'));
+    }
+
+    public function test_meta_scopes_assignable_users_to_the_selected_unit(): void
+    {
+        $dept = $this->makeDepartment();
+        $unitA = $this->makeUnit($dept, ['code' => 'A']);
+        $unitB = $this->makeUnit($dept, ['code' => 'B']);
+        $memberA = $this->makeUnitMember($dept, $unitA);
+        $memberB = $this->makeUnitMember($dept, $unitB);
+        $admin = $this->makeUser('super_admin');
+
+        $res = $this->actingAs($admin)->getJson(
+            "/api/v1/tickets/meta?department_id={$dept->id}&unit_id={$unitA->id}"
+        );
+
+        $res->assertOk();
+        $ids = collect($res->json('users'))->pluck('id');
+        $this->assertTrue($ids->contains($memberA->id));
+        $this->assertFalse($ids->contains($memberB->id));
+    }
+
+    public function test_meta_excludes_inactive_unit_member(): void
+    {
+        $dept = $this->makeDepartment();
+        $unit = $this->makeUnit($dept);
+        $inactiveMember = $this->makeUnitMember($dept, $unit, ['status' => 'inactive']);
+        $admin = $this->makeUser('super_admin');
+
+        $res = $this->actingAs($admin)->getJson(
+            "/api/v1/tickets/meta?department_id={$dept->id}&unit_id={$unit->id}"
+        );
+
+        $ids = collect($res->json('users'))->pluck('id');
+        $this->assertFalse($ids->contains($inactiveMember->id));
+    }
+
+    public function test_approve_with_valid_unit_and_unit_member_succeeds(): void
+    {
+        $dept = $this->makeDepartment();
+        $leader = $this->makeLeader($dept);
+        $unit = $this->makeUnit($dept);
+        $member = $this->makeUnitMember($dept, $unit);
+        $ticket = $this->makeTicket($dept);
+
+        $this->actingAs($leader)->postJson("/api/v1/tickets/{$ticket->id}/approve", [
+            'sla_hours' => 24, 'unit_id' => $unit->id, 'assigned_to_id' => $member->id,
+        ])->assertOk();
+
+        $this->assertSame('ASSIGNED', $ticket->fresh()->status);
+        $this->assertSame($member->id, $ticket->fresh()->assigned_to_id);
+    }
+
+    public function test_approve_rejects_employee_from_a_different_unit_than_the_one_selected(): void
+    {
+        $dept = $this->makeDepartment();
+        $leader = $this->makeLeader($dept);
+        $unitA = $this->makeUnit($dept, ['code' => 'A2']);
+        $unitB = $this->makeUnit($dept, ['code' => 'B2']);
+        $memberOfB = $this->makeUnitMember($dept, $unitB);
+        $ticket = $this->makeTicket($dept);
+
+        // The exact ID-manipulation attack from the spec: unit A selected,
+        // assignee is actually a member of unit B only.
+        $this->actingAs($leader)->postJson("/api/v1/tickets/{$ticket->id}/approve", [
+            'sla_hours' => 24, 'unit_id' => $unitA->id, 'assigned_to_id' => $memberOfB->id,
+        ])->assertStatus(422);
+    }
+
+    public function test_approve_rejects_arbitrary_active_user_who_is_not_a_unit_member(): void
+    {
+        $dept = $this->makeDepartment();
+        $leader = $this->makeLeader($dept);
+        $unit = $this->makeUnit($dept);
+        $randomUser = $this->makeUser(); // active, but no team_members row at all
+
+        $ticket = $this->makeTicket($dept);
+
+        $this->actingAs($leader)->postJson("/api/v1/tickets/{$ticket->id}/approve", [
+            'sla_hours' => 24, 'unit_id' => $unit->id, 'assigned_to_id' => $randomUser->id,
+        ])->assertStatus(422);
+    }
+
+    public function test_reassign_rejects_employee_from_a_different_unit(): void
+    {
+        $dept = $this->makeDepartment();
+        $leader = $this->makeLeader($dept);
+        $unitA = $this->makeUnit($dept, ['code' => 'RA']);
+        $unitB = $this->makeUnit($dept, ['code' => 'RB']);
+        $memberOfB = $this->makeUnitMember($dept, $unitB);
+        $ticket = $this->makeTicket($dept, ['status' => 'ASSIGNED']);
+
+        $this->actingAs($leader)->postJson("/api/v1/tickets/{$ticket->id}/reassign", [
+            'unit_id' => $unitA->id, 'assigned_to_id' => $memberOfB->id,
+        ])->assertStatus(422);
+    }
+
+    public function test_approve_global_role_bypasses_unit_membership_check(): void
+    {
+        $dept = $this->makeDepartment();
+        $leader = $this->makeLeader($dept);
+        $unit = $this->makeUnit($dept);
+        $globalAdmin = $this->makeUser('super_admin'); // no team_members row anywhere
+
+        $ticket = $this->makeTicket($dept);
+
+        $this->actingAs($leader)->postJson("/api/v1/tickets/{$ticket->id}/approve", [
+            'sla_hours' => 24, 'unit_id' => $unit->id, 'assigned_to_id' => $globalAdmin->id,
+        ])->assertOk();
+    }
+
+    public function test_unauthorized_user_still_cannot_approve_with_unit_and_member(): void
+    {
+        $dept = $this->makeDepartment();
+        $unit = $this->makeUnit($dept);
+        $member = $this->makeUnitMember($dept, $unit);
+        $outsider = $this->makeUser(); // not the department's leader, not global
+        $ticket = $this->makeTicket($dept);
+
+        $this->actingAs($outsider)->postJson("/api/v1/tickets/{$ticket->id}/approve", [
+            'sla_hours' => 24, 'unit_id' => $unit->id, 'assigned_to_id' => $member->id,
+        ])->assertStatus(403);
+    }
 }
