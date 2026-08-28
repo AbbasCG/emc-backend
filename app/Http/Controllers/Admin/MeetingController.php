@@ -20,14 +20,69 @@ class MeetingController extends Controller
 {
     public function index(Request $request): \Illuminate\Http\JsonResponse
     {
-        $meetings = Meeting::with(['department', 'organizer'])
-            ->when($request->department_id, fn ($q) => $q->where('department_id', $request->department_id))
-            ->when($request->type, fn ($q) => $q->where('type', $request->type))
-            ->when($request->status, fn ($q) => $q->where('status', $request->status))
-            ->latest('meeting_date')
-            ->paginate(20);
+        $user = $request->user();
+        $query = Meeting::with(['department', 'organizer']);
 
-        return response()->json(['success' => true, 'data' => MeetingResource::collection($meetings)->response()->getData(true)]);
+        // Check if user has global audit access (Quality & Governance, Super Admin, Tech Admin, Executive)
+        $hasGlobalAccess = false;
+
+        if ($user) {
+            $role = strtolower($user->role ?? '');
+
+            $isQualityDept = false;
+            if ($user->department_id || $user->relationLoaded('department')) {
+                $deptName = mb_strtolower($user->department?->name_ar ?? '');
+                $deptSlug = strtolower($user->department?->slug ?? '');
+                if (
+                    str_contains($deptSlug, 'quality') ||
+                    str_contains($deptSlug, 'governance') ||
+                    str_contains($deptName, 'الجودة') ||
+                    str_contains($deptName, 'الحوكمة')
+                ) {
+                    $isQualityDept = true;
+                }
+            }
+
+            if (
+                in_array($role, ['super_admin', 'tech_admin', 'admin', 'executive', 'executive_admin', 'quality_manager', 'quality']) ||
+                $isQualityDept
+            ) {
+                $hasGlobalAccess = true;
+            }
+        }
+
+        // Restrict ordinary department users to ONLY see meetings of their department or created by themselves
+        if (!$hasGlobalAccess && $user) {
+            $userDeptId = $user->department_id;
+            $userId = $user->id;
+
+            $query->where(function ($q) use ($userDeptId, $userId) {
+                if ($userDeptId) {
+                    $q->where('department_id', $userDeptId);
+                }
+                $q->orWhere('organizer_id', $userId);
+            });
+        }
+
+        if ($request->department_id && ($hasGlobalAccess || $request->department_id == $user?->department_id)) {
+            $query->where('department_id', $request->department_id);
+        }
+
+        if ($request->type) {
+            $query->where('type', $request->type);
+        }
+
+        if ($request->status) {
+            $query->where('status', $request->status);
+        }
+
+        $perPage = (int) $request->get('per_page', 50);
+        $meetings = $query->latest('meeting_date')->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'data' => MeetingResource::collection($meetings)->response()->getData(true)
+        ]);
     }
 
     public function store(Request $request): \Illuminate\Http\JsonResponse
@@ -65,8 +120,55 @@ class MeetingController extends Controller
         ], 201);
     }
 
-    public function show(Meeting $meeting): \Illuminate\Http\JsonResponse
+    protected function canUserAccessMeeting($user, Meeting $meeting): bool
     {
+        if (!$user) {
+            return false;
+        }
+
+        $role = strtolower($user->role ?? '');
+
+        $isQualityDept = false;
+        if ($user->department_id || $user->relationLoaded('department')) {
+            $deptName = mb_strtolower($user->department?->name_ar ?? '');
+            $deptSlug = strtolower($user->department?->slug ?? '');
+            if (
+                str_contains($deptSlug, 'quality') ||
+                str_contains($deptSlug, 'governance') ||
+                str_contains($deptName, 'الجودة') ||
+                str_contains($deptName, 'الحوكمة')
+            ) {
+                $isQualityDept = true;
+            }
+        }
+
+        if (
+            in_array($role, ['super_admin', 'tech_admin', 'admin', 'executive', 'executive_admin', 'quality_manager', 'quality']) ||
+            $isQualityDept
+        ) {
+            return true;
+        }
+
+        if ($user->department_id && $meeting->department_id == $user->department_id) {
+            return true;
+        }
+
+        if ($meeting->organizer_id == $user->id) {
+            return true;
+        }
+
+        return false;
+    }
+
+    public function show(Request $request, Meeting $meeting): \Illuminate\Http\JsonResponse
+    {
+        if (!$this->canUserAccessMeeting($request->user(), $meeting)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'غير مصرح لك باستعراض اجتماع خاص بإدارة أخرى',
+            ], 403);
+        }
+
         return response()->json([
             'success' => true,
             'data'    => new MeetingResource(

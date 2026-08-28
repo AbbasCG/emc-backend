@@ -17,6 +17,10 @@ return Application::configure(basePath: dirname(__DIR__))
         // encrypted HttpOnly session cookie. Bearer-token clients remain
         // supported by auth:sanctum as a compatibility fallback.
         $middleware->statefulApi();
+        $middleware->validateCsrfTokens(except: [
+            'api/*',
+            'sanctum/csrf-cookie',
+        ]);
 
         $middleware->alias([
             'role'               => \App\Http\Middleware\RoleMiddleware::class,
