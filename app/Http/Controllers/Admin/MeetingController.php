@@ -13,21 +13,56 @@ use App\Models\MeetingDecision;
 use App\Models\MeetingReport;
 use App\Models\Task;
 use App\Services\ActivityLogger;
+use App\Services\DepartmentAccessService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class MeetingController extends Controller
 {
+    public function __construct(private readonly DepartmentAccessService $departmentAccess)
+    {
+    }
+
     public function index(Request $request): \Illuminate\Http\JsonResponse
     {
-        $meetings = Meeting::with(['department', 'organizer'])
-            ->when($request->department_id, fn ($q) => $q->where('department_id', $request->department_id))
-            ->when($request->type, fn ($q) => $q->where('type', $request->type))
-            ->when($request->status, fn ($q) => $q->where('status', $request->status))
-            ->latest('meeting_date')
-            ->paginate(20);
+        $user = $request->user();
+        $query = Meeting::with(['department', 'organizer']);
 
-        return response()->json(['success' => true, 'data' => MeetingResource::collection($meetings)->response()->getData(true)]);
+        // Quality & Governance is a cross-department oversight function — same
+        // carve-out already established for Weekly Reports. Everyone else
+        // (including global roles, via DepartmentAccessService::isGlobal) is
+        // scoped through the canonical membership/leadership relationships,
+        // never the legacy user.department_id field which doesn't exist on
+        // the User model.
+        $hasGlobalAccess = $this->departmentAccess->isGlobal($user) || $user->inDepartment('quality-governance');
+
+        if (!$hasGlobalAccess) {
+            $accessibleDeptIds = $this->departmentAccess->getAccessibleDepartmentIds($user);
+            $query->where(function ($q) use ($accessibleDeptIds, $user) {
+                $q->whereIn('department_id', $accessibleDeptIds)
+                  ->orWhere('organizer_id', $user->id);
+            });
+        }
+
+        if ($request->department_id && ($hasGlobalAccess || $this->departmentAccess->canAccessDepartment($user, (int) $request->department_id))) {
+            $query->where('department_id', $request->department_id);
+        }
+
+        if ($request->type) {
+            $query->where('type', $request->type);
+        }
+
+        if ($request->status) {
+            $query->where('status', $request->status);
+        }
+
+        $perPage = (int) $request->get('per_page', 50);
+        $meetings = $query->latest('meeting_date')->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'data' => MeetingResource::collection($meetings)->response()->getData(true)
+        ]);
     }
 
     public function store(Request $request): \Illuminate\Http\JsonResponse
@@ -65,8 +100,36 @@ class MeetingController extends Controller
         ], 201);
     }
 
-    public function show(Meeting $meeting): \Illuminate\Http\JsonResponse
+    protected function canUserAccessMeeting($user, Meeting $meeting): bool
     {
+        if (!$user) {
+            return false;
+        }
+
+        if ($this->departmentAccess->isGlobal($user) || $user->inDepartment('quality-governance')) {
+            return true;
+        }
+
+        if ($meeting->department_id && $this->departmentAccess->canAccessDepartment($user, (int) $meeting->department_id)) {
+            return true;
+        }
+
+        if ($meeting->organizer_id == $user->id) {
+            return true;
+        }
+
+        return false;
+    }
+
+    public function show(Request $request, Meeting $meeting): \Illuminate\Http\JsonResponse
+    {
+        if (!$this->canUserAccessMeeting($request->user(), $meeting)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'غير مصرح لك باستعراض اجتماع خاص بإدارة أخرى',
+            ], 403);
+        }
+
         return response()->json([
             'success' => true,
             'data'    => new MeetingResource(

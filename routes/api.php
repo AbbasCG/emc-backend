@@ -98,6 +98,7 @@ use App\Http\Controllers\CalendarController;
 use App\Http\Controllers\NotificationPreferenceController;
 use App\Http\Controllers\Admin\WebhookEndpointController;
 use App\Http\Controllers\Admin\IntegrationSettingController;
+use App\Http\Controllers\Api\TicketController;
 use App\Http\Controllers\Admin\ApiTokenController;
 use App\Http\Controllers\Admin\NotificationTemplateController;
 use App\Http\Controllers\Admin\ExternalEventLogController;
@@ -2045,3 +2046,24 @@ Route::middleware(['auth:sanctum', 'role:super_admin,tech_admin'])->prefix('admi
     Route::get('/roles/{role}/delegatable', [\App\Http\Controllers\AdminPermissionController::class, 'getDelegatableConfig']);
     Route::post('/roles/{role}/delegatable/toggle', [\App\Http\Controllers\AdminPermissionController::class, 'toggleDelegatable']);
 });
+
+// ─── EMC Unified Tickets & Issue Tracking System Routes ────────────────────
+// Every action requires authentication; object-level authorization (creator/
+// assignee/department-leader/global) is enforced inside TicketController via
+// the canonical DepartmentAccessService — see its class docblock.
+Route::middleware('auth:sanctum')->prefix('v1/tickets')->group(function () {
+    Route::get('/meta', [TicketController::class, 'meta']);
+    Route::get('/', [TicketController::class, 'index']);
+    Route::post('/', [TicketController::class, 'store']);
+    Route::get('/{id}', [TicketController::class, 'show']);
+    Route::post('/{id}/approve', [TicketController::class, 'approve']);
+    Route::post('/{id}/reject', [TicketController::class, 'rejectByAdmin']);
+    Route::post('/{id}/accept-task', [TicketController::class, 'acceptTask']);
+    Route::post('/{id}/reject-task', [TicketController::class, 'rejectTask']);
+    Route::post('/{id}/complete-task', [TicketController::class, 'completeTask']);
+    Route::post('/{id}/comment', [TicketController::class, 'addComment']);
+    Route::post('/{id}/reassign', [TicketController::class, 'reassign']);
+    Route::get('/{ticketId}/attachments/{attachmentId}/download', [TicketController::class, 'downloadAttachment'])
+        ->name('tickets.attachments.download');
+});
+
