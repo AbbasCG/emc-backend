@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Operations;
 use App\Http\Controllers\Controller;
 use App\Models\Department;
 use App\Models\WeeklyDepartmentReport;
+use App\Services\DepartmentAccessService;
 use App\Services\ImpactPoints;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
@@ -16,6 +17,10 @@ use Illuminate\Http\Request;
  */
 class WeeklyReportController extends Controller
 {
+    public function __construct(private readonly DepartmentAccessService $departmentAccess)
+    {
+    }
+
     /** إثنين الأسبوع الحالي — التقرير يُنسب دائمًا إلى أسبوعٍ يبدأ بإثنين. */
     private function currentWeekStart(): CarbonImmutable
     {
@@ -26,12 +31,17 @@ class WeeklyReportController extends Controller
     {
         $user = $request->user();
 
+        // Quality & Governance is a cross-department oversight function — its
+        // members read every department's weekly reports. Everyone else is
+        // scoped to their accessible departments (membership ∪ leadership ∪
+        // the full privileged-role bypass) via DepartmentAccessService, which
+        // already no-ops for super_admin/tech_admin/executive_admin/admin.
         $reports = WeeklyDepartmentReport::query()
             ->with(['department:id,name', 'submitter:id,name', 'ratings.user:id,name'])
-            ->when(! $user->isAdmin() && ! $user->inDepartment('quality-governance'), function ($q) use ($user) {
-                $userDepartmentIds = $user->departments()->pluck('departments.id');
-                $q->whereIn('department_id', $userDepartmentIds);
-            })
+            ->when(
+                ! $user->inDepartment('quality-governance'),
+                fn ($q) => $this->departmentAccess->scopeQuery($q, $user)
+            )
             ->when($request->department_id, fn ($q) => $q->where('department_id', $request->department_id))
             ->when($request->week_start, fn ($q) => $q->whereDate('week_start', $request->week_start))
             ->orderByDesc('week_start')
@@ -40,8 +50,8 @@ class WeeklyReportController extends Controller
         return response()->json(['success' => true, 'data' => $reports]);
     }
 
-    /** أي الإدارات لم تسلِّم تقرير هذا الأسبوع بعد؟ يغذي لافتة الاستحقاق يوم الإثنين. */
-    public function due(): JsonResponse
+    /** أي الإدارات (ضمن نطاق المستخدم) لم تسلِّم تقرير هذا الأسبوع بعد؟ يغذي لافتة الاستحقاق يوم الإثنين. */
+    public function due(Request $request): JsonResponse
     {
         $weekStart = $this->currentWeekStart();
 
@@ -49,7 +59,8 @@ class WeeklyReportController extends Controller
             ->whereDate('week_start', $weekStart)
             ->pluck('department_id');
 
-        $missing = Department::query()
+        $missing = $this->departmentAccess
+            ->scopeQuery(Department::query(), $request->user(), 'id')
             ->whereNotIn('id', $submitted)
             ->orderBy('sort_order')
             ->get(['id', 'name']);
@@ -80,6 +91,12 @@ class WeeklyReportController extends Controller
             'ratings.*.scores.*'     => 'integer|min:1|max:10',
             'ratings.*.note'         => 'nullable|string|max:500',
         ]);
+
+        // Report creation requires actual department LEADERSHIP (departments.leader_id),
+        // not mere active membership — see DepartmentAccessService::canManageDepartment.
+        if (! $this->departmentAccess->canManageDepartment($request->user(), (int) $data['department_id'])) {
+            return response()->json(['success' => false, 'message' => 'ليست لديك صلاحية إنشاء تقرير لهذه الإدارة — هذا الإجراء متاح لقائد الإدارة فقط.'], 403);
+        }
 
         $weekStart = isset($data['week_start'])
             ? CarbonImmutable::parse($data['week_start'])->startOfWeek(CarbonImmutable::MONDAY)

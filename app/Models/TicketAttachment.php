@@ -19,6 +19,27 @@ class TicketAttachment extends Model
         'uploaded_by',
     ];
 
+    /**
+     * file_url is the raw private-disk storage path — never expose it
+     * directly in API responses. Serialize the authenticated, authorization-
+     * checked preview route instead (see appends below).
+     */
+    protected $hidden = ['file_url'];
+
+    protected $appends = ['preview_url'];
+
+    public function getPreviewUrlAttribute(): ?string
+    {
+        if (! $this->ticket_id || ! $this->id) {
+            return null;
+        }
+
+        return route('tickets.attachments.download', [
+            'ticketId' => $this->ticket_id,
+            'attachmentId' => $this->id,
+        ]);
+    }
+
     public function ticket(): BelongsTo
     {
         return $this->belongsTo(Ticket::class);

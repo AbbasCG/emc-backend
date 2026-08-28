@@ -785,9 +785,10 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
     });
 
 // ─── Operations shared surface: يراها كل الفريق (قراءة) + كتابة مقيَّدة ───────
-Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,programs_manager,instructor,hr_manager,finance_manager,marketing,marketing_manager,quality,quality_manager,support_agent,operations_manager,partnerships_manager,community_manager,volunteer,department_manager'])->prefix('operations')->group(function () {
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,programs_manager,instructor,hr_manager,finance_manager,marketing,marketing_manager,quality,quality_manager,support_agent,operations_manager,partnerships_manager,community_manager,volunteer,department_manager,section_lead'])->prefix('operations')->group(function () {
     // لوحة التشغيل المرئية للجميع + أعضاء الإدارات
     Route::get('board',                              [OperationsBoardController::class, 'board']);
+    Route::get('departments/my-access',              [OperationsBoardController::class, 'myDepartmentAccess']);
     Route::get('departments/{department}/members',   [OperationsBoardController::class, 'departmentMembers']);
 
     // تقارير ما بعد الاجتماع (محضر منظَّم + تقييم الحاضرين)
@@ -807,15 +808,21 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
     // لوحة التشغيل: تحريك الحالة — العضو لمهامه والمدير للجميع (منطق المتحكم)
     Route::patch('board/tasks/{task}/status',        [\App\Http\Controllers\Admin\TaskController::class, 'updateStatus']);
 
-    // كتابة التقارير ومنح النقاط: مدراء مخوَّلون فقط
-    Route::middleware('role:admin,super_admin,tech_admin,executive_admin,hr_manager,operations_manager,department_manager,finance_manager,marketing_manager,quality_manager,programs_manager,partnerships_manager,community_manager,ai_manager')->group(function () {
-        Route::post('meeting-reports',               [MeetingReportController::class, 'store']);
-        Route::post('weekly-reports',                [WeeklyReportController::class, 'store']);
+    // كتابة نقاط الأثر ومهام اللوحة: مدراء مخوَّلون (بلا تغيير عن السابق)
+    Route::middleware('role:admin,super_admin,tech_admin,executive_admin,hr_manager,operations_manager,department_manager')->group(function () {
         Route::post('volunteer-points/awards',       [VolunteerPointsController::class, 'award']);
         Route::post('volunteer-points/redemptions',  [VolunteerPointsController::class, 'redeem']);
         Route::post('board/tasks',                   [\App\Http\Controllers\Admin\TaskController::class, 'store']);
         Route::post('tasks/{task}/lock',             [\App\Http\Controllers\Admin\TaskController::class, 'lock']);
         Route::post('tasks/{task}/unlock',           [\App\Http\Controllers\Admin\TaskController::class, 'unlock']);
+    });
+
+    // كتابة تقارير الاجتماعات/الأسبوعية: أي مدير إدارة حقيقي — التحقق الفعلي
+    // من نطاق الإدارة (هل يقود هذه الإدارة تحديدًا) يتم داخل
+    // DepartmentAccessService::canManageDepartment، وليس عبر قائمة الأدوار هنا.
+    Route::middleware('role:admin,super_admin,tech_admin,executive_admin,department_manager,section_lead,hr_manager,finance_manager,marketing_manager,quality_manager,programs_manager,operations_manager,partnerships_manager,community_manager,support_agent,ai_manager')->group(function () {
+        Route::post('meeting-reports',               [MeetingReportController::class, 'store']);
+        Route::post('weekly-reports',                [WeeklyReportController::class, 'store']);
     });
 });
 // ─── Phase 3: Operations — auth:sanctum + role:admin ─────────────────────────
@@ -1280,7 +1287,10 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
 // Full CRUD via apiResource (adds destroy over the old hand-rolled subset);
 // role list widened to operations_manager/partnerships_manager per EMC-NEW-BACK.
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations_manager,partnerships_manager'])->prefix('operations')->group(function () {
-    Route::apiResource('partners',                                     PartnerController::class);
+    // Named distinctly from the /admin/partners apiResource above (line ~884) —
+    // both default to "partners.*" and Laravel silently lets the later
+    // registration win at runtime, but route:cache hard-fails on the collision.
+    Route::apiResource('partners', PartnerController::class)->names('operations.partners');
     Route::get('partnership-requests',                                 [PartnershipRequestAdminController::class, 'index']);
     Route::get('partnership-requests/{partnershipRequest}',            [PartnershipRequestAdminController::class, 'show']);
     Route::patch('partnership-requests/{partnershipRequest}',          [PartnershipRequestAdminController::class, 'updateStatus']);
@@ -2036,7 +2046,10 @@ Route::middleware(['auth:sanctum', 'role:super_admin,tech_admin'])->prefix('admi
 });
 
 // ─── EMC Unified Tickets & Issue Tracking System Routes ────────────────────
-Route::prefix('v1/tickets')->group(function () {
+// Every action requires authentication; object-level authorization (creator/
+// assignee/department-leader/global) is enforced inside TicketController via
+// the canonical DepartmentAccessService — see its class docblock.
+Route::middleware('auth:sanctum')->prefix('v1/tickets')->group(function () {
     Route::get('/meta', [TicketController::class, 'meta']);
     Route::get('/', [TicketController::class, 'index']);
     Route::post('/', [TicketController::class, 'store']);
@@ -2048,5 +2061,7 @@ Route::prefix('v1/tickets')->group(function () {
     Route::post('/{id}/complete-task', [TicketController::class, 'completeTask']);
     Route::post('/{id}/comment', [TicketController::class, 'addComment']);
     Route::post('/{id}/reassign', [TicketController::class, 'reassign']);
+    Route::get('/{ticketId}/attachments/{attachmentId}/download', [TicketController::class, 'downloadAttachment'])
+        ->name('tickets.attachments.download');
 });
 

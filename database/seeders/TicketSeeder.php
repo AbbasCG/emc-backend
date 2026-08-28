@@ -9,46 +9,57 @@ use App\Models\Ticket;
 use App\Models\TicketActivityLog;
 use App\Models\TicketAttachment;
 use App\Models\User;
-use Illuminate\Support\Str;
 
+/**
+ * Demo data for the EMC Tickets system.
+ *
+ * IMPORTANT: this seeder does NOT create departments. `departments` is
+ * owned exclusively by OfficialDepartmentsSeeder (the single source of
+ * truth for the 13/14 official EMC departments) — run that seeder first.
+ * Tickets/units below are attached to the EXISTING canonical department
+ * rows, resolved by their official slug, never created as duplicates
+ * under a different slug.
+ */
 class TicketSeeder extends Seeder
 {
+    /** [internal code => canonical OfficialDepartmentsSeeder slug] */
+    private const DEPARTMENT_SLUGS = [
+        'EXEC'         => 'executive-management',
+        'PROG'         => 'programs-tracks',
+        'PR_PARTNER'   => 'partnerships',
+        'FINANCE'      => 'finance',
+        'TECH'         => 'technology',
+        'COMMUNITY'    => 'community-health',
+        'OPS'          => 'operations',
+        'QUALITY'      => 'quality-governance',
+        'AI_TRANSFORM' => 'ai-transformation',
+        'MARKETING'    => 'marketing-media',
+        'HR'           => 'human-resources',
+        'AMBASSADORS'  => 'digital-ambassadors',
+    ];
+
     public function run(): void
     {
-        // 1. Seed 12 Main Departments
-        $departmentsData = [
-            ['code' => 'EXEC', 'name_ar' => 'الإدارة العليا', 'name' => 'Executive Management', 'slug' => 'executive-management'],
-            ['code' => 'PROG', 'name_ar' => 'إدارة البرامج والمسارات', 'name' => 'Programs & Tracks Department', 'slug' => 'programs-tracks'],
-            ['code' => 'PR_PARTNER', 'name_ar' => 'إدارة الشراكات والعلاقات العامة', 'name' => 'Partnerships & PR Department', 'slug' => 'partnerships-pr'],
-            ['code' => 'FINANCE', 'name_ar' => 'الإدارة المالية', 'name' => 'Finance Department', 'slug' => 'finance-department'],
-            ['code' => 'TECH', 'name_ar' => 'إدارة التقنية والدعم الفني', 'name' => 'Technology & Tech Support Department', 'slug' => 'tech-support'],
-            ['code' => 'COMMUNITY', 'name_ar' => 'إدارة المجتمع والصحة النفسية والوعي', 'name' => 'Community & Mental Health Department', 'slug' => 'community-mental-health'],
-            ['code' => 'OPS', 'name_ar' => 'إدارة التشغيل والعمليات', 'name' => 'Operations Department', 'slug' => 'operations-department'],
-            ['code' => 'QUALITY', 'name_ar' => 'إدارة الجودة والحوكمة', 'name' => 'Quality & Governance Department', 'slug' => 'quality-governance'],
-            ['code' => 'AI_TRANSFORM', 'name_ar' => 'إدارة الذكاء الاصطناعي والتحول الرقمي', 'name' => 'AI & Digital Transformation Department', 'slug' => 'ai-digital-transformation'],
-            ['code' => 'MARKETING', 'name_ar' => 'إدارة التسويق والإعلام', 'name' => 'Marketing & Media Department', 'slug' => 'marketing-media'],
-            ['code' => 'HR', 'name_ar' => 'إدارة الموارد البشرية', 'name' => 'Human Resources Department', 'slug' => 'hr-department'],
-            ['code' => 'AMBASSADORS', 'name_ar' => 'إدارة سفراء التحول الرقمي', 'name' => 'Digital Transformation Ambassadors', 'slug' => 'ambassadors-department'],
-        ];
-
         $deptMap = [];
+        $missing = [];
 
-        foreach ($departmentsData as $idx => $d) {
-            $dept = Department::updateOrCreate(
-                ['slug' => $d['slug']],
-                [
-                    'name' => $d['name'],
-                    'name_ar' => $d['name_ar'],
-                    'name_en' => $d['name'],
-                    'description_ar' => 'إدارة ' . $d['name_ar'] . ' المعتمدة بالهيكل التنظيمي للمركز',
-                    'sort_order' => $idx + 1,
-                    'is_active' => true,
-                ]
-            );
-            $deptMap[$d['code']] = $dept;
+        foreach (self::DEPARTMENT_SLUGS as $code => $slug) {
+            $dept = Department::where('slug', $slug)->first();
+            if ($dept) {
+                $deptMap[$code] = $dept;
+            } else {
+                $missing[] = "{$code} → {$slug}";
+            }
         }
 
-        // 2. Seed 8 Units under Technology & Tech Support Department
+        if ($missing !== []) {
+            throw new \RuntimeException(
+                "TicketSeeder: the following canonical departments were not found — run OfficialDepartmentsSeeder first. Missing: "
+                . implode(', ', $missing)
+            );
+        }
+
+        // Seed 8 Units under the canonical Technology department
         $techDept = $deptMap['TECH'];
 
         $unitsData = [
@@ -77,15 +88,13 @@ class TicketSeeder extends Seeder
             $unitMap[$u['code']] = $unit;
         }
 
-        // Fetch or create a test user
-        $user = User::first() ?? User::factory()->create([
-            'name' => 'أحمد المهندس',
-            'email' => 'admin@emc.org',
-        ]);
+        // Demo actor — reuse an existing user, never invent a new one silently.
+        $user = User::first();
+        if (! $user) {
+            throw new \RuntimeException('TicketSeeder: no users exist yet — run DemoUserSeeder/DatabaseSeeder first.');
+        }
 
-        // 3. Seed Demo Tickets across various lifecycle states
-
-        // Ticket 1: PENDING_APPROVAL
+        // Demo tickets across the lifecycle — same shape as before, just anchored to canonical departments.
         $t1 = Ticket::updateOrCreate(
             ['ticket_number' => 'EMC-TCK-2026-001'],
             [
@@ -112,7 +121,6 @@ class TicketSeeder extends Seeder
             'logged_at' => now()->subHours(3),
         ]);
 
-        // Ticket 2: ASSIGNED (With active SLA)
         $t2 = Ticket::updateOrCreate(
             ['ticket_number' => 'EMC-TCK-2026-002'],
             [
@@ -142,7 +150,6 @@ class TicketSeeder extends Seeder
             'logged_at' => now()->subHours(1),
         ]);
 
-        // Ticket 3: IN_PROGRESS
         $t3 = Ticket::updateOrCreate(
             ['ticket_number' => 'EMC-TCK-2026-003'],
             [
@@ -162,7 +169,6 @@ class TicketSeeder extends Seeder
             ]
         );
 
-        // Ticket 4: RESOLVED
         $t4 = Ticket::updateOrCreate(
             ['ticket_number' => 'EMC-TCK-2026-004'],
             [
@@ -184,13 +190,14 @@ class TicketSeeder extends Seeder
             ]
         );
 
-        TicketAttachment::create([
-            'ticket_id' => $t4->id,
-            'file_url' => '/assets/demo_proof.png',
-            'file_name' => 'proof_certificate_sample.png',
-            'file_type' => 'IMAGE',
-            'attachment_context' => 'RESOLUTION_PROOF',
-            'uploaded_by' => $user->id,
-        ]);
+        TicketAttachment::updateOrCreate(
+            ['ticket_id' => $t4->id, 'attachment_context' => 'RESOLUTION_PROOF'],
+            [
+                'file_url' => 'tickets/demo/proof_certificate_sample.png',
+                'file_name' => 'proof_certificate_sample.png',
+                'file_type' => 'IMAGE',
+                'uploaded_by' => $user->id,
+            ]
+        );
     }
 }

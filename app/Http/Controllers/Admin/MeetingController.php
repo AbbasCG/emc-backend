@@ -13,58 +13,38 @@ use App\Models\MeetingDecision;
 use App\Models\MeetingReport;
 use App\Models\Task;
 use App\Services\ActivityLogger;
+use App\Services\DepartmentAccessService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class MeetingController extends Controller
 {
+    public function __construct(private readonly DepartmentAccessService $departmentAccess)
+    {
+    }
+
     public function index(Request $request): \Illuminate\Http\JsonResponse
     {
         $user = $request->user();
         $query = Meeting::with(['department', 'organizer']);
 
-        // Check if user has global audit access (Quality & Governance, Super Admin, Tech Admin, Executive)
-        $hasGlobalAccess = false;
+        // Quality & Governance is a cross-department oversight function — same
+        // carve-out already established for Weekly Reports. Everyone else
+        // (including global roles, via DepartmentAccessService::isGlobal) is
+        // scoped through the canonical membership/leadership relationships,
+        // never the legacy user.department_id field which doesn't exist on
+        // the User model.
+        $hasGlobalAccess = $this->departmentAccess->isGlobal($user) || $user->inDepartment('quality-governance');
 
-        if ($user) {
-            $role = strtolower($user->role ?? '');
-
-            $isQualityDept = false;
-            if ($user->department_id || $user->relationLoaded('department')) {
-                $deptName = mb_strtolower($user->department?->name_ar ?? '');
-                $deptSlug = strtolower($user->department?->slug ?? '');
-                if (
-                    str_contains($deptSlug, 'quality') ||
-                    str_contains($deptSlug, 'governance') ||
-                    str_contains($deptName, 'الجودة') ||
-                    str_contains($deptName, 'الحوكمة')
-                ) {
-                    $isQualityDept = true;
-                }
-            }
-
-            if (
-                in_array($role, ['super_admin', 'tech_admin', 'admin', 'executive', 'executive_admin', 'quality_manager', 'quality']) ||
-                $isQualityDept
-            ) {
-                $hasGlobalAccess = true;
-            }
-        }
-
-        // Restrict ordinary department users to ONLY see meetings of their department or created by themselves
-        if (!$hasGlobalAccess && $user) {
-            $userDeptId = $user->department_id;
-            $userId = $user->id;
-
-            $query->where(function ($q) use ($userDeptId, $userId) {
-                if ($userDeptId) {
-                    $q->where('department_id', $userDeptId);
-                }
-                $q->orWhere('organizer_id', $userId);
+        if (!$hasGlobalAccess) {
+            $accessibleDeptIds = $this->departmentAccess->getAccessibleDepartmentIds($user);
+            $query->where(function ($q) use ($accessibleDeptIds, $user) {
+                $q->whereIn('department_id', $accessibleDeptIds)
+                  ->orWhere('organizer_id', $user->id);
             });
         }
 
-        if ($request->department_id && ($hasGlobalAccess || $request->department_id == $user?->department_id)) {
+        if ($request->department_id && ($hasGlobalAccess || $this->departmentAccess->canAccessDepartment($user, (int) $request->department_id))) {
             $query->where('department_id', $request->department_id);
         }
 
@@ -126,30 +106,11 @@ class MeetingController extends Controller
             return false;
         }
 
-        $role = strtolower($user->role ?? '');
-
-        $isQualityDept = false;
-        if ($user->department_id || $user->relationLoaded('department')) {
-            $deptName = mb_strtolower($user->department?->name_ar ?? '');
-            $deptSlug = strtolower($user->department?->slug ?? '');
-            if (
-                str_contains($deptSlug, 'quality') ||
-                str_contains($deptSlug, 'governance') ||
-                str_contains($deptName, 'الجودة') ||
-                str_contains($deptName, 'الحوكمة')
-            ) {
-                $isQualityDept = true;
-            }
-        }
-
-        if (
-            in_array($role, ['super_admin', 'tech_admin', 'admin', 'executive', 'executive_admin', 'quality_manager', 'quality']) ||
-            $isQualityDept
-        ) {
+        if ($this->departmentAccess->isGlobal($user) || $user->inDepartment('quality-governance')) {
             return true;
         }
 
-        if ($user->department_id && $meeting->department_id == $user->department_id) {
+        if ($meeting->department_id && $this->departmentAccess->canAccessDepartment($user, (int) $meeting->department_id)) {
             return true;
         }
 
