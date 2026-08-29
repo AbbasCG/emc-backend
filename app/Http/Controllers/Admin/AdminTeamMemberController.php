@@ -8,6 +8,7 @@ use App\Models\TeamMember;
 use App\Services\AuditLogService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class AdminTeamMemberController extends Controller
 {
@@ -46,13 +47,22 @@ class AdminTeamMemberController extends Controller
     public function store(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'user_id'       => 'required|exists:users,id',
+            'user_id'       => [
+                'required', 'exists:users,id',
+                // Mirrors the team_members unique(['user_id','department_id']) DB
+                // constraint with a clean 422 instead of a raw QueryException —
+                // one user may belong to several departments, just never the
+                // same department twice.
+                Rule::unique('team_members')->where(fn ($q) => $q->where('department_id', $request->input('department_id'))),
+            ],
             'department_id' => 'required|exists:departments,id',
             'section_id'    => 'nullable|exists:department_sections,id',
             'unit_id'       => 'nullable|exists:departmental_units,id',
             'role_title'    => 'nullable|string|max:255',
             'status'        => 'nullable|in:active,inactive,on_leave',
             'joined_at'     => 'nullable|date',
+        ], [
+            'user_id.unique' => 'هذا المستخدم عضو بالفعل في هذه الإدارة.',
         ]);
 
         $data['status'] = $data['status'] ?? 'active';
@@ -99,6 +109,20 @@ class AdminTeamMemberController extends Controller
         ]);
 
         $effectiveDepartmentId = $data['department_id'] ?? $teamMember->department_id;
+
+        if (
+            isset($data['department_id']) && $data['department_id'] != $teamMember->department_id
+            && TeamMember::where('user_id', $teamMember->user_id)
+                ->where('department_id', $data['department_id'])
+                ->where('id', '!=', $teamMember->id)
+                ->exists()
+        ) {
+            return response()->json([
+                'success' => false,
+                'message' => 'هذا المستخدم عضو بالفعل في الإدارة المستهدفة.',
+            ], 422);
+        }
+
         if (! empty($data['unit_id']) && ! $this->unitBelongsToDepartment($data['unit_id'], $effectiveDepartmentId)) {
             return response()->json([
                 'success' => false,
