@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Enums\RegistrationStatus;
 use App\Models\ClassGroupStudent;
+use App\Models\LearningPathEnrollment;
 use App\Models\Registration;
 use App\Models\User;
 use Illuminate\Support\Collection;
@@ -11,19 +12,34 @@ use Illuminate\Support\Collection;
 class LmsEnrollmentService
 {
     /**
-     * Course IDs the user is actively registered for (by user_id or email match).
+     * Course IDs the user has legitimate LMS access to — direct registration
+     * (by user_id or email match) OR an active/completed learning-path
+     * enrollment that includes the course. This is the single canonical
+     * access list every material-listing AND material-authorization
+     * consumer must use (StudentMaterialController, CourseMaterialPolicy via
+     * LearningContentEligibilityService, etc.) — a student who legitimately
+     * has course access through either path must never be denied material
+     * access because one consumer only recognized direct registrations.
      */
     public function enrolledCourseIds(User $user): Collection
     {
-        return Registration::query()
+        $registered = Registration::query()
             ->activeEnrollment()
             ->where(function ($q) use ($user) {
                 $q->where('user_id', $user->id)
                     ->orWhere('email', $user->email);
             })
-            ->pluck('course_id')
-            ->unique()
-            ->values();
+            ->pluck('course_id');
+
+        $viaLearningPath = LearningPathEnrollment::query()
+            ->where('user_id', $user->id)
+            ->whereIn('status', ['active', 'completed'])
+            ->whereHas('learningPath.courses')
+            ->with(['learningPath.courses:id'])
+            ->get()
+            ->flatMap(fn (LearningPathEnrollment $e) => $e->learningPath->courses->pluck('id'));
+
+        return $registered->merge($viaLearningPath)->unique()->values();
     }
 
     public function isEnrolledInCourse(User $user, int $courseId): bool

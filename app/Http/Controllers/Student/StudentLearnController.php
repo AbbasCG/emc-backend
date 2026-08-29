@@ -9,10 +9,9 @@ use App\Http\Resources\StudentCourseAssignmentResource;
 use App\Models\AssignmentSubmission;
 use App\Models\ClassGroupStudent;
 use App\Models\Course;
-use App\Models\LearningPathEnrollment;
-use App\Models\Registration;
 use App\Services\CourseAccessEligibilityService;
 use App\Services\CourseAssignmentBridgeService;
+use App\Services\LmsEnrollmentService;
 use App\Services\StudentModuleProgressService;
 use App\Support\AssignmentSubmissionStatus;
 use Illuminate\Http\JsonResponse;
@@ -33,23 +32,18 @@ class StudentLearnController extends Controller
         CourseAssignmentBridgeService $bridge,
         StudentModuleProgressService $progressSvc,
         CourseAccessEligibilityService $eligibility,
+        LmsEnrollmentService $enrollment,
     ): JsonResponse {
         $user = $request->user();
 
-        // Direct enrollment — match by user_id OR email (mirrors StudentRegistrationsController::courses)
-        $enrolled = Registration::query()
-            ->forStudent($user)
-            ->where('course_id', $courseId)
-            ->activeEnrollment()
-            ->exists();
-
-        // Fallback: access via learning path enrollment
-        if (! $enrolled) {
-            $enrolled = LearningPathEnrollment::where('user_id', $user->id)
-                ->whereIn('status', ['active', 'completed'])
-                ->whereHas('learningPath.courses', fn ($q) => $q->where('courses.id', $courseId))
-                ->exists();
-        }
+        // Canonical access check — direct registration OR learning-path
+        // enrollment, both recognized by LmsEnrollmentService. Using the same
+        // service here as material listing/authorization use elsewhere
+        // guarantees a student who can open this page can also preview/
+        // download every material shown on it (previously this endpoint had
+        // its own inline duplicate of this logic, which could drift from the
+        // service other consumers relied on).
+        $enrolled = $enrollment->isEnrolledInCourse($user, $courseId);
 
         if (! $enrolled) {
             // Production hotfix: distinguish "never registered" from
