@@ -13,10 +13,10 @@ return new class extends Migration
         Schema::create('ai_assessment_results', function (Blueprint $table) {
             $table->id();
             $table->string('visitor_id', 64)->nullable()->index();
-            $table->string('level_id', 40);              // explorer|power_user|automation_builder|solution_builder|systems_engineer
+            $table->string('level_id', 40); // explorer|power_user|automation_builder|solution_builder|systems_engineer
             $table->string('level_title');
-            $table->unsignedTinyInteger('overall');      // 0..100
-            $table->json('scores');                      // {usage, prompting, automation, development, engineering}
+            $table->unsignedTinyInteger('overall'); // 0..100
+            $table->json('scores'); // {usage, prompting, automation, development, engineering}
             $table->string('goal')->nullable();
             $table->string('field')->nullable();
             $table->string('name')->nullable();
@@ -24,8 +24,10 @@ return new class extends Migration
             $table->string('whatsapp')->nullable();
             $table->string('reward_code', 40)->nullable()->unique();
             $table->timestamp('reward_expires_at')->nullable();
-            $table->string('ref', 64)->nullable();       // وصل من رابط مشاركة
-            $table->timestamp('created_at');
+            $table->string('ref', 64)->nullable(); // وصل من رابط مشاركة
+
+            // Automatically use the current timestamp when the record is created.
+            $table->timestamp('created_at')->useCurrent();
 
             $table->index(['level_id', 'created_at']);
         });

@@ -125,7 +125,6 @@ class TicketController extends Controller
     public function meta(Request $request)
     {
         $user = $request->user();
-        $isPrivileged = $this->departmentAccess->isGlobal($user);
 
         $departments = Department::where('is_active', true)->get(['id', 'name', 'name_ar', 'slug']);
 
@@ -139,10 +138,15 @@ class TicketController extends Controller
                 ->get();
         }
 
-        // Assignable users: only relevant when building the admin/assignment UI.
-        // Least privilege — no email, no full user table for ordinary submitters.
+        // Assignable users: only relevant when building the approve/reassign
+        // UI, so gated the same way approve()/reassign() themselves are —
+        // canManageDepartment (department leader or global), not isGlobal
+        // alone. A plain department leader is fully authorized to approve a
+        // ticket and pick its assignee; they must see the same candidate
+        // list the endpoint they're about to call will actually accept.
+        // Least privilege still holds — no email, no full user table.
         $assignableUsers = [];
-        if ($isPrivileged && $departmentId) {
+        if ($departmentId && $this->departmentAccess->canManageDepartment($user, $departmentId)) {
             // A unit was chosen: eligibility is exact unit membership, nothing
             // broader — this is what stops "unit A selected, user from unit B
             // sent anyway" from ever appearing as an option in the first place.

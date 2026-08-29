@@ -5,18 +5,19 @@ namespace Tests\Feature;
 use App\Models\Department;
 use App\Models\DepartmentalUnit;
 use App\Models\TeamMember;
+use App\Models\TeamProfile;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
 /**
- * The new /dashboard/admin/team-members page's backend contract: creating
- * the team_members rows the Unit Management page and Ticket assignment both
- * depend on. Authorization/route gate is pre-existing and unchanged
- * (admin,super_admin,tech_admin — see routes/api.php); this covers the
- * create/update behavior and the duplicate-membership guard added in this
- * task.
+ * /dashboard/admin/team-members backend contract. department_id and
+ * role_title are NEVER accepted from the client — they are always derived
+ * from the canonical team_profiles record for the given user_id (the same
+ * directory /dashboard/members shows), which is what stops a forged
+ * department_id from ever taking effect. This page only ever writes
+ * unit_id/status on an existing team_members row.
  */
 class TeamMembersManagementTest extends TestCase
 {
@@ -53,12 +54,28 @@ class TeamMembersManagementTest extends TestCase
         return $this->makeUser('super_admin');
     }
 
+    /** A canonical EMC member (team_profiles row) with a linked account and a department. */
+    private function makeCanonicalMember(?Department $dept = null, array $overrides = []): array
+    {
+        $user = $this->makeUser('instructor');
+        $profile = TeamProfile::create(array_merge([
+            'user_id' => $user->id,
+            'name_ar' => 'عضو تجريبي ' . Str::random(4),
+            'position_ar' => 'مطور',
+            'department_id' => $dept?->id,
+            'member_type' => 'staff',
+            'is_active' => true,
+        ], $overrides));
+
+        return [$profile, $user];
+    }
+
     public function test_authorized_admin_can_list_team_members(): void
     {
         $dept = $this->makeDepartment();
         $admin = $this->admin();
-        $member = $this->makeUser();
-        TeamMember::create(['user_id' => $member->id, 'department_id' => $dept->id, 'status' => 'active']);
+        [$profile, $memberUser] = $this->makeCanonicalMember($dept);
+        TeamMember::create(['user_id' => $memberUser->id, 'team_profile_id' => $profile->id, 'department_id' => $dept->id, 'status' => 'active']);
 
         $res = $this->actingAs($admin)->getJson("/api/admin/team-members?department_id={$dept->id}");
         $res->assertOk();
@@ -69,34 +86,67 @@ class TeamMembersManagementTest extends TestCase
     {
         $dept = $this->makeDepartment();
         $outsider = $this->makeUser();
-        $target = $this->makeUser();
+        [, $memberUser] = $this->makeCanonicalMember($dept);
 
         $this->actingAs($outsider)->getJson('/api/admin/team-members')->assertStatus(403);
         $this->actingAs($outsider)->postJson('/api/admin/team-members', [
-            'user_id' => $target->id, 'department_id' => $dept->id,
+            'user_id' => $memberUser->id,
         ])->assertStatus(403);
     }
 
-    public function test_create_valid_membership_succeeds(): void
+    public function test_create_derives_department_and_title_from_canonical_member(): void
     {
-        $dept = $this->makeDepartment();
+        $dept = $this->makeDepartment(['name_ar' => 'إدارة التقنية والدعم الفني']);
         $admin = $this->admin();
-        $target = $this->makeUser();
+        [, $memberUser] = $this->makeCanonicalMember($dept, ['position_ar' => 'رئيس قسم التقنية']);
 
         $res = $this->actingAs($admin)->postJson('/api/admin/team-members', [
-            'user_id' => $target->id, 'department_id' => $dept->id, 'role_title' => 'مطور',
+            'user_id' => $memberUser->id,
         ]);
-        $res->assertStatus(201)->assertJsonPath('data.department.id', $dept->id);
-        $this->assertDatabaseHas('team_members', ['user_id' => $target->id, 'department_id' => $dept->id, 'unit_id' => null]);
+        $res->assertStatus(201)
+            ->assertJsonPath('data.department.id', $dept->id)
+            ->assertJsonPath('data.department.name', 'إدارة التقنية والدعم الفني')
+            ->assertJsonPath('data.role_title', 'رئيس قسم التقنية');
+
+        $this->assertDatabaseHas('team_members', [
+            'user_id' => $memberUser->id, 'department_id' => $dept->id,
+            'role_title' => 'رئيس قسم التقنية', 'unit_id' => null,
+        ]);
     }
 
-    public function test_invalid_department_rejected(): void
+    public function test_forged_department_id_in_request_is_ignored(): void
+    {
+        $realDept = $this->makeDepartment(['name_ar' => 'إدارة حقيقية']);
+        $otherDept = $this->makeDepartment(['name_ar' => 'إدارة أخرى']);
+        $admin = $this->admin();
+        [, $memberUser] = $this->makeCanonicalMember($realDept);
+
+        // Attempt to smuggle a different department_id/role_title — must be ignored entirely.
+        $res = $this->actingAs($admin)->postJson('/api/admin/team-members', [
+            'user_id' => $memberUser->id, 'department_id' => $otherDept->id, 'role_title' => 'منصب مزوّر',
+        ]);
+        $res->assertStatus(201)->assertJsonPath('data.department.id', $realDept->id);
+        $this->assertDatabaseHas('team_members', ['user_id' => $memberUser->id, 'department_id' => $realDept->id]);
+        $this->assertDatabaseMissing('team_members', ['department_id' => $otherDept->id]);
+    }
+
+    public function test_member_without_canonical_department_cannot_be_assigned(): void
     {
         $admin = $this->admin();
-        $target = $this->makeUser();
+        [, $memberUser] = $this->makeCanonicalMember(null); // profile exists, department_id is null
 
         $this->actingAs($admin)->postJson('/api/admin/team-members', [
-            'user_id' => $target->id, 'department_id' => 999999,
+            'user_id' => $memberUser->id,
+        ])->assertStatus(422);
+    }
+
+    public function test_user_with_no_canonical_member_profile_cannot_be_assigned(): void
+    {
+        $admin = $this->admin();
+        $arbitraryUser = $this->makeUser(); // no team_profiles row at all
+
+        $this->actingAs($admin)->postJson('/api/admin/team-members', [
+            'user_id' => $arbitraryUser->id,
         ])->assertStatus(422);
     }
 
@@ -106,104 +156,117 @@ class TeamMembersManagementTest extends TestCase
         $deptB = $this->makeDepartment();
         $unitB = $this->makeUnit($deptB);
         $admin = $this->admin();
-        $target = $this->makeUser();
+        [, $memberUser] = $this->makeCanonicalMember($deptA);
 
         $this->actingAs($admin)->postJson('/api/admin/team-members', [
-            'user_id' => $target->id, 'department_id' => $deptA->id, 'unit_id' => $unitB->id,
+            'user_id' => $memberUser->id, 'unit_id' => $unitB->id,
         ])->assertStatus(422);
+    }
+
+    public function test_valid_unit_from_member_department_accepted(): void
+    {
+        $dept = $this->makeDepartment();
+        $unit = $this->makeUnit($dept);
+        $admin = $this->admin();
+        [, $memberUser] = $this->makeCanonicalMember($dept);
+
+        $this->actingAs($admin)->postJson('/api/admin/team-members', [
+            'user_id' => $memberUser->id, 'unit_id' => $unit->id,
+        ])->assertStatus(201)->assertJsonPath('data.unit.id', $unit->id);
     }
 
     public function test_duplicate_membership_in_same_department_rejected(): void
     {
         $dept = $this->makeDepartment();
         $admin = $this->admin();
-        $target = $this->makeUser();
-        TeamMember::create(['user_id' => $target->id, 'department_id' => $dept->id, 'status' => 'active']);
+        [$profile, $memberUser] = $this->makeCanonicalMember($dept);
+        TeamMember::create(['user_id' => $memberUser->id, 'team_profile_id' => $profile->id, 'department_id' => $dept->id, 'status' => 'active']);
 
         $this->actingAs($admin)->postJson('/api/admin/team-members', [
-            'user_id' => $target->id, 'department_id' => $dept->id,
+            'user_id' => $memberUser->id,
         ])->assertStatus(422);
 
-        $this->assertSame(1, TeamMember::where('user_id', $target->id)->where('department_id', $dept->id)->count());
+        $this->assertSame(1, TeamMember::where('user_id', $memberUser->id)->where('department_id', $dept->id)->count());
     }
 
-    public function test_same_user_can_belong_to_multiple_different_departments(): void
-    {
-        $deptA = $this->makeDepartment();
-        $deptB = $this->makeDepartment();
-        $admin = $this->admin();
-        $target = $this->makeUser();
-        TeamMember::create(['user_id' => $target->id, 'department_id' => $deptA->id, 'status' => 'active']);
-
-        $this->actingAs($admin)->postJson('/api/admin/team-members', [
-            'user_id' => $target->id, 'department_id' => $deptB->id,
-        ])->assertStatus(201);
-
-        $this->assertSame(2, TeamMember::where('user_id', $target->id)->count());
-    }
-
-    public function test_update_existing_team_member_succeeds_without_new_row(): void
+    public function test_update_existing_team_member_only_touches_unit_and_status(): void
     {
         $dept = $this->makeDepartment();
+        $unit = $this->makeUnit($dept);
         $admin = $this->admin();
-        $target = $this->makeUser();
-        $member = TeamMember::create(['user_id' => $target->id, 'department_id' => $dept->id, 'status' => 'active']);
+        [$profile, $memberUser] = $this->makeCanonicalMember($dept);
+        $member = TeamMember::create(['user_id' => $memberUser->id, 'team_profile_id' => $profile->id, 'department_id' => $dept->id, 'role_title' => 'مطور', 'status' => 'active']);
 
-        $this->actingAs($admin)->putJson("/api/admin/team-members/{$member->id}", [
-            'role_title' => 'قائد فريق', 'status' => 'on_leave',
-        ])->assertOk()->assertJsonPath('data.role_title', 'قائد فريق');
+        $res = $this->actingAs($admin)->putJson("/api/admin/team-members/{$member->id}", [
+            'unit_id' => $unit->id, 'status' => 'on_leave',
+        ]);
+        $res->assertOk()->assertJsonPath('data.role_title', 'مطور'); // untouched
 
-        $this->assertSame(1, TeamMember::where('user_id', $target->id)->count());
-        $this->assertSame('on_leave', $member->fresh()->status);
+        $fresh = $member->fresh();
+        $this->assertSame($unit->id, $fresh->unit_id);
+        $this->assertSame('on_leave', $fresh->status);
+        $this->assertSame($dept->id, $fresh->department_id); // never changed by this endpoint
     }
 
-    public function test_moving_department_updates_existing_row_and_rejects_landing_on_a_duplicate(): void
+    public function test_update_ignores_a_forged_department_id(): void
     {
-        $deptA = $this->makeDepartment();
-        $deptB = $this->makeDepartment();
+        $dept = $this->makeDepartment();
+        $otherDept = $this->makeDepartment();
         $admin = $this->admin();
-        $target = $this->makeUser();
-        $member = TeamMember::create(['user_id' => $target->id, 'department_id' => $deptA->id, 'status' => 'active']);
+        [$profile, $memberUser] = $this->makeCanonicalMember($dept);
+        $member = TeamMember::create(['user_id' => $memberUser->id, 'team_profile_id' => $profile->id, 'department_id' => $dept->id, 'status' => 'active']);
 
-        // Clean move: A -> B succeeds, same row.
         $this->actingAs($admin)->putJson("/api/admin/team-members/{$member->id}", [
-            'department_id' => $deptB->id,
+            'department_id' => $otherDept->id,
         ])->assertOk();
-        $this->assertSame($deptB->id, $member->fresh()->department_id);
-        $this->assertSame(1, TeamMember::where('user_id', $target->id)->count());
 
-        // Now the user has a row in B (via the move) and a fresh row in A —
-        // moving back to A should collide with that existing A row.
-        $rowInA = TeamMember::create(['user_id' => $target->id, 'department_id' => $deptA->id, 'status' => 'active']);
-        $this->actingAs($admin)->putJson("/api/admin/team-members/{$member->id}", [
-            'department_id' => $deptA->id,
-        ])->assertStatus(422);
+        $this->assertSame($dept->id, $member->fresh()->department_id);
     }
 
-    public function test_null_unit_allowed_on_create(): void
+    public function test_inactive_member_not_eligible_for_new_ticket_assignment(): void
     {
         $dept = $this->makeDepartment();
+        $unit = $this->makeUnit($dept);
         $admin = $this->admin();
-        $target = $this->makeUser();
+        [$profile, $memberUser] = $this->makeCanonicalMember($dept);
+        TeamMember::create([
+            'user_id' => $memberUser->id, 'team_profile_id' => $profile->id, 'department_id' => $dept->id,
+            'unit_id' => $unit->id, 'status' => 'inactive',
+        ]);
 
-        $this->actingAs($admin)->postJson('/api/admin/team-members', [
-            'user_id' => $target->id, 'department_id' => $dept->id, 'unit_id' => null,
-        ])->assertStatus(201);
+        $res = $this->actingAs($admin)->getJson("/api/v1/tickets/meta?department_id={$dept->id}&unit_id={$unit->id}");
+        $res->assertOk();
+        $ids = collect($res->json('users'))->pluck('id');
+        $this->assertFalse($ids->contains($memberUser->id));
     }
 
     public function test_new_unassigned_member_appears_via_unit_management_api(): void
     {
         $dept = $this->makeDepartment();
         $admin = $this->admin();
-        $target = $this->makeUser();
+        [, $memberUser] = $this->makeCanonicalMember($dept);
 
         $this->actingAs($admin)->postJson('/api/admin/team-members', [
-            'user_id' => $target->id, 'department_id' => $dept->id,
+            'user_id' => $memberUser->id,
         ])->assertStatus(201);
 
         $res = $this->actingAs($admin)->getJson("/api/admin/team-members?department_id={$dept->id}&unit_id=null");
         $res->assertOk();
         $ids = collect($res->json('data'))->pluck('user.id');
-        $this->assertTrue($ids->contains($target->id));
+        $this->assertTrue($ids->contains($memberUser->id));
+    }
+
+    public function test_existing_canonical_member_identity_is_unchanged_by_this_flow(): void
+    {
+        $dept = $this->makeDepartment();
+        $admin = $this->admin();
+        [$profile, $memberUser] = $this->makeCanonicalMember($dept, ['name_ar' => 'عباس']);
+
+        $this->actingAs($admin)->postJson('/api/admin/team-members', ['user_id' => $memberUser->id])
+            ->assertStatus(201);
+
+        // The canonical profile — what /dashboard/members shows — is untouched.
+        $this->assertSame('عباس', $profile->fresh()->name_ar);
+        $this->assertSame($memberUser->id, $profile->fresh()->user_id);
     }
 }

@@ -70,6 +70,12 @@ class TeamProfile extends Model
         return $this->belongsTo(\App\Models\User::class);
     }
 
+    /** The operational department/unit placement for this canonical member, if any. */
+    public function teamMember(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(TeamMember::class);
+    }
+
     public function hasUserAccount(): bool
     {
         return $this->user_id !== null;

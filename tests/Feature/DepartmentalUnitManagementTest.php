@@ -6,6 +6,7 @@ use Tests\TestCase;
 use App\Models\Department;
 use App\Models\DepartmentalUnit;
 use App\Models\TeamMember;
+use App\Models\TeamProfile;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
@@ -57,9 +58,14 @@ class DepartmentalUnitManagementTest extends TestCase
     private function makeMember(Department $dept, ?DepartmentalUnit $unit = null): TeamMember
     {
         $user = $this->makeUser();
+        $profile = TeamProfile::create([
+            'user_id' => $user->id, 'name_ar' => $user->name, 'position_ar' => 'عضو',
+            'department_id' => $dept->id, 'member_type' => 'staff', 'is_active' => true,
+        ]);
 
         return TeamMember::create([
             'user_id' => $user->id,
+            'team_profile_id' => $profile->id,
             'department_id' => $dept->id,
             'unit_id' => $unit?->id,
             'status' => 'active',

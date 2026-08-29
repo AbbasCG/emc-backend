@@ -5,17 +5,17 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\DepartmentalUnit;
 use App\Models\TeamMember;
+use App\Models\TeamProfile;
 use App\Services\AuditLogService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Validation\Rule;
 
 class AdminTeamMemberController extends Controller
 {
     // GET /api/admin/team-members
     public function index(Request $request): JsonResponse
     {
-        $members = TeamMember::with(['user:id,name,email,role', 'department:id,name', 'section:id,name', 'unit:id,name_ar,name_en,department_id'])
+        $members = TeamMember::with(['user:id,name,email,role', 'department:id,name_ar', 'section:id,name', 'unit:id,name_ar,name_en,department_id', 'teamProfile:id,department_id,position_ar', 'teamProfile.department:id,name_ar'])
             ->when($request->department_id, fn ($q) => $q->where('department_id', $request->department_id))
             ->when($request->status, fn ($q) => $q->where('status', $request->status))
             ->when($request->filled('unit_id'), function ($q) use ($request) {
@@ -43,29 +43,64 @@ class AdminTeamMemberController extends Controller
         ]);
     }
 
+    /**
+     * Resolve the ONE canonical member profile for a user — business rule:
+     * one User has exactly one TeamProfile (see the architecture audit).
+     * Never trusts a client-supplied department_id/role_title — this is what
+     * stops "member belongs to Technology, request sends Finance" tampering.
+     *
+     * If a user unexpectedly has more than one TeamProfile (a legacy/data
+     * integrity violation the business rule says should not exist), this
+     * deliberately REJECTS rather than silently picking one — guessing which
+     * profile/department the admin meant would be exactly the kind of
+     * silent-wrong-department bug this whole correction exists to prevent.
+     */
+    private function resolveCanonicalIdentity(int $userId): TeamProfile|string|null
+    {
+        $profiles = TeamProfile::where('user_id', $userId)->get();
+        if ($profiles->count() > 1) {
+            return 'ambiguous';
+        }
+
+        return $profiles->first();
+    }
+
     // POST /api/admin/team-members
     public function store(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'user_id'       => [
-                'required', 'exists:users,id',
-                // Mirrors the team_members unique(['user_id','department_id']) DB
-                // constraint with a clean 422 instead of a raw QueryException —
-                // one user may belong to several departments, just never the
-                // same department twice.
-                Rule::unique('team_members')->where(fn ($q) => $q->where('department_id', $request->input('department_id'))),
-            ],
-            'department_id' => 'required|exists:departments,id',
-            'section_id'    => 'nullable|exists:department_sections,id',
-            'unit_id'       => 'nullable|exists:departmental_units,id',
-            'role_title'    => 'nullable|string|max:255',
-            'status'        => 'nullable|in:active,inactive,on_leave',
-            'joined_at'     => 'nullable|date',
-        ], [
-            'user_id.unique' => 'هذا المستخدم عضو بالفعل في هذه الإدارة.',
+            'user_id'    => 'required|exists:users,id',
+            'unit_id'    => 'nullable|exists:departmental_units,id',
+            'status'     => 'nullable|in:active,inactive,on_leave',
         ]);
 
+        $profile = $this->resolveCanonicalIdentity($data['user_id']);
+        if ($profile === 'ambiguous') {
+            return response()->json([
+                'success' => false,
+                'message' => 'يمتلك هذا المستخدم أكثر من ملف عضو واحد — يجب دمجها في ملف واحد من صفحة "الأعضاء" قبل إسناده لإدارة.',
+            ], 422);
+        }
+        if (! $profile || ! $profile->department_id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'هذا العضو غير مرتبط بإدارة في بيانات الفريق الحالية.',
+            ], 422);
+        }
+
+        $data['team_profile_id'] = $profile->id;
+        $data['department_id'] = $profile->department_id;
+        $data['role_title'] = $profile->position_ar;
         $data['status'] = $data['status'] ?? 'active';
+
+        // One operational membership per canonical member (not per department
+        // — a person has exactly one TeamProfile, so at most one TeamMember).
+        if (TeamMember::where('team_profile_id', $profile->id)->exists()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'هذا العضو لديه عضوية عملياتية بالفعل.',
+            ], 422);
+        }
 
         if (! empty($data['unit_id']) && ! $this->unitBelongsToDepartment($data['unit_id'], $data['department_id'])) {
             return response()->json([
@@ -75,7 +110,7 @@ class AdminTeamMemberController extends Controller
         }
 
         $member = TeamMember::create($data);
-        $member->load(['user:id,name,email,role', 'department:id,name', 'section:id,name', 'unit:id,name_ar,name_en,department_id']);
+        $member->load(['user:id,name,email,role', 'department:id,name_ar', 'section:id,name', 'unit:id,name_ar,name_en,department_id', 'teamProfile:id,department_id,position_ar', 'teamProfile.department:id,name_ar']);
 
         AuditLogService::log('created', 'TeamMember', $member->id,
             $member->user?->name ?? "member#{$member->id}",
@@ -91,39 +126,27 @@ class AdminTeamMemberController extends Controller
     // GET /api/admin/team-members/{teamMember}
     public function show(TeamMember $teamMember): JsonResponse
     {
-        $teamMember->load(['user:id,name,email,role', 'department:id,name', 'section:id,name']);
+        $teamMember->load(['user:id,name,email,role', 'department:id,name_ar', 'section:id,name', 'unit:id,name_ar,name_en,department_id', 'teamProfile:id,department_id,position_ar', 'teamProfile.department:id,name_ar']);
 
         return response()->json(['success' => true, 'data' => $this->format($teamMember)]);
     }
 
     // PUT /api/admin/team-members/{teamMember}
+    // Deliberately does NOT accept department_id/role_title — member identity,
+    // department, and job title belong to the canonical team_profiles record
+    // (see AdminMemberController) and are never editable from this
+    // operational-placement page. Only unit and status are ever adjustable
+    // here; to move a member's department, update their canonical member
+    // profile, not this row (which would then need to be deleted and
+    // recreated, since it always mirrors the profile's department).
     public function update(Request $request, TeamMember $teamMember): JsonResponse
     {
         $data = $request->validate([
-            'department_id' => 'sometimes|exists:departments,id',
-            'section_id'    => 'nullable|exists:department_sections,id',
-            'unit_id'       => 'nullable|exists:departmental_units,id',
-            'role_title'    => 'nullable|string|max:255',
-            'status'        => 'sometimes|in:active,inactive,on_leave',
-            'joined_at'     => 'nullable|date',
+            'unit_id' => 'nullable|exists:departmental_units,id',
+            'status'  => 'sometimes|in:active,inactive,on_leave',
         ]);
 
-        $effectiveDepartmentId = $data['department_id'] ?? $teamMember->department_id;
-
-        if (
-            isset($data['department_id']) && $data['department_id'] != $teamMember->department_id
-            && TeamMember::where('user_id', $teamMember->user_id)
-                ->where('department_id', $data['department_id'])
-                ->where('id', '!=', $teamMember->id)
-                ->exists()
-        ) {
-            return response()->json([
-                'success' => false,
-                'message' => 'هذا المستخدم عضو بالفعل في الإدارة المستهدفة.',
-            ], 422);
-        }
-
-        if (! empty($data['unit_id']) && ! $this->unitBelongsToDepartment($data['unit_id'], $effectiveDepartmentId)) {
+        if (! empty($data['unit_id']) && ! $this->unitBelongsToDepartment($data['unit_id'], $teamMember->department_id)) {
             return response()->json([
                 'success' => false,
                 'message' => 'الوحدة التقنية المختارة لا تتبع الإدارة المحددة.',
@@ -134,7 +157,7 @@ class AdminTeamMemberController extends Controller
         $oldStatus = $teamMember->status;
 
         $teamMember->update($data);
-        $teamMember->load(['user:id,name,email,role', 'department:id,name', 'section:id,name', 'unit:id,name_ar,name_en,department_id']);
+        $teamMember->load(['user:id,name,email,role', 'department:id,name_ar', 'section:id,name', 'unit:id,name_ar,name_en,department_id', 'teamProfile:id,department_id,position_ar', 'teamProfile.department:id,name_ar']);
 
         $action = isset($data['status']) && $data['status'] !== $oldStatus ? 'status_changed' : 'updated';
         AuditLogService::log($action, 'TeamMember', $teamMember->id,
@@ -162,17 +185,28 @@ class AdminTeamMemberController extends Controller
         return response()->json(['success' => true, 'message' => 'Team member removed successfully']);
     }
 
+    /**
+     * Stage 3 — department/title are now read from the linked canonical
+     * TeamProfile (authoritative) rather than the legacy team_members
+     * columns, which are kept in sync (see AdminTeamProfileController) but
+     * are no longer the source consulted for display. Falls back to the
+     * legacy column only if a row somehow lacks its profile relation
+     * (should not happen now that team_profile_id is NOT NULL, but this
+     * keeps format() from ever showing nothing at all).
+     */
     private function format(TeamMember $m): array
     {
+        $profile = $m->teamProfile;
+        $department = $profile?->department ?? $m->department;
+
         return [
             'id'            => $m->id,
             'user'          => $m->user ? ['id' => $m->user->id, 'name' => $m->user->name, 'email' => $m->user->email, 'role' => $m->user->role] : null,
-            'department'    => $m->department ? ['id' => $m->department->id, 'name' => $m->department->name] : null,
+            'department'    => $department ? ['id' => $department->id, 'name' => $department->name_ar] : null,
             'section'       => $m->section ? ['id' => $m->section->id, 'name' => $m->section->name] : null,
             'unit'          => $m->unit ? ['id' => $m->unit->id, 'name_ar' => $m->unit->name_ar, 'name_en' => $m->unit->name_en] : null,
-            'role_title'    => $m->role_title,
+            'role_title'    => $profile?->position_ar ?? $m->role_title,
             'status'        => $m->status,
-            'joined_at'     => $m->joined_at,
             'created_at'    => $m->created_at,
         ];
     }

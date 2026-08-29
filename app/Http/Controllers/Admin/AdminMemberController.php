@@ -28,6 +28,11 @@ class AdminMemberController extends Controller
             ])
             ->when($request->member_type, fn ($q) => $q->where('member_type', $request->member_type))
             ->when($request->is_new,      fn ($q) => $q->where('is_new_member', true))
+            // Narrow scope for pickers that need an operational team_members
+            // link (which requires a real users row) — e.g. the department-
+            // membership assignment form. Never widens what /admin/members
+            // already returns for the main الأعضاء directory itself.
+            ->when($request->boolean('with_account'), fn ($q) => $q->whereNotNull('user_id'))
             ->when($request->search, function ($q) use ($request) {
                 $term = $request->search;
                 $q->where(function ($sub) use ($term) {

@@ -138,7 +138,45 @@ class AdminTeamProfileController extends Controller
             'sort_order'    => 'nullable|integer|min:0',
         ]);
 
+        $departmentChanging = array_key_exists('department_id', $data)
+            && $data['department_id'] != $teamProfile->department_id;
+        $positionChanging = array_key_exists('position_ar', $data)
+            && $data['position_ar'] !== $teamProfile->position_ar;
+
         $teamProfile->update($data);
+
+        // Keep the operational team_members row (if any) from silently
+        // drifting away from this canonical profile — see the architecture
+        // audit. department_id/role_title are still duplicated on
+        // team_members for now (Stage 1 of the non-destructive migration),
+        // so they must be kept in sync here rather than left stale.
+        if ($departmentChanging || $positionChanging) {
+            $member = \App\Models\TeamMember::where('team_profile_id', $teamProfile->id)->first();
+            if ($member) {
+                $updates = [];
+                if ($departmentChanging) {
+                    $updates['department_id'] = $teamProfile->department_id;
+                    // The old unit certainly no longer belongs to the new
+                    // department (or department_id is now null) — a member
+                    // cannot remain placed in a unit from another department.
+                    if (
+                        $member->unit_id && (
+                            ! $teamProfile->department_id
+                            || ! \App\Models\DepartmentalUnit::where('id', $member->unit_id)
+                                ->where('department_id', $teamProfile->department_id)
+                                ->exists()
+                        )
+                    ) {
+                        $updates['unit_id'] = null;
+                    }
+                }
+                if ($positionChanging) {
+                    $updates['role_title'] = $teamProfile->position_ar;
+                }
+                $member->update($updates);
+            }
+        }
+
         $this->loadRelations($teamProfile);
 
         return response()->json(['success' => true, 'data' => $this->format($teamProfile)]);
@@ -147,6 +185,17 @@ class AdminTeamProfileController extends Controller
     // DELETE /api/admin/team-profiles/{teamProfile}
     public function destroy(TeamProfile $teamProfile): JsonResponse
     {
+        // The operational team_members row (if any) intentionally RESTRICTs
+        // this delete at the database level — an operational membership must
+        // never silently lose its canonical profile. Surface that as a
+        // controlled business error instead of a raw SQL 500.
+        if (\App\Models\TeamMember::where('team_profile_id', $teamProfile->id)->exists()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'لا يمكن حذف العضو لأنه مرتبط بعضوية تشغيلية. قم بإزالة ارتباطه التشغيلي أولاً.',
+            ], 409);
+        }
+
         if ($teamProfile->image) {
             Storage::disk('public')->delete($teamProfile->image);
         }

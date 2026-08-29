@@ -408,8 +408,13 @@ class TicketTest extends TestCase
     private function makeUnitMember(Department $dept, DepartmentalUnit $unit, array $overrides = []): User
     {
         $user = $this->makeUser();
+        $profile = \App\Models\TeamProfile::create([
+            'user_id' => $user->id, 'name_ar' => $user->name, 'position_ar' => 'عضو',
+            'department_id' => $dept->id, 'member_type' => 'staff', 'is_active' => true,
+        ]);
         \App\Models\TeamMember::create(array_merge([
             'user_id' => $user->id,
+            'team_profile_id' => $profile->id,
             'department_id' => $dept->id,
             'unit_id' => $unit->id,
             'status' => 'active',

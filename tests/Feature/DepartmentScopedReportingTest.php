@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Department;
 use App\Models\TeamMember;
+use App\Models\TeamProfile;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
@@ -70,6 +71,24 @@ class DepartmentScopedReportingTest extends TestCase
         $department->update(['leader_id' => $user->id]);
 
         return $user;
+    }
+
+    /** An active team_members row for $user in $department, with its now-required canonical TeamProfile. */
+    private function makeTeamMemberRow(User $user, Department $department, string $status = 'active'): TeamMember
+    {
+        $profile = TeamProfile::create([
+            'user_id' => $user->id,
+            'name_ar' => $user->name,
+            'position_ar' => 'عضو',
+            'department_id' => $department->id,
+            'member_type' => 'staff',
+            'is_active' => true,
+        ]);
+
+        return TeamMember::create([
+            'user_id' => $user->id, 'team_profile_id' => $profile->id,
+            'department_id' => $department->id, 'status' => $status,
+        ]);
     }
 
     // ── CASE A: ordinary active member (no leadership) → 403 on create ───────
@@ -197,7 +216,7 @@ class DepartmentScopedReportingTest extends TestCase
     {
         $dept = $this->makeDepartment();
         $leader = $this->makeLeaderUser('programs_manager', $dept);
-        TeamMember::create(['user_id' => $leader->id, 'department_id' => $dept->id, 'status' => 'active']);
+        $this->makeTeamMemberRow($leader, $dept);
 
         $response = $this->actingAs($leader)->postJson('/api/operations/meeting-reports', [
             'department_id' => $dept->id,
@@ -219,7 +238,7 @@ class DepartmentScopedReportingTest extends TestCase
         $dept->update(['leader_id' => $realLeader->id]);
 
         $lookalike = User::factory()->create(['role' => 'programs_manager', 'is_active' => true]);
-        TeamMember::create(['user_id' => $lookalike->id, 'department_id' => $dept->id, 'status' => 'active']);
+        $this->makeTeamMemberRow($lookalike, $dept);
 
         $response = $this->actingAs($lookalike)->postJson('/api/operations/meeting-reports', [
             'department_id' => $dept->id,
@@ -317,7 +336,7 @@ class DepartmentScopedReportingTest extends TestCase
         $dept = $this->makeDepartment();
         $leader = $this->makeLeaderUser('programs_manager', $dept);
         $member = User::factory()->create(['role' => 'instructor']);
-        TeamMember::create(['user_id' => $member->id, 'department_id' => $dept->id, 'status' => 'active']);
+        $this->makeTeamMemberRow($member, $dept);
 
         $response = $this->actingAs($leader)->getJson("/api/operations/departments/{$dept->id}/members");
 
@@ -331,7 +350,7 @@ class DepartmentScopedReportingTest extends TestCase
         $dept = $this->makeDepartment();
         $leader = $this->makeLeaderUser('programs_manager', $dept);
         $inactive = User::factory()->create(['role' => 'instructor']);
-        TeamMember::create(['user_id' => $inactive->id, 'department_id' => $dept->id, 'status' => 'inactive']);
+        $this->makeTeamMemberRow($inactive, $dept, 'inactive');
 
         $response = $this->actingAs($leader)->getJson("/api/operations/departments/{$dept->id}/members");
 
