@@ -16,7 +16,12 @@ class AdminPermissionController extends Controller
     public function getDelegatableConfig(Request $request, $roleName)
     {
         $role = Role::where('name', $roleName)->firstOrFail();
+        
         $nodes = PermissionNode::where('is_active', true)->orderBy('sort_order')->get();
+        if ($nodes->isEmpty()) {
+            (new \Database\Seeders\PermissionNodeSeeder())->run();
+            $nodes = PermissionNode::where('is_active', true)->orderBy('sort_order')->get();
+        }
         
         $delegatablePermissionIds = DelegatablePermission::where('role_id', $role->id)
             ->pluck('permission_id');
@@ -75,15 +80,7 @@ class AdminPermissionController extends Controller
      */
     public function getRoles()
     {
-        // Typically, we only allow managers to delegate
-        $roles = Role::whereIn('name', [
-            'department_manager', 
-            'programs_manager', 
-            'operations_manager', 
-            'partnerships_manager', 
-            'community_manager',
-            'admin'
-        ])->get(['id', 'name', 'display_name']);
+        $roles = Role::orderBy('id')->get(['id', 'name', 'display_name']);
         
         return response()->json(['success' => true, 'roles' => $roles]);
     }
