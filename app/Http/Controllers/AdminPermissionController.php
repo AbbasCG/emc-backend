@@ -62,10 +62,17 @@ class AdminPermissionController extends Controller
         $permission = Permission::where('name', $request->permission_name)->firstOrFail();
 
         if ($request->is_delegatable) {
-            DelegatablePermission::firstOrCreate([
-                'role_id' => $role->id,
-                'permission_id' => $permission->id,
-            ]);
+            DelegatablePermission::firstOrCreate(
+                [
+                    'role_id' => $role->id,
+                    'permission_id' => $permission->id,
+                ],
+                [
+                    'scope_type' => 'department',
+                    'can_grant'  => true,
+                    'can_revoke' => true,
+                ]
+            );
         } else {
             DelegatablePermission::where('role_id', $role->id)
                 ->where('permission_id', $permission->id)
