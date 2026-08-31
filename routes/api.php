@@ -798,6 +798,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
     // تقارير الإثنين الأسبوعية لكل إدارة
     Route::get('weekly-reports',                     [WeeklyReportController::class, 'index']);
     Route::get('weekly-reports/due',                 [WeeklyReportController::class, 'due']);
+    Route::get('weekly-reports/summary',             [WeeklyReportController::class, 'summary']);
 
     // نقاط أثر EMC — ملخصي وسجلي ولوحة الصدارة والسياسة
     Route::get('volunteer-points/policy',            [VolunteerPointsController::class, 'policy']);

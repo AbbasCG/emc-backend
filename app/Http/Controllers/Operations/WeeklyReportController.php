@@ -27,6 +27,27 @@ class WeeklyReportController extends Controller
         return CarbonImmutable::now()->startOfWeek(CarbonImmutable::MONDAY);
     }
 
+    /**
+     * قاعدة العمل المؤكدة: كل إدارة تُسلِّم تقريرها الأسبوعي يوم الإثنين نفسه —
+     * أي أن موعد الاستحقاق هو نهاية يوم الإثنين (بداية الأسبوع نفسها)، لا
+     * الأربعاء كما كان مفترَضًا سابقًا خطأً. لا يوجد عمود "deadline" في قاعدة
+     * البيانات، فهذا الحساب مصدر الحقيقة الوحيد ويُستخدم من كل مكان (لافتة
+     * الاستحقاق، بطاقات الملخص، حالة "متأخر" المشتقة) — الواجهة الأمامية لا
+     * تُعيد حساب هذا التاريخ أبدًا، بل تعرض فقط ما يُعيده الخادم.
+     * التوقيت: يُقرأ عبر CarbonImmutable::now()/startOfWeek بتوقيت التطبيق
+     * الافتراضي (config('app.timezone') = UTC)، فلا يوجد أي تعارض بين توقيت
+     * حساب week_start وتوقيت التحقق من الاستحقاق — كلاهما بنفس المنطقة.
+     */
+    private function deadline(CarbonImmutable $weekStart): CarbonImmutable
+    {
+        return $weekStart->endOfDay();
+    }
+
+    private function isDeadlinePassed(CarbonImmutable $weekStart): bool
+    {
+        return CarbonImmutable::now()->greaterThan($this->deadline($weekStart));
+    }
+
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
@@ -44,6 +65,16 @@ class WeeklyReportController extends Controller
             )
             ->when($request->department_id, fn ($q) => $q->where('department_id', $request->department_id))
             ->when($request->week_start, fn ($q) => $q->whereDate('week_start', $request->week_start))
+            ->when($request->week_from, fn ($q) => $q->whereDate('week_start', '>=', $request->week_from))
+            ->when($request->week_to, fn ($q) => $q->whereDate('week_start', '<=', $request->week_to))
+            ->when($request->q, function ($q) use ($request) {
+                $term = trim((string) $request->q);
+                $q->where(function ($sub) use ($term) {
+                    $sub->whereHas('department', fn ($d) => $d->where('name', 'like', "%{$term}%")
+                        ->orWhere('name_ar', 'like', "%{$term}%"))
+                        ->orWhereHas('submitter', fn ($s) => $s->where('name', 'like', "%{$term}%"));
+                });
+            })
             ->orderByDesc('week_start')
             ->paginate((int) ($request->per_page ?? 15));
 
@@ -68,9 +99,52 @@ class WeeklyReportController extends Controller
         return response()->json([
             'success' => true,
             'data'    => [
-                'week_start' => $weekStart->toDateString(),
-                'missing'    => $missing,
-                'submitted'  => $submitted->count(),
+                'week_start'      => $weekStart->toDateString(),
+                'missing'         => $missing,
+                'submitted'       => $submitted->count(),
+                'deadline'        => $this->deadline($weekStart)->toIso8601String(),
+                'deadline_passed' => $this->isDeadlinePassed($weekStart),
+            ],
+        ]);
+    }
+
+    /**
+     * إحصاءات الأسبوع الحالي ضمن نطاق المستخدم — تغذي بطاقات الملخص أعلى
+     * الصفحة. مشتقة بالكامل من department_id/week_start الفعليين، لا أرقام
+     * ثابتة.
+     */
+    public function summary(Request $request): JsonResponse
+    {
+        $user      = $request->user();
+        $weekStart = $this->currentWeekStart();
+
+        $expectedIds = $this->departmentAccess
+            ->scopeQuery(Department::query(), $user, 'id')
+            ->pluck('id');
+
+        $submittedIds = WeeklyDepartmentReport::query()
+            ->whereDate('week_start', $weekStart)
+            ->whereIn('department_id', $expectedIds)
+            ->pluck('department_id');
+
+        $expected        = $expectedIds->count();
+        $submitted       = $submittedIds->count();
+        $missing         = max(0, $expected - $submitted);
+        $deadlinePassed  = $this->isDeadlinePassed($weekStart);
+        $overdue         = $deadlinePassed ? $missing : 0;
+        $inProgress      = $deadlinePassed ? 0 : $missing;
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'week_start'      => $weekStart->toDateString(),
+                'deadline'        => $this->deadline($weekStart)->toIso8601String(),
+                'expected'        => $expected,
+                'submitted'       => $submitted,
+                'overdue'         => $overdue,
+                'in_progress'     => $inProgress,
+                'completion_rate' => $expected > 0 ? round(($submitted / $expected) * 100) : 0,
+                'deadline_passed' => $deadlinePassed,
             ],
         ]);
     }
