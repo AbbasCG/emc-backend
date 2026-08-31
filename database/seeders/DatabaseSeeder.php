@@ -22,6 +22,8 @@ class DatabaseSeeder extends Seeder
             RolePermissionSeeder::class,
             GranularPermissionsSeeder::class,   // granular dotted-notation permissions
             DemoUserSeeder::class,
+            TrackSeeder::class,
+            LearningPathSeeder::class,
         ]);
 
         // ── Finance: system-managed payment-gateway accounts & Chart of Accounts ──

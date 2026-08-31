@@ -12,8 +12,8 @@ class Department extends Model
 {
     use Auditable;
     protected $fillable = [
-        'name', 'slug', 'description', 'leader_id', 'parent_id',
-        'status', 'icon', 'color', 'sort_order',
+        'name', 'slug', 'description', 'leader_id', 'deputy_leader_id', 'operational_member_id',
+        'parent_id', 'status', 'icon', 'color', 'sort_order',
         // Bilingual + public-display columns (Phase RBAC / EMC V3 team)
         'name_ar', 'name_en', 'description_ar', 'is_active',
     ];
@@ -23,6 +23,26 @@ class Department extends Model
     public function leader(): BelongsTo
     {
         return $this->belongsTo(User::class, 'leader_id');
+    }
+
+    public function deputyLeader(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'deputy_leader_id');
+    }
+
+    public function operationalMember(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'operational_member_id');
+    }
+
+    public function units(): HasMany
+    {
+        return $this->hasMany(DepartmentalUnit::class, 'department_id');
+    }
+
+    public function userDepartments(): HasMany
+    {
+        return $this->hasMany(UserDepartment::class, 'department_id');
     }
 
     public function parent(): BelongsTo

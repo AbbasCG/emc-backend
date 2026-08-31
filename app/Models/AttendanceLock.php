@@ -20,4 +20,15 @@ class AttendanceLock extends Model
     {
         return $this->belongsTo(User::class, 'locked_by');
     }
+
+    public function session(): BelongsTo
+    {
+        return $this->belongsTo(LmsSession::class, 'session_id');
+    }
+
+    public function courseSession(): BelongsTo
+    {
+        return $this->belongsTo(CourseSession::class, 'course_session_id');
+    }
 }
+
