@@ -13,6 +13,7 @@
         "laravel/reverb": "*",
         "laravel/sanctum": "^4.3",
         "laravel/tinker": "^3.0",
+        "livewire/livewire": "^3.6",
         "minishlink/web-push": "^10.1",
         "phpoffice/phpspreadsheet": "^5.9",
         "predis/predis": "^3.4",

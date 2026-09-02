@@ -189,7 +189,10 @@ class User extends Authenticatable
         $this->permissionCache = null;
     }
 
-    // ─── Relationships ───────────────────────────────────────────────────────
+    public function permissionAssignments(): HasMany
+    {
+        return $this->hasMany(UserPermissionAssignment::class);
+    }
 
     public function instructorProfile(): HasOne
     {
