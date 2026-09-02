@@ -5,10 +5,20 @@ namespace App\Livewire;
 use App\Models\Permission;
 use App\Models\User;
 use App\Models\UserPermissionAssignment;
+use Illuminate\Auth\Access\AuthorizationException;
+use Livewire\Attributes\Locked;
 use Livewire\Component;
 
+/**
+ * Direct-admin permission grant/revoke UI. Every mutating action requires the
+ * acting user to be an admin/have admin.access — the same boundary
+ * User::canAccessPanel() enforced before the Filament panel scaffolding was
+ * removed as incomplete. $userId is #[Locked] so the client can never
+ * substitute a different target user after mount().
+ */
 class UserPermissionsTransfer extends Component
 {
+    #[Locked]
     public int $userId;
 
     public string $searchUnassigned = '';
@@ -19,7 +29,18 @@ class UserPermissionsTransfer extends Component
 
     public function mount(int $userId): void
     {
+        $this->authorizeActingUser();
+
         $this->userId = $userId;
+    }
+
+    private function authorizeActingUser(): void
+    {
+        $actor = auth()->user();
+
+        if (! $actor || (! $actor->isAdmin() && ! $actor->hasPermission('admin.access'))) {
+            throw new AuthorizationException('ليست لديك صلاحية إدارة صلاحيات المستخدمين.');
+        }
     }
 
     public function getUserProperty(): User
@@ -29,6 +50,8 @@ class UserPermissionsTransfer extends Component
 
     public function grantPermission(int $permissionId): void
     {
+        $this->authorizeActingUser();
+
         UserPermissionAssignment::updateOrCreate(
             [
                 'user_id' => $this->userId,
@@ -36,6 +59,8 @@ class UserPermissionsTransfer extends Component
             ],
             [
                 'state' => 'allow',
+                'scope_type' => 'global',
+                'source_type' => 'direct_admin',
                 'granted_by' => auth()->id(),
             ]
         );
@@ -46,6 +71,8 @@ class UserPermissionsTransfer extends Component
 
     public function revokePermission(int $permissionId): void
     {
+        $this->authorizeActingUser();
+
         UserPermissionAssignment::where('user_id', $this->userId)
             ->where('permission_id', $permissionId)
             ->delete();
@@ -56,6 +83,8 @@ class UserPermissionsTransfer extends Component
 
     public function grantSelected(array $ids = []): void
     {
+        $this->authorizeActingUser();
+
         $targetIds = !empty($ids) ? $ids : $this->selectedUnassigned;
 
         foreach ($targetIds as $permId) {
@@ -67,6 +96,8 @@ class UserPermissionsTransfer extends Component
                     ],
                     [
                         'state' => 'allow',
+                        'scope_type' => 'global',
+                        'source_type' => 'direct_admin',
                         'granted_by' => auth()->id(),
                     ]
                 );
@@ -79,6 +110,8 @@ class UserPermissionsTransfer extends Component
 
     public function revokeSelected(array $ids = []): void
     {
+        $this->authorizeActingUser();
+
         $targetIds = !empty($ids) ? $ids : $this->selectedAssigned;
 
         if (!empty($targetIds)) {
@@ -93,6 +126,8 @@ class UserPermissionsTransfer extends Component
 
     public function grantAll(): void
     {
+        $this->authorizeActingUser();
+
         $allUnassigned = $this->getUnassignedPermissionsProperty();
         foreach ($allUnassigned as $p) {
             $this->grantPermission($p->id);
@@ -102,6 +137,8 @@ class UserPermissionsTransfer extends Component
 
     public function revokeAll(): void
     {
+        $this->authorizeActingUser();
+
         $allAssigned = $this->getAssignedPermissionsProperty();
         foreach ($allAssigned as $p) {
             $this->revokePermission($p->id);

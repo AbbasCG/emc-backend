@@ -11,18 +11,12 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Notifications\ResetPasswordNotification;
-use Filament\Models\Contracts\FilamentUser;
-use Filament\Panel;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 
-class User extends Authenticatable implements FilamentUser
+class User extends Authenticatable
 {
-    public function canAccessPanel(Panel $panel): bool
-    {
-        return (bool) $this->is_active && ($this->isAdmin() || $this->hasPermission('admin.access'));
-    }
     /** @use HasFactory<UserFactory> */
     use HasApiTokens, Auditable, HasFactory, Notifiable, SoftDeletes;
 
