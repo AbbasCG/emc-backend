@@ -7,6 +7,7 @@ use App\Http\Resources\TeamMemberResource;
 use App\Models\Department;
 use App\Models\TeamProfile;
 use App\Models\User;
+use App\Services\DepartmentLeadershipService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -16,6 +17,10 @@ use Illuminate\Support\Str;
 class AdminTeamProfileController extends Controller
 {
     private const USER_SELECT = 'id,name,email,role,avatar,is_active';
+
+    public function __construct(private readonly DepartmentLeadershipService $leadership)
+    {
+    }
 
     /**
      * GET /api/admin/team
@@ -104,6 +109,7 @@ class AdminTeamProfileController extends Controller
         ]);
 
         $profile = TeamProfile::create($data);
+        $this->leadership->syncFromTeamProfile($profile);
         $this->loadRelations($profile);
 
         return response()->json(['success' => true, 'data' => $this->format($profile)], 201);
@@ -144,6 +150,10 @@ class AdminTeamProfileController extends Controller
             && $data['position_ar'] !== $teamProfile->position_ar;
 
         $teamProfile->update($data);
+
+        if (array_key_exists('is_leader', $data)) {
+            $this->leadership->syncFromTeamProfile($teamProfile);
+        }
 
         // Keep the operational team_members row (if any) from silently
         // drifting away from this canonical profile — see the architecture

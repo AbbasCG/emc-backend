@@ -10,12 +10,17 @@ use App\Models\Department;
 use App\Models\Task;
 use App\Models\TeamProfile;
 use App\Models\VolunteerHrProfile;
+use App\Services\DepartmentLeadershipService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class DepartmentController extends Controller
 {
+    public function __construct(private readonly DepartmentLeadershipService $leadership)
+    {
+    }
+
     /**
      * Only a real department_manager is restricted to their own department
      * (mirrors index()'s scoping — show()/overview() previously had none,
@@ -117,6 +122,10 @@ class DepartmentController extends Controller
         $data['slug'] = $data['slug'] ?? Str::slug($data['name']);
 
         $department = Department::create($data);
+
+        if (array_key_exists('leader_id', $data)) {
+            $this->leadership->syncFromDepartmentLeaderId($department, $data['leader_id']);
+        }
 
         return response()->json([
             'success' => true,
@@ -320,6 +329,10 @@ class DepartmentController extends Controller
         ]);
 
         $department->update($data);
+
+        if (array_key_exists('leader_id', $data)) {
+            $this->leadership->syncFromDepartmentLeaderId($department, $data['leader_id']);
+        }
 
         return response()->json([
             'success' => true,
