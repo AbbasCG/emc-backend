@@ -128,6 +128,38 @@ class WeeklyReportsDashboardTest extends TestCase
         $this->assertIsBool($res->json('data.deadline_passed'));
     }
 
+    // ── led_departments: coverage gaps closed alongside the leadership repair ──
+
+    public function test_non_leader_manager_role_sees_empty_led_departments(): void
+    {
+        $dept = $this->makeDepartment();
+        $otherLeader = User::factory()->create(['role' => 'department_manager', 'is_active' => true]);
+        $dept->update(['leader_id' => $otherLeader->id]);
+
+        // Same manager-style role slug as a real leader, but not actually assigned as leader anywhere.
+        $nonLeader = User::factory()->create(['role' => 'programs_manager', 'is_active' => true]);
+
+        $res = $this->actingAs($nonLeader)->getJson('/api/operations/weekly-reports/due');
+        $res->assertOk();
+        $this->assertSame([], $res->json('data.led_departments'));
+    }
+
+    public function test_global_admin_sees_empty_led_departments_but_endpoint_still_works(): void
+    {
+        // Global admins get create access via can_select_any_department (the manifest),
+        // not via led_departments — getLedDepartmentIds is leader_id-only and does not
+        // special-case global roles, so this must stay empty rather than error or leak.
+        $admin = User::factory()->create(['role' => 'super_admin', 'is_active' => true]);
+
+        $res = $this->actingAs($admin)->getJson('/api/operations/weekly-reports/due');
+        $res->assertOk();
+        $this->assertSame([], $res->json('data.led_departments'));
+
+        $res2 = $this->actingAs($admin)->getJson('/api/operations/weekly-reports/summary');
+        $res2->assertOk();
+        $this->assertSame([], $res2->json('data.led_departments'));
+    }
+
     // ── Monday deadline business rule ───────────────────────────────────────
     // The confirmed rule: each department submits its weekly report on Monday
     // itself — the reporting week's own Monday is the deadline (end of that

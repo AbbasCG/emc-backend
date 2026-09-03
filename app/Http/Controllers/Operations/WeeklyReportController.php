@@ -48,6 +48,59 @@ class WeeklyReportController extends Controller
         return CarbonImmutable::now()->greaterThan($this->deadline($weekStart));
     }
 
+    /**
+     * Per-department creation/edit capability for every department the
+     * authenticated user actually LEADS (departments.leader_id — see
+     * DepartmentAccessService; never a role slug). Shared by due() and
+     * summary() so they never disagree about who may create a report — the
+     * frontend consumes this directly instead of re-deriving "can I create"
+     * from role names or a client-side allowlist.
+     *
+     * Returned as an array, not a single object: the schema does not
+     * guarantee one leader → one department (a user's `leader_id` can be
+     * set on several Department rows), so every led department must be
+     * represented rather than silently picking one with first().
+     */
+    private function leadershipState($user, CarbonImmutable $weekStart): array
+    {
+        $ledIds = $this->departmentAccess->getLedDepartmentIds($user);
+        if ($ledIds->isEmpty()) {
+            return [];
+        }
+
+        $departments = Department::query()->whereIn('id', $ledIds)->orderBy('sort_order')->get(['id', 'name']);
+
+        $reports = WeeklyDepartmentReport::query()
+            ->whereIn('department_id', $ledIds)
+            ->whereDate('week_start', $weekStart)
+            ->with('submitter:id,name')
+            ->get()
+            ->keyBy('department_id');
+
+        $deadlinePassed = $this->isDeadlinePassed($weekStart);
+
+        return $departments->map(function (Department $department) use ($reports, $deadlinePassed) {
+            $report = $reports->get($department->id);
+
+            return [
+                'department' => ['id' => $department->id, 'name' => $department->name],
+                'current_report' => $report ? [
+                    'id' => $report->id,
+                    'submitted_at' => $report->submitted_at,
+                    'submitter' => $report->submitter
+                        ? ['id' => $report->submitter->id, 'name' => $report->submitter->name]
+                        : null,
+                ] : null,
+                // Overdue never blocks creation — an overdue, still-missing
+                // report is exactly the case that must remain creatable.
+                'can_create' => ! $report,
+                'can_edit'   => (bool) $report,
+                'can_submit' => true,
+                'state'      => $report ? 'submitted' : ($deadlinePassed ? 'overdue' : 'in_progress'),
+            ];
+        })->values()->all();
+    }
+
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
@@ -104,6 +157,7 @@ class WeeklyReportController extends Controller
                 'submitted'       => $submitted->count(),
                 'deadline'        => $this->deadline($weekStart)->toIso8601String(),
                 'deadline_passed' => $this->isDeadlinePassed($weekStart),
+                'led_departments' => $this->leadershipState($request->user(), $weekStart),
             ],
         ]);
     }
@@ -145,6 +199,7 @@ class WeeklyReportController extends Controller
                 'in_progress'     => $inProgress,
                 'completion_rate' => $expected > 0 ? round(($submitted / $expected) * 100) : 0,
                 'deadline_passed' => $deadlinePassed,
+                'led_departments' => $this->leadershipState($user, $weekStart),
             ],
         ]);
     }
