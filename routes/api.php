@@ -2018,8 +2018,13 @@ Route::prefix('institute')->group(function () {
         // Levels & Bundles
         Route::apiResource('levels', \App\Http\Controllers\Institute\InstituteAdminController::class);
         
-        // Coupons
-        Route::apiResource('coupons', \App\Http\Controllers\Institute\InstituteAdminController::class);
+        // Coupons — explicit ->names() avoids colliding with the unrelated
+        // top-level Route::apiResource('coupons', CouponController::class)
+        // (Phase 4 revenue engine), which also auto-names its routes
+        // coupons.*. Same URI (api/institute/admin/coupons), same controller,
+        // same authorization — only the route *name* changes.
+        Route::apiResource('coupons', \App\Http\Controllers\Institute\InstituteAdminController::class)
+            ->names('institute.admin.coupons');
         
         // Class Distribution
         Route::get('waitlist', [\App\Http\Controllers\Institute\InstituteAdminController::class, 'waitlist']);

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Role;
 use App\Models\User;
 use App\Services\ActivityLogger;
 use Illuminate\Http\JsonResponse;
@@ -20,14 +21,6 @@ class UserRoleController extends Controller
 {
     private const SUPER_ADMIN_ONLY_ROLES = ['super_admin', 'executive_admin'];
 
-    private const ALL_ROLES = [
-        'super_admin', 'executive_admin', 'admin', 'department_manager', 'section_lead',
-        'finance_manager', 'marketing_manager', 'quality_manager', 'hr_manager',
-        'support_agent', 'instructor', 'student', 'volunteer', 'partner',
-        // Legacy alias
-        'teacher',
-    ];
-
     /** PUT /api/admin/users/{user}/role */
     public function assignRole(Request $request, User $user): JsonResponse
     {
@@ -44,7 +37,7 @@ class UserRoleController extends Controller
         }
 
         $data = $request->validate([
-            'role' => 'required|string|in:' . implode(',', self::ALL_ROLES),
+            'role' => ['required', 'string', \Illuminate\Validation\Rule::in(Role::assignableSlugs())],
         ]);
 
         $newRole = $data['role'];
@@ -98,9 +91,13 @@ class UserRoleController extends Controller
     {
         return response()->json([
             'success' => true,
-            'data'    => collect(self::ALL_ROLES)
-                ->reject(fn ($r) => $r === 'teacher') // hide legacy alias from UI
-                ->map(fn ($r) => ['value' => $r, 'label' => ucwords(str_replace('_', ' ', $r))])
+            // Sourced from the roles table itself — 'teacher' (a legacy,
+            // deliberately unseeded RoleMiddleware alias for 'instructor')
+            // is never a row here, so it never needs excluding by name.
+            'data'    => Role::query()
+                ->orderBy('name')
+                ->get(['name', 'display_name'])
+                ->map(fn (Role $r) => ['value' => $r->name, 'label' => $r->display_name])
                 ->values(),
         ]);
     }

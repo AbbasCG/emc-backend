@@ -7,8 +7,18 @@ use Illuminate\Database\Seeder;
 
 class RoleSeeder extends Seeder
 {
-    /** All platform roles. is_system = cannot be deleted via API. */
-    private const ROLES = [
+    /**
+     * All platform roles. is_system = cannot be deleted via API.
+     *
+     * Public so `roles:sync-system` (App\Console\Commands\SyncSystemRolesCommand)
+     * can reuse this exact canonical list to safely insert any missing system
+     * role in an already-running environment (e.g. production) without
+     * needing a second, independently-maintained role definition — and
+     * without this seeder's own updateOrCreate() (which the sync command
+     * deliberately does NOT use, so it never overwrites a role an admin has
+     * since customized via RoleController).
+     */
+    public const ROLES = [
         ['name' => 'super_admin',       'display_name' => 'Super Admin',        'description' => 'Full unrestricted access to everything.',                         'is_system' => true],
         ['name' => 'executive_admin',   'display_name' => 'Executive Admin',     'description' => 'Read-only view across all dashboards and reports.',               'is_system' => true],
         ['name' => 'admin',             'display_name' => 'Admin',               'description' => 'Manages platform operations, courses, users, and content.',        'is_system' => true],

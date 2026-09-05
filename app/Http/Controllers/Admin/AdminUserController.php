@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Course;
 use App\Models\Registration;
+use App\Models\Role;
 use App\Models\User;
 use App\Services\AuditLogService;
 use App\Services\NotificationService;
@@ -16,14 +17,6 @@ use Illuminate\Validation\Rule;
 
 class AdminUserController extends Controller
 {
-    private const ALLOWED_ROLES = [
-        'super_admin', 'tech_admin', 'executive_admin', 'admin',
-        'department_manager', 'section_lead',
-        'finance_manager', 'marketing_manager', 'quality_manager', 'hr_manager',
-        'support_agent', 'instructor', 'teacher',
-        'student', 'volunteer', 'partner',
-        'programs_manager', 'operations_manager', 'partnerships_manager', 'community_manager',
-    ];
 
     // GET /api/admin/users/search?q=
     public function search(Request $request): JsonResponse
@@ -108,7 +101,7 @@ class AdminUserController extends Controller
             'name'                      => 'required|string|max:255',
             'email'                     => 'required|email|max:255|unique:users,email',
             'password'                  => 'nullable|string|min:8',
-            'role'                      => ['required', Rule::in(self::ALLOWED_ROLES)],
+            'role'                      => ['required', Rule::in(Role::assignableSlugs())],
             'phone'                     => 'nullable|string|max:30',
             'department'                => 'nullable|string|max:255',
             'city'                      => 'nullable|string|max:100',
@@ -203,7 +196,7 @@ class AdminUserController extends Controller
             'name'                      => 'sometimes|string|max:255',
             'email'                     => ['sometimes', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user->id)],
             'password'                  => 'sometimes|nullable|string|min:8',
-            'role'                      => ['sometimes', Rule::in(self::ALLOWED_ROLES)],
+            'role'                      => ['sometimes', Rule::in(Role::assignableSlugs())],
             'phone'                     => 'sometimes|nullable|string|max:30',
             'department'                => 'sometimes|nullable|string|max:255',
             'city'                      => 'sometimes|nullable|string|max:100',
