@@ -748,8 +748,14 @@ Route::middleware('auth:sanctum')->group(function () {
         });
 });
 
-// Admin Expert Applications
-Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,ai_manager'])->prefix('admin/expert-applications')->group(function () {
+// Admin Expert Applications — a talent/expert-recruitment intake ("Join Us
+// as Trainer": trainer/consultant/mentor/evaluator applications), NOT an AI
+// system feature. Historically nested under /admin/ai/* and granted to
+// ai_manager for no evidenced reason; removed per the AI Department/AI
+// Platform separation review. Permanent ownership (HR? Partnerships?
+// Community?) is an open product decision — reverted to admin-tier access
+// only in the meantime, not guessed at.
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('admin/expert-applications')->group(function () {
     Route::get('/', [\App\Http\Controllers\Admin\AdminExpertApplicationController::class, 'index']);
     Route::get('/{id}', [\App\Http\Controllers\Admin\AdminExpertApplicationController::class, 'show']);
     Route::put('/{id}/status', [\App\Http\Controllers\Admin\AdminExpertApplicationController::class, 'updateStatus']);
@@ -785,7 +791,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
     });
 
 // ─── Operations shared surface: يراها كل الفريق (قراءة) + كتابة مقيَّدة ───────
-Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,programs_manager,instructor,hr_manager,finance_manager,marketing,marketing_manager,quality,quality_manager,support_agent,operations_manager,partnerships_manager,community_manager,volunteer,department_manager,section_lead'])->prefix('operations')->group(function () {
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,programs_manager,instructor,hr_manager,finance_manager,marketing,marketing_manager,quality,quality_manager,support_agent,operations_manager,partnerships_manager,community_manager,volunteer,department_manager,section_lead,ai_manager'])->prefix('operations')->group(function () {
     // لوحة التشغيل المرئية للجميع + أعضاء الإدارات
     Route::get('board',                              [OperationsBoardController::class, 'board']);
     Route::get('departments/my-access',              [OperationsBoardController::class, 'myDepartmentAccess']);
@@ -1083,8 +1089,13 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
 
 });
 
-// ── Phase 8: AI Admin ─────────────────────────────────────────────────────
-Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,ai_manager'])->prefix('admin/ai')->group(function () {
+// ── Phase 8: AI Admin (Technical AI Platform — usage/tokens/generations/
+// automations/prompts. Deliberately NOT granted to ai_manager: that role is
+// the organizational AI Department manager, a normal department leadership
+// role, and must not automatically receive technical AI-platform access.
+// Preserved for admin/super_admin/tech_admin. See ai-department-and-
+// ai-platform-separation — Domain A (organizational) vs Domain B (technical). ──
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('admin/ai')->group(function () {
     // Prompt management
     Route::get('prompts',                    [AiPromptController::class, 'index']);
     Route::post('prompts',                   [AiPromptController::class, 'store']);
@@ -1097,10 +1108,6 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,ai_manager
     Route::post('insights/generate',         [AiInsightController::class, 'generate']);
     Route::delete('insights/{aiInsight}',    [AiInsightController::class, 'destroy']);
 
-    // AI Usage logs & cost tracking
-    Route::get('usage',                      [AiUsageController::class, 'index']);
-    Route::get('usage/summary',              [AiUsageController::class, 'summary']);
-
     // AI Automation rules
     Route::get('automations',                [AiAutomationController::class, 'index']);
     Route::post('automations',               [AiAutomationController::class, 'store']);
@@ -1108,6 +1115,20 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,ai_manager
     Route::put('automations/{aiAutomationRule}',            [AiAutomationController::class, 'update']);
     Route::delete('automations/{aiAutomationRule}',         [AiAutomationController::class, 'destroy']);
     Route::get('automations/{aiAutomationRule}/executions', [AiAutomationController::class, 'executions']);
+});
+
+// AI Usage logs & cost tracking — deliberately its OWN group gated by the
+// existing `view_ai_usage` permission alone (App\Support\Permissions), not
+// nested under the role:admin,super_admin,tech_admin gate above: a role
+// check there would run before any permission check and defeat the point
+// of a permission-based grant. admin/super_admin/tech_admin already hold
+// `view_ai_usage` via the role-permission pivot (PermissionMiddleware also
+// unconditionally bypasses super_admin/tech_admin), so their access is
+// unchanged; any other role — including ai_manager — needs this permission
+// explicitly, never the role slug.
+Route::middleware(['auth:sanctum', 'permission:view_ai_usage'])->prefix('admin/ai')->group(function () {
+    Route::get('usage',          [AiUsageController::class, 'index']);
+    Route::get('usage/summary',  [AiUsageController::class, 'summary']);
 });
 
 // ─── Phase 7: Mobile API (auth required, any role) ───────────────────────────

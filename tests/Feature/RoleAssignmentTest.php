@@ -114,9 +114,14 @@ class RoleAssignmentTest extends TestCase
 
     public function test_ai_manager_can_access_its_own_intended_endpoint(): void
     {
+        // Updated after the AI Department / AI Platform separation:
+        // ai_manager's "own" intended surface is now the organizational
+        // department/operations surface (Weekly Reports, department access),
+        // not the technical AI usage summary — see
+        // AiDepartmentPlatformSeparationTest for the full access-boundary coverage.
         $aiManager = User::factory()->create(['role' => 'ai_manager', 'is_active' => true]);
 
-        $res = $this->actingAs($aiManager)->getJson('/api/admin/ai/usage/summary');
+        $res = $this->actingAs($aiManager)->getJson('/api/operations/weekly-reports/due');
 
         $res->assertOk();
     }
