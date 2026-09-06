@@ -130,7 +130,18 @@ class DepartmentAccessService
      * always leadership-scoped (or global), never membership-scoped, since
      * only leaders (and global admins) may create reports. An empty
      * `allowed_departments` for a non-global user means they lead nothing
-     * and the create action must be hidden, not shown with an empty field.
+     * (selectable) and the create action must be hidden, not shown with an
+     * empty field.
+     *
+     * Selectable options are restricted to active departments (`->active()`)
+     * — a new report is a new organizational assignment, and an archived
+     * department (e.g. a merged-away duplicate) must not be offered as a
+     * target for one. This does NOT affect getLedDepartmentIds()/
+     * canManageDepartment() below, which remain unfiltered by status: those
+     * answer "does this user have authority over department X" for EXISTING
+     * data (already-created reports, department overview), a fact that must
+     * keep working regardless of the department's current status — only the
+     * "what can I pick to create something new" listing changes here.
      */
     public function manifest(User $user): array
     {
@@ -138,6 +149,7 @@ class DepartmentAccessService
             return [
                 'department_scope' => 'global',
                 'allowed_departments' => Department::query()
+                    ->active()
                     ->orderBy('sort_order')
                     ->get(['id', 'name'])
                     ->map(fn (Department $d) => ['id' => $d->id, 'name' => $d->name]),
@@ -151,6 +163,7 @@ class DepartmentAccessService
             'department_scope' => 'restricted',
             'allowed_departments' => Department::query()
                 ->whereIn('id', $ids)
+                ->active()
                 ->orderBy('sort_order')
                 ->get(['id', 'name'])
                 ->map(fn (Department $d) => ['id' => $d->id, 'name' => $d->name]),

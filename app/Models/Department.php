@@ -20,6 +20,21 @@ class Department extends Model
 
     protected $casts = ['is_active' => 'boolean'];
 
+    /**
+     * Canonical "currently part of active organizational management" filter —
+     * the `status` column ('active'/'inactive'/'archived') is the single
+     * source of truth for this, not a second ad-hoc flag. A department a
+     * duplicate-merge command archived (see
+     * MergeDuplicateAiDepartmentCommand) must disappear from management
+     * listings and new-assignment selectors via this scope, while remaining
+     * fully resolvable by ID for historical reports/records — this scope is
+     * deliberately never applied to single-row lookups or relation resolution.
+     */
+    public function scopeActive(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder
+    {
+        return $query->where('status', 'active');
+    }
+
     public function leader(): BelongsTo
     {
         return $this->belongsTo(User::class, 'leader_id');

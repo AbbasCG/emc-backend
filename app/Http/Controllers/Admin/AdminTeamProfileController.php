@@ -31,6 +31,7 @@ class AdminTeamProfileController extends Controller
     {
         $departments = Department::query()
             ->where('is_active', true)
+            ->active()
             ->whereNotNull('name_ar')
             ->whereNotNull('name_en')
             ->with(['teamProfiles' => fn ($q) => $q

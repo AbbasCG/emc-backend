@@ -67,6 +67,7 @@ class DepartmentController extends Controller
             ])
             ->with(['leader:id,name,email,role', 'sections', 'children'])
             ->whereNull('parent_id')
+            ->active()
             ->orderBy('sort_order');
 
         // Scope: department_manager sees only their own department(s).
