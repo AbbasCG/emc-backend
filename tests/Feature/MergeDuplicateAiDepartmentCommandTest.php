@@ -2,14 +2,17 @@
 
 namespace Tests\Feature;
 
+use App\Models\Course;
 use App\Models\Department;
 use App\Models\DepartmentalUnit;
 use App\Models\Meeting;
+use App\Models\MeetingReport;
 use App\Models\Task;
 use App\Models\TeamMember;
 use App\Models\TeamProfile;
 use App\Models\Ticket;
 use App\Models\User;
+use App\Models\WeeklyDepartmentReport;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -203,6 +206,57 @@ class MergeDuplicateAiDepartmentCommandTest extends TestCase
         $source->refresh();
         $this->assertSame('archived', $source->status);
         $this->assertSame(11, Ticket::first()->department_id, 'ticket must keep its original historical department_id, never rewritten');
+    }
+
+    public function test_apply_moves_courses_and_preserves_targets_existing_courses_without_duplication(): void
+    {
+        $target = $this->makeTarget();
+        $source = $this->makeSource();
+
+        $sourceCourse1 = Course::create(['title' => 'Source Course 1', 'slug' => 'source-course-1', 'department_id' => $source->id]);
+        $sourceCourse2 = Course::create(['title' => 'Source Course 2', 'slug' => 'source-course-2', 'department_id' => $source->id]);
+        $targetCourse = Course::create(['title' => 'Target Course', 'slug' => 'target-course', 'department_id' => $target->id]);
+
+        $this->artisan('departments:merge-duplicate-ai', ['--apply' => true])->assertSuccessful();
+
+        $this->assertSame($target->id, $sourceCourse1->fresh()->department_id, 'source courses must move to the target — courses.department_id is live current ownership, not historical');
+        $this->assertSame($target->id, $sourceCourse2->fresh()->department_id);
+        $this->assertSame($target->id, $targetCourse->fresh()->department_id, 'target\'s own pre-existing course must be untouched');
+        $this->assertSame(3, Course::where('department_id', $target->id)->count(), 'no course duplication — exactly the 2 moved + 1 pre-existing');
+        $this->assertSame(0, Course::where('department_id', 11)->count());
+    }
+
+    public function test_reports_remain_historical_on_source_courses_move_and_target_leader_stays_2078(): void
+    {
+        // Mirrors the exact production dry-run shape: 1 volunteer_hr_profile
+        // (MOVE), 1 meeting_report + 1 weekly_department_report (PRESERVE),
+        // 14 courses worth of live ownership (represented here by 2, MOVE).
+        $target = $this->makeTarget();
+        $source = $this->makeSource();
+        $creator = User::factory()->create();
+
+        $course = Course::create(['title' => 'AI Course', 'slug' => 'ai-course-prod-shape', 'department_id' => $source->id]);
+        $meetingReport = MeetingReport::create([
+            'department_id' => $source->id, 'title' => 'Old meeting report', 'meeting_date' => now()->toDateString(), 'created_by' => $creator->id,
+        ]);
+        $weeklyReport = WeeklyDepartmentReport::create([
+            'department_id' => $source->id, 'week_start' => now()->startOfWeek()->toDateString(), 'submitted_by' => $creator->id,
+            'achievements' => 'x', 'planned' => 'y', 'submitted_at' => now(),
+        ]);
+
+        $this->artisan('departments:merge-duplicate-ai', ['--apply' => true])
+            ->expectsOutputToContain('archived')
+            ->expectsOutputToContain('leader_id remains: 2078')
+            ->assertSuccessful();
+
+        $this->assertSame($target->id, $course->fresh()->department_id, 'course ownership moves to the canonical department');
+        $this->assertSame(11, $meetingReport->fresh()->department_id, 'meeting report keeps its original historical department_id');
+        $this->assertSame(11, $weeklyReport->fresh()->department_id, 'weekly report keeps its original historical department_id');
+
+        $source->refresh();
+        $this->assertSame('archived', $source->status, 'source archived — historical reports still reference it, so it cannot be deleted');
+        $target->refresh();
+        $this->assertSame(2078, $target->leader_id);
     }
 
     public function test_move_category_tasks_and_meetings_are_reassigned(): void

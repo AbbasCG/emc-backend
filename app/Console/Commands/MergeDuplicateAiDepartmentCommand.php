@@ -60,13 +60,27 @@ use Illuminate\Support\Facades\DB;
  *               departmental_units, department_sections, tasks, meetings,
  *               knowledge_categories, knowledge_articles, dynamic_forms,
  *               volunteer_hr_profiles, volunteer_profiles, user_departments
- *               pivot) — reassigned to the target on --apply.
+ *               pivot, courses) — reassigned to the target on --apply.
+ *               courses.department_id specifically was re-audited and moved
+ *               here from an earlier PRESERVE classification: it is a LIVE,
+ *               editable ownership field (AdminCourseController::update()
+ *               validates and writes it on every course edit — the shared
+ *               validateCourse() rules apply on update, not just store) and
+ *               it drives the department's live courses_count shown on
+ *               /dashboard/super-admin/crud/departments. Leaving a
+ *               department's real courses on a merged-away duplicate would
+ *               misattribute current ownership, unlike a genuine report
+ *               snapshot.
  *   PRESERVE  — historical snapshot/authorship, set once at creation and
  *               never rewritten by this app (tickets, meeting_reports,
  *               weekly_department_reports, hr_requests, hr_applications,
- *               financial_requests, courses, documents, document_folders,
+ *               financial_requests, documents, document_folders,
  *               class_groups, job_titles, calendar_events) — NEVER moved,
- *               since rewriting their department_id would falsify history.
+ *               since rewriting their department_id would falsify history
+ *               (meeting_reports/weekly_department_reports in particular
+ *               are tied to a specific meeting_id/week_start and submitting
+ *               author, with no update path that ever changes department_id
+ *               after creation — verified by code, not assumed).
  *               Any nonzero PRESERVE count permanently blocks hard deletion;
  *               the duplicate is archived (status='archived', the existing
  *               column — no new archive mechanism invented) instead.
@@ -108,6 +122,16 @@ class MergeDuplicateAiDepartmentCommand extends Command
         'volunteer_hr_profiles'=> VolunteerHrProfile::class,
         'volunteer_profiles'   => VolunteerProfile::class,
         'user_departments'     => UserDepartment::class,
+        // courses.department_id is LIVE current ownership, not a historical
+        // snapshot: AdminCourseController::update() validates and writes it
+        // on every course edit (validateCourse()'s shared rules apply on
+        // both store AND update, with no update-time exclusion), and it
+        // directly drives the department's live `courses_count` shown on
+        // /dashboard/super-admin/crud/departments (DepartmentController::
+        // index() -> withCount('courses as courses_count')). Leaving a
+        // department's real courses attached to a duplicate/archived row
+        // would misattribute current ownership, unlike a report snapshot.
+        'courses'              => Course::class,
     ];
 
     private const PRESERVE_MODELS = [
@@ -117,7 +141,6 @@ class MergeDuplicateAiDepartmentCommand extends Command
         'hr_requests'               => HrRequest::class,
         'hr_applications'           => HrApplication::class,
         'financial_requests'       => FinancialRequest::class,
-        'courses'                   => Course::class,
         'documents'                 => Document::class,
         'document_folders'         => DocumentFolder::class,
         'class_groups'              => ClassGroup::class,
@@ -254,7 +277,8 @@ class MergeDuplicateAiDepartmentCommand extends Command
 
             foreach (['tasks' => Task::class, 'meetings' => Meeting::class, 'knowledge_categories' => KnowledgeCategory::class,
                 'knowledge_articles' => KnowledgeArticle::class, 'dynamic_forms' => DynamicForm::class,
-                'volunteer_hr_profiles' => VolunteerHrProfile::class, 'volunteer_profiles' => VolunteerProfile::class] as $model) {
+                'volunteer_hr_profiles' => VolunteerHrProfile::class, 'volunteer_profiles' => VolunteerProfile::class,
+                'courses' => Course::class] as $model) {
                 $model::where('department_id', $duplicate->id)->update(['department_id' => $target->id]);
             }
 
