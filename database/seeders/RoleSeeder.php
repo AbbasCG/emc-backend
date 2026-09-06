@@ -40,6 +40,13 @@ class RoleSeeder extends Seeder
         ['name' => 'community_manager',  'display_name' => 'Community Manager — مدير المجتمع والصحة',     'description' => 'Manages volunteers, community events, forms, and community programs.',   'is_system' => true],
         ['name' => 'tech_admin',         'display_name' => 'Tech Admin — مدير التقنية',                   'description' => 'Technical platform administrator with full system access.',              'is_system' => true],
         ['name' => 'ai_manager',         'display_name' => 'AI Manager — مدير الذكاء الاصطناعي',        'description' => 'Manages AI usage, recommendations, automations, and expert applications.', 'is_system' => true],
+        // ── New official departments — manager roles only. A role never implies
+        // department leadership by itself; departments.leader_id (via
+        // DepartmentLeadershipService/DepartmentAccessService) remains the sole
+        // authority for who actually leads strategy-planning/digital-ambassadors/advisors.
+        ['name' => 'strategy_planning_manager',   'display_name' => 'Strategy Planning Manager — مدير الاستراتيجية والتخطيط المؤسسي', 'description' => 'Manages the Strategy & Institutional Planning department workspace.', 'is_system' => true],
+        ['name' => 'digital_ambassadors_manager', 'display_name' => 'Digital Ambassadors Manager — مدير سفراء التحول الرقمي',         'description' => 'Manages the Digital Transformation Ambassadors department workspace.', 'is_system' => true],
+        ['name' => 'advisors_manager',            'display_name' => 'Advisors Manager — مدير الاستشارات والمستشارين',                 'description' => 'Manages the Advisory & Consultants department workspace.', 'is_system' => true],
     ];
 
     public function run(): void

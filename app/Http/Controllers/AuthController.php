@@ -126,10 +126,16 @@ class AuthController extends Controller
         $user            = $request->user();
         $isImpersonating = (bool) $request->attributes->get('is_impersonating', false);
 
-        $isDepartmentLeader = \App\Models\TeamProfile::where('user_id', $user->id)
-            ->where('is_active', true)
-            ->where('is_leader', true)
-            ->exists();
+        // Canonical source: departments.leader_id via DepartmentAccessService,
+        // never TeamProfile.is_leader directly — that flag is a display badge
+        // kept in sync BY DepartmentLeadershipService, not the authority
+        // itself, and read-modeling it here risked drifting from the
+        // authorization DepartmentAccessService actually enforces (e.g. for
+        // Weekly/Meeting Report creation rights) as more departments gain
+        // real leaders.
+        $isDepartmentLeader = app(\App\Services\DepartmentAccessService::class)
+            ->getLedDepartmentIds($user)
+            ->isNotEmpty();
 
         $data = [
             'user'                 => new UserResource($user),
