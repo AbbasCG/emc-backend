@@ -2069,12 +2069,19 @@ Route::prefix('institute')->group(function () {
     });
 });
 
-// ─── Department Manager Routes (Delegated Permissions) ────────────────────────
-Route::middleware(['auth:sanctum', 'role:department_manager,super_admin,tech_admin'])->prefix('department')->group(function () {
+// ─── Department Leadership & Structure Routes (Permissions & Org Chart) ───────
+Route::middleware(['auth:sanctum'])->prefix('department')->group(function () {
     Route::get('/employees', [\App\Http\Controllers\DepartmentPermissionController::class, 'getEmployees']);
     Route::get('/employees/{employee}/permission-tree', [\App\Http\Controllers\DepartmentPermissionController::class, 'getEmployeePermissionTree']);
     Route::post('/employees/{employee}/permissions/grant', [\App\Http\Controllers\DepartmentPermissionController::class, 'grantPermission']);
     Route::post('/employees/{employee}/permissions/revoke', [\App\Http\Controllers\DepartmentPermissionController::class, 'revokePermission']);
+
+    // Department Structure & Org Chart
+    Route::get('/structure', [\App\Http\Controllers\DepartmentStructureController::class, 'getStructure']);
+    Route::post('/sections', [\App\Http\Controllers\DepartmentStructureController::class, 'storeSection']);
+    Route::put('/sections/{section}', [\App\Http\Controllers\DepartmentStructureController::class, 'updateSection']);
+    Route::delete('/sections/{section}', [\App\Http\Controllers\DepartmentStructureController::class, 'destroySection']);
+    Route::post('/members/assign-section', [\App\Http\Controllers\DepartmentStructureController::class, 'assignMemberSection']);
 });
 
 // ─── Super Admin Routes (Delegatable Permissions Management) ──────────────────

@@ -30,48 +30,57 @@ class PermissionDelegationService
             return false; // Department managers cannot delegate these
         }
 
-        // For department manager, ensure target is in their department
-        if ($actor->hasRole('department_manager')) {
-            // Support both direct department_id and user_departments table 
-            $actorDepartments = $actor->departments()->pluck('departments.id')->toArray();
-            if ($actor->department_id && !in_array($actor->department_id, $actorDepartments)) {
-                $actorDepartments[] = $actor->department_id;
+        // Use DepartmentAccessService to resolve led departments
+        $deptAccess = app(DepartmentAccessService::class);
+        $managedDepartmentIds = $deptAccess->getLedDepartmentIds($actor);
+        $isGlobal = $deptAccess->isGlobal($actor);
+
+        if ($isGlobal || $managedDepartmentIds->isNotEmpty()) {
+            if (!$isGlobal) {
+                // Ensure target is in at least one department managed by actor
+                $targetDepartmentIds = $deptAccess->getAccessibleDepartmentIds($target);
+                $intersection = $managedDepartmentIds->intersect($targetDepartmentIds);
+                
+                if ($intersection->isEmpty()) {
+                    // Check if target is a team member or pivot member in actor's departments
+                    $targetMemberDeptIds = $deptAccess->getMemberDepartmentIds($target);
+                    if ($managedDepartmentIds->intersect($targetMemberDeptIds)->isEmpty()) {
+                        return false;
+                    }
+                }
             }
             
-            $targetDepartments = $target->departments()->pluck('departments.id')->toArray();
-            if ($target->department_id && !in_array($target->department_id, $targetDepartments)) {
-                $targetDepartments[] = $target->department_id;
-            }
-            
-            // Check intersection (target must belong to at least one department the actor manages)
-            $commonDepartments = array_intersect($actorDepartments, $targetDepartments);
-            
-            if (empty($commonDepartments)) {
-                return false;
-            }
-            
-            // The actor MUST possess the permission to delegate it (permission.use)
+            // The actor MUST possess the permission to delegate it
             $actorEffective = $this->getEffectivePermissions($actor);
             if (!in_array($permissionKey, $actorEffective)) {
                 return false;
             }
             
-            // The actor MUST be explicitly allowed to delegate it (permission.delegate)
+            // Check DelegatablePermission restrictions if any exist for this permission
             $role = \App\Models\Role::where('name', $actor->role)->first();
             $roleId = $role ? $role->id : null;
             
-            $canDelegate = DelegatablePermission::whereHas('permission', function ($query) use ($permissionKey) {
+            $hasDelegatableRecords = DelegatablePermission::whereHas('permission', function ($query) use ($permissionKey) {
                 $query->where('name', $permissionKey);
-            })->where(function ($query) use ($actor, $roleId) {
-                $query->where('user_id', $actor->id);
-                if ($roleId) {
-                    $query->orWhere('role_id', $roleId);
-                }
-            })->where('can_grant', true)->exists();
+            })->exists();
 
-            return $canDelegate;
+            if ($hasDelegatableRecords) {
+                $canDelegate = DelegatablePermission::whereHas('permission', function ($query) use ($permissionKey) {
+                    $query->where('name', $permissionKey);
+                })->where(function ($query) use ($actor, $roleId) {
+                    $query->where('user_id', $actor->id);
+                    if ($roleId) {
+                        $query->orWhere('role_id', $roleId);
+                    }
+                })->where('can_grant', true)->exists();
+
+                return $canDelegate;
+            }
+
+            // By default, a manager can delegate any non-system permission they possess to their team members
+            return true;
         }
-        
+
         return false;
     }
 

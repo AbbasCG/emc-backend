@@ -356,6 +356,10 @@ class GranularPermissionsSeeder extends Seeder
         foreach ($definitions as $def) {
             Permission::updateOrCreate(['name' => $def['name']], $def);
         }
+
+        Permission::whereNull('label_ar')->orWhere('label_ar', '')->get()->each(function ($p) {
+            $p->update(['label_ar' => $p->display_name ?: $p->name]);
+        });
     }
 
     // ─── Role assignments ─────────────────────────────────────────────────────

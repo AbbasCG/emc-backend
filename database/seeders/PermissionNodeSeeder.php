@@ -6,6 +6,7 @@ use App\Models\Permission;
 use App\Models\PermissionNode;
 use Illuminate\Database\Seeder;
 
+
 class PermissionNodeSeeder extends Seeder
 {
     public function run(): void
