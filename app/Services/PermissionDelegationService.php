@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\User;
 use App\Models\DelegatablePermission;
 use App\Models\UserPermissionAssignment;
+use App\Support\Permissions;
 
 /**
  * Delegation policy is DEFAULT-DENY: a permission is delegatable only if an
@@ -20,6 +21,14 @@ use App\Models\UserPermissionAssignment;
  * leader, regardless of role name, can delegate permissions they hold
  * within their own department(s) once those permissions are explicitly
  * marked delegatable.
+ *
+ * users.impersonate is additionally protected from the super_admin/tech_admin
+ * blanket bypass below (see the dedicated check at the top of canDelegate()):
+ * it requires the actor to actually hold it themselves first, mirroring
+ * Gate::before()'s own carve-out for this exact permission in
+ * AppServiceProvider. This closes the confirmed gap where tech_admin —
+ * which is never auto-granted users.impersonate — could still delegate it to
+ * someone else purely via the blanket bypass, without ever holding it itself.
  */
 class PermissionDelegationService
 {
@@ -31,14 +40,22 @@ class PermissionDelegationService
         // System level restricted permissions (cannot be delegated by managers)
         $systemPermissions = ['system.manage', 'roles.manage', 'users.impersonate', 'technology.manage', 'delegations.manage_all'];
 
-        // Super admin and Tech admin can delegate anything
-        if ($actor->isSuperAdmin() || $actor->isTechAdmin()) {
-            return true;
-        }
-
         // Cannot delegate to oneself
         if ($actor->id === $target->id) {
             return false;
+        }
+
+        // users.impersonate is protected even from the blanket bypass below —
+        // an actor (including super_admin/tech_admin) who was never
+        // explicitly granted it cannot hand it to someone else either.
+        if ($permissionKey === Permissions::IMPERSONATE_USERS
+            && ! in_array($permissionKey, $this->getEffectivePermissions($actor), true)) {
+            return false;
+        }
+
+        // Super admin and Tech admin can delegate anything else.
+        if ($actor->isSuperAdmin() || $actor->isTechAdmin()) {
+            return true;
         }
 
         if (in_array($permissionKey, $systemPermissions, true)) {

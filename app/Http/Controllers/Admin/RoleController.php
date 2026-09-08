@@ -7,6 +7,7 @@ use App\Models\Permission;
 use App\Models\Role;
 use App\Services\ActivityLogger;
 use App\Support\Permissions;
+use App\Support\ProtectedAuthority;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -164,15 +165,22 @@ class RoleController extends Controller
     /**
      * PUT /api/admin/roles/{role}/permissions
      * Replace the role's entire permission set with the provided list.
-     * Only super_admin can call this.
+     *
+     * The super_admin role itself is protected: only an actual super_admin
+     * may modify its permissions, regardless of what manage_roles-equivalent
+     * permission the actor otherwise holds (tech_admin included — this is
+     * the fix for the confirmed gap where tech_admin could previously
+     * overwrite super_admin's entire permission set through this exact
+     * endpoint). Every other role keeps the existing, unchanged behavior:
+     * super_admin always, or an admin-tier actor who holds manage_roles.
      */
     public function setPermissions(Request $request, Role $role): JsonResponse
     {
         $user = $request->user();
 
-        // super_admin can always manage permissions.
-        // admin can manage permissions only if they have the manage_roles permission.
-        if (! $user->isSuperAdmin()) {
+        if (ProtectedAuthority::isProtectedRole($role)) {
+            ProtectedAuthority::requireSuperAdmin($user, 'Only super_admin may modify the super_admin role\'s permissions.');
+        } elseif (! $user->isSuperAdmin()) {
             if (! $user->isAdmin() || ! $user->hasPermission('manage_roles')) {
                 abort(403, 'Only super_admin or admin with role management permission can modify permissions.');
             }

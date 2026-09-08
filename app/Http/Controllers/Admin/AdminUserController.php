@@ -9,6 +9,7 @@ use App\Models\Role;
 use App\Models\User;
 use App\Services\AuditLogService;
 use App\Services\NotificationService;
+use App\Support\ProtectedAuthority;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -279,7 +280,10 @@ class AdminUserController extends Controller
         ]);
     }
 
-    // DELETE /api/admin/users/{user}  — super_admin only (enforced in route)
+    // DELETE /api/admin/users/{user}  — route allows super_admin+tech_admin;
+    // deleting/deactivating a super_admin account specifically requires the
+    // actor to actually be super_admin (fixes the confirmed gap where
+    // tech_admin could deactivate/soft-delete any super_admin account).
     public function destroy(Request $request, User $user): JsonResponse
     {
         if ($user->id === $request->user()->id) {
@@ -287,6 +291,10 @@ class AdminUserController extends Controller
                 'success' => false,
                 'message' => 'You cannot delete your own account.',
             ], 422);
+        }
+
+        if (ProtectedAuthority::isProtectedUser($user)) {
+            ProtectedAuthority::requireSuperAdmin($request->user(), 'Only super_admin may delete a super_admin account.');
         }
 
         $snap = ['name' => $user->name, 'email' => $user->email, 'role' => $user->role];
@@ -303,7 +311,9 @@ class AdminUserController extends Controller
         ]);
     }
 
-    // POST /api/admin/users/{id}/restore  — super_admin only
+    // POST /api/admin/users/{id}/restore  — route allows super_admin+tech_admin;
+    // restoring a super_admin account specifically requires the actor to
+    // actually be super_admin (same protected-authority boundary as destroy()).
     public function restore(Request $request, int $id): JsonResponse
     {
         $user = User::withTrashed()->findOrFail($id);
@@ -313,6 +323,10 @@ class AdminUserController extends Controller
                 'success' => false,
                 'message' => 'User is not deleted.',
             ], 422);
+        }
+
+        if (ProtectedAuthority::isProtectedUser($user)) {
+            ProtectedAuthority::requireSuperAdmin($request->user(), 'Only super_admin may restore a super_admin account.');
         }
 
         $user->restore();
