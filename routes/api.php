@@ -2070,7 +2070,17 @@ Route::prefix('institute')->group(function () {
 });
 
 // ─── Department Leadership & Structure Routes (Permissions & Org Chart) ───────
-Route::middleware(['auth:sanctum'])->prefix('department')->group(function () {
+// The role list below is a COARSE pre-filter only (excludes accounts that can
+// never hold departments.leader_id — student/volunteer/partner/instructor/
+// support_agent) — it is defense-in-depth, not the authority. Every method on
+// both controllers independently re-checks via DepartmentAccessService
+// (canManageDepartment/getLedDepartmentIds), so an actual department leader
+// whose role slug isn't in this list is still blocked at the route layer —
+// this list is kept as the full manager/admin role roster specifically so
+// that never happens: any role capable of legitimately holding leader_id
+// (all "_manager" roles, department_manager, section_lead, admin-tier) is
+// included, only structurally-non-leader accounts are excluded.
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,department_manager,section_lead,finance_manager,marketing_manager,quality_manager,hr_manager,programs_manager,operations_manager,partnerships_manager,community_manager,ai_manager,strategy_planning_manager,digital_ambassadors_manager,advisors_manager'])->prefix('department')->group(function () {
     Route::get('/employees', [\App\Http\Controllers\DepartmentPermissionController::class, 'getEmployees']);
     Route::get('/employees/{employee}/permission-tree', [\App\Http\Controllers\DepartmentPermissionController::class, 'getEmployeePermissionTree']);
     Route::post('/employees/{employee}/permissions/grant', [\App\Http\Controllers\DepartmentPermissionController::class, 'grantPermission']);
@@ -2080,6 +2090,7 @@ Route::middleware(['auth:sanctum'])->prefix('department')->group(function () {
     Route::get('/structure', [\App\Http\Controllers\DepartmentStructureController::class, 'getStructure']);
     Route::post('/sections', [\App\Http\Controllers\DepartmentStructureController::class, 'storeSection']);
     Route::put('/sections/{section}', [\App\Http\Controllers\DepartmentStructureController::class, 'updateSection']);
+    Route::post('/sections/reorder', [\App\Http\Controllers\DepartmentStructureController::class, 'reorderSections']);
     Route::delete('/sections/{section}', [\App\Http\Controllers\DepartmentStructureController::class, 'destroySection']);
     Route::post('/members/assign-section', [\App\Http\Controllers\DepartmentStructureController::class, 'assignMemberSection']);
 });
