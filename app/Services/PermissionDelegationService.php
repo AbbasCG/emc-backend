@@ -6,6 +6,21 @@ use App\Models\User;
 use App\Models\DelegatablePermission;
 use App\Models\UserPermissionAssignment;
 
+/**
+ * Delegation policy is DEFAULT-DENY: a permission is delegatable only if an
+ * explicit `DelegatablePermission(can_grant: true)` row exists for the
+ * actor's user_id or role_id. A permission with NO configured
+ * DelegatablePermission row at all is NOT delegatable — new/unconfigured
+ * permissions must never become delegatable automatically. (A prior branch
+ * experimented with a default-allow fallback when no row existed; that
+ * policy was rejected on product review and must not be reintroduced.)
+ *
+ * Leadership is resolved exclusively via DepartmentAccessService
+ * (departments.leader_id) — never role slug — so any actual department
+ * leader, regardless of role name, can delegate permissions they hold
+ * within their own department(s) once those permissions are explicitly
+ * marked delegatable.
+ */
 class PermissionDelegationService
 {
     /**
@@ -15,7 +30,7 @@ class PermissionDelegationService
     {
         // System level restricted permissions (cannot be delegated by managers)
         $systemPermissions = ['system.manage', 'roles.manage', 'users.impersonate', 'technology.manage', 'delegations.manage_all'];
-        
+
         // Super admin and Tech admin can delegate anything
         if ($actor->isSuperAdmin() || $actor->isTechAdmin()) {
             return true;
@@ -25,54 +40,52 @@ class PermissionDelegationService
         if ($actor->id === $target->id) {
             return false;
         }
-        
-        if (in_array($permissionKey, $systemPermissions)) {
-            return false; // Department managers cannot delegate these
+
+        if (in_array($permissionKey, $systemPermissions, true)) {
+            return false; // Department managers cannot delegate these, ever
         }
 
-        // For department manager, ensure target is in their department
-        if ($actor->hasRole('department_manager')) {
-            // Support both direct department_id and user_departments table 
-            $actorDepartments = $actor->departments()->pluck('departments.id')->toArray();
-            if ($actor->department_id && !in_array($actor->department_id, $actorDepartments)) {
-                $actorDepartments[] = $actor->department_id;
-            }
-            
-            $targetDepartments = $target->departments()->pluck('departments.id')->toArray();
-            if ($target->department_id && !in_array($target->department_id, $targetDepartments)) {
-                $targetDepartments[] = $target->department_id;
-            }
-            
-            // Check intersection (target must belong to at least one department the actor manages)
-            $commonDepartments = array_intersect($actorDepartments, $targetDepartments);
-            
-            if (empty($commonDepartments)) {
-                return false;
-            }
-            
-            // The actor MUST possess the permission to delegate it (permission.use)
-            $actorEffective = $this->getEffectivePermissions($actor);
-            if (!in_array($permissionKey, $actorEffective)) {
-                return false;
-            }
-            
-            // The actor MUST be explicitly allowed to delegate it (permission.delegate)
-            $role = \App\Models\Role::where('name', $actor->role)->first();
-            $roleId = $role ? $role->id : null;
-            
-            $canDelegate = DelegatablePermission::whereHas('permission', function ($query) use ($permissionKey) {
-                $query->where('name', $permissionKey);
-            })->where(function ($query) use ($actor, $roleId) {
-                $query->where('user_id', $actor->id);
-                if ($roleId) {
-                    $query->orWhere('role_id', $roleId);
-                }
-            })->where('can_grant', true)->exists();
+        // Canonical leadership check — departments.leader_id via DepartmentAccessService,
+        // never role slug. Any actual leader qualifies, not just role=department_manager.
+        $deptAccess = app(DepartmentAccessService::class);
+        $managedDepartmentIds = $deptAccess->getLedDepartmentIds($actor);
 
-            return $canDelegate;
+        if ($managedDepartmentIds->isEmpty()) {
+            return false;
         }
-        
-        return false;
+
+        // Target must be in a department the actor manages — either accessible
+        // (leader/member) or an operational team member of it. No cross-department delegation.
+        $targetDepartmentIds = $deptAccess->getAccessibleDepartmentIds($target);
+        $intersection = $managedDepartmentIds->intersect($targetDepartmentIds);
+
+        if ($intersection->isEmpty()) {
+            $targetMemberDeptIds = $deptAccess->getMemberDepartmentIds($target);
+            if ($managedDepartmentIds->intersect($targetMemberDeptIds)->isEmpty()) {
+                return false;
+            }
+        }
+
+        // The actor MUST possess the permission themselves to delegate it.
+        $actorEffective = $this->getEffectivePermissions($actor);
+        if (!in_array($permissionKey, $actorEffective, true)) {
+            return false;
+        }
+
+        // DEFAULT-DENY: the permission must be EXPLICITLY configured as
+        // delegatable (by user_id or role_id) with can_grant=true. No matching
+        // row => not delegatable, regardless of what the actor personally holds.
+        $role = \App\Models\Role::where('name', $actor->role)->first();
+        $roleId = $role ? $role->id : null;
+
+        return DelegatablePermission::whereHas('permission', function ($query) use ($permissionKey) {
+            $query->where('name', $permissionKey);
+        })->where(function ($query) use ($actor, $roleId) {
+            $query->where('user_id', $actor->id);
+            if ($roleId) {
+                $query->orWhere('role_id', $roleId);
+            }
+        })->where('can_grant', true)->exists();
     }
 
     /**

@@ -7,27 +7,58 @@ use App\Models\User;
 use App\Models\Permission;
 use App\Models\PermissionNode;
 use App\Models\UserPermissionAssignment;
+use App\Services\DepartmentAccessService;
 use App\Services\PermissionDelegationService;
 
 class DepartmentPermissionController extends Controller
 {
     /**
      * List all employees in the departments managed by the authenticated user.
+     *
+     * Ported from feature/dept-structure-and-delegation and adapted: leadership
+     * is resolved exclusively via DepartmentAccessService::getLedDepartmentIds()
+     * (departments.leader_id), never the old inline `hasRole('department_manager')`
+     * check — any actual leader, regardless of role slug, is recognized.
+     *
+     * Also fixed a bug inherited from the source branch: it filtered/selected
+     * a `users.department_id` column that does not exist on the `users` table
+     * (users only have a legacy `department` string column) — membership is
+     * resolved correctly here via the `user_departments` pivot and
+     * `team_members.department_id` instead, matching
+     * DepartmentAccessService::getMemberDepartmentIds()'s own definition of
+     * department membership.
      */
-    public function getEmployees(Request $request)
+    public function getEmployees(Request $request, DepartmentAccessService $deptAccess)
     {
         $manager = $request->user();
-        
-        // Get all department IDs where this user is the leader
-        $managedDepartmentIds = \App\Models\Department::where('leader_id', $manager->id)->pluck('id');
-        
+
+        if ($deptAccess->isGlobal($manager)) {
+            $query = User::query();
+            if ($request->filled('department_id')) {
+                $departmentId = (int) $request->department_id;
+                $query->where(function ($q) use ($departmentId) {
+                    $q->whereHas('departments', fn ($sq) => $sq->where('departments.id', $departmentId))
+                        ->orWhereHas('teamMemberships', fn ($sq) => $sq->where('department_id', $departmentId));
+                });
+            }
+            $employees = $query->get(['id', 'name', 'email', 'avatar', 'role']);
+
+            return response()->json(['success' => true, 'employees' => $employees]);
+        }
+
+        $managedDepartmentIds = $deptAccess->getLedDepartmentIds($manager);
+
         if ($managedDepartmentIds->isEmpty()) {
             return response()->json(['success' => true, 'employees' => []]);
         }
 
-        // Get users who belong to any of these departments
-        $employees = User::whereHas('departments', function ($query) use ($managedDepartmentIds) {
-            $query->whereIn('departments.id', $managedDepartmentIds);
+        // Users who belong to any managed department, via the pivot or team_members.
+        $employees = User::where(function ($query) use ($managedDepartmentIds) {
+            $query->whereHas('departments', function ($q) use ($managedDepartmentIds) {
+                $q->whereIn('departments.id', $managedDepartmentIds);
+            })->orWhereHas('teamMemberships', function ($q) use ($managedDepartmentIds) {
+                $q->whereIn('department_id', $managedDepartmentIds);
+            });
         })->get(['id', 'name', 'email', 'avatar', 'role']);
 
         return response()->json(['success' => true, 'employees' => $employees]);
@@ -36,15 +67,15 @@ class DepartmentPermissionController extends Controller
     /**
      * Get the permission tree and assignment status for a specific employee.
      */
-    public function getEmployeePermissionTree(Request $request, User $employee, PermissionDelegationService $delegationService)
+    public function getEmployeePermissionTree(Request $request, User $employee, PermissionDelegationService $delegationService, DepartmentAccessService $deptAccess)
     {
         $manager = $request->user();
 
-        // 1. Verify manager manages this employee
-        $managedDepartmentIds = \App\Models\Department::where('leader_id', $manager->id)->pluck('id');
-        $employeeDepartmentIds = $employee->departments()->pluck('departments.id');
-        
-        if ($manager->id !== $employee->id && !$manager->isSuperAdmin() && $managedDepartmentIds->intersect($employeeDepartmentIds)->isEmpty()) {
+        // 1. Verify manager manages this employee (canonical leadership, not role slug).
+        $managedDepartmentIds = $deptAccess->getLedDepartmentIds($manager);
+        $employeeDeptIds = $deptAccess->getAccessibleDepartmentIds($employee);
+
+        if ($manager->id !== $employee->id && !$deptAccess->isGlobal($manager) && $managedDepartmentIds->intersect($employeeDeptIds)->isEmpty()) {
             return response()->json(['success' => false, 'message' => 'Unauthorized. Employee not in your scope.'], 403);
         }
 
