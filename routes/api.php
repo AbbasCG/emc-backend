@@ -45,7 +45,6 @@ use App\Http\Controllers\Admin\AdminLmsMaterialController;
 use App\Http\Controllers\Admin\AdminLmsProgressController;
 use App\Http\Controllers\Admin\AdminLmsSessionController;
 use App\Http\Controllers\Admin\DepartmentController;
-use App\Http\Controllers\Admin\DepartmentSectionController;
 use App\Http\Controllers\Admin\EmailLogsController;
 use App\Http\Controllers\Admin\EmailSettingsController;
 use App\Http\Controllers\Admin\DynamicFormController;
@@ -839,7 +838,12 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
 
     // Departments
     Route::apiResource('departments', DepartmentController::class);
-    Route::apiResource('department-sections', DepartmentSectionController::class);
+    // department-sections apiResource removed (Phase 0.2): Admin\DepartmentSectionController
+    // had zero canonical department-scoping — role:operations_manager alone let any actor
+    // create/update/delete ANY department's sections and set leader_id with no TeamProfile
+    // check (confirmed exploitable). Zero consumers found (backend/frontend/tests/docs).
+    // DepartmentStructureController (auth via DepartmentAccessService::canManageDepartment +
+    // TeamProfile integrity) fully replaces this surface at /api/department/sections*.
 
     // استيراد الكتالوج من قالب الإكسل (معاينة ثم اعتماد)
     Route::post('catalog-import', [\App\Http\Controllers\Admin\CatalogImportController::class, 'store']);
