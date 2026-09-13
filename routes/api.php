@@ -2106,6 +2106,13 @@ Route::middleware(['auth:sanctum', 'role:super_admin,tech_admin'])->prefix('admi
     Route::post('/roles/{role}/delegatable/toggle', [\App\Http\Controllers\AdminPermissionController::class, 'toggleDelegatable']);
 });
 
+// ─── Page Access Catalog (Phase 1 foundation — read-only) ─────────────────────
+// PAGE ACCESS != BUSINESS AUTHORIZATION: this only exposes catalog metadata,
+// never grants or checks an actual permission. See PageAccessCatalog docblock.
+Route::middleware(['auth:sanctum', 'role:super_admin,tech_admin'])->prefix('admin/access-control')->group(function () {
+    Route::get('/pages', [\App\Http\Controllers\Admin\PageAccessCatalogController::class, 'index']);
+});
+
 // ─── EMC Unified Tickets & Issue Tracking System Routes ────────────────────
 // Every action requires authentication; object-level authorization (creator/
 // assignee/department-leader/global) is enforced inside TicketController via
