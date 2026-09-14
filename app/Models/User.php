@@ -234,6 +234,16 @@ class User extends Authenticatable
         return $this->hasMany(TeamMember::class);
     }
 
+    /**
+     * Phase 2C explicit per-user PAGE ACCESS overrides (allow/deny).
+     * Deliberately NOT named permissions(): this is page exposure only, never
+     * business authorization — see UserPageAccessOverride.
+     */
+    public function pageAccessOverrides(): HasMany
+    {
+        return $this->hasMany(UserPageAccessOverride::class);
+    }
+
     public function assignedTasks(): HasMany
     {
         return $this->hasMany(Task::class, 'assigned_to');

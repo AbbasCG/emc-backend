@@ -2119,6 +2119,22 @@ Route::middleware(['auth:sanctum', 'role:super_admin,tech_admin'])->prefix('admi
     Route::get('/pages', [\App\Http\Controllers\Admin\PageAccessCatalogController::class, 'index']);
 });
 
+// ─── Phase 2C: User page access overrides (configure) ─────────────────────────
+// PAGE ACCESS != BUSINESS AUTHORIZATION. The role list below is only a COARSE
+// pre-filter (the same roster used by the /api/department/* routes: admin tier
+// plus every role that can legitimately hold departments.leader_id). The real
+// authority is enforced inside UserPageAccessOverrideService:
+//   - super_admin target  -> super_admin only (ProtectedAuthority)
+//   - super_admin/tech_admin -> any eligible (non-SYSTEM_PROTECTED) page
+//   - canonical department leader -> delegatable pages only, only for users in
+//     departments they actually lead (departments.leader_id), never themselves
+// SYSTEM_PROTECTED pages can never be stored here in either state.
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,department_manager,section_lead,finance_manager,marketing_manager,quality_manager,hr_manager,programs_manager,operations_manager,partnerships_manager,community_manager,ai_manager,strategy_planning_manager,digital_ambassadors_manager,advisors_manager'])
+    ->prefix('admin/users')->group(function () {
+        Route::get('/{user}/page-access-overrides', [\App\Http\Controllers\Admin\UserPageAccessOverrideController::class, 'show']);
+        Route::put('/{user}/page-access-overrides', [\App\Http\Controllers\Admin\UserPageAccessOverrideController::class, 'update']);
+    });
+
 // ─── Phase 2A: Department default page access (configure) ─────────────────────
 // PAGE ACCESS != BUSINESS AUTHORIZATION. Configuration authority is
 // deliberately limited to super_admin/tech_admin — a department leader must NOT
