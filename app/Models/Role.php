@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Role extends Model
 {
@@ -16,6 +17,16 @@ class Role extends Model
     public function permissions(): BelongsToMany
     {
         return $this->belongsToMany(Permission::class, 'permission_role');
+    }
+
+    /**
+     * Phase 2B default PAGE ACCESS for this role. Deliberately separate from
+     * permissions() above: page exposure, never business authorization — see
+     * RolePageDefault and RolePageDefaultService.
+     */
+    public function pageDefaults(): HasMany
+    {
+        return $this->hasMany(RolePageDefault::class, 'role_id');
     }
 
     public function grantPermission(string|Permission $permission): void

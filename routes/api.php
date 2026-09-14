@@ -1079,6 +1079,12 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     Route::delete('roles/{role}',                    [RoleController::class, 'destroy']);
     Route::get('roles/{role}/permissions',           [RoleController::class, 'permissions']);
     Route::put('roles/{role}/permissions',           [RoleController::class, 'setPermissions']);
+    // Phase 2B — role DEFAULT PAGE ACCESS. Separate from the permissions
+    // endpoints above on purpose: PAGE ACCESS != BUSINESS AUTHORIZATION.
+    // Authorization mirrors setPermissions() inside the controller (the route
+    // role list here is only the usual coarse pre-filter).
+    Route::get('roles/{role}/page-access',           [\App\Http\Controllers\Admin\RolePageDefaultController::class, 'show']);
+    Route::put('roles/{role}/page-access',           [\App\Http\Controllers\Admin\RolePageDefaultController::class, 'update']);
     Route::post('roles/{role}/grant-permission',     [RoleController::class, 'grantPermission']);
     Route::post('roles/{role}/revoke-permission',    [RoleController::class, 'revokePermission']);
 
