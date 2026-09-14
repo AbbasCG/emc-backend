@@ -2113,6 +2113,17 @@ Route::middleware(['auth:sanctum', 'role:super_admin,tech_admin'])->prefix('admi
     Route::get('/pages', [\App\Http\Controllers\Admin\PageAccessCatalogController::class, 'index']);
 });
 
+// ─── Phase 2A: Department default page access (configure) ─────────────────────
+// PAGE ACCESS != BUSINESS AUTHORIZATION. Configuration authority is
+// deliberately limited to super_admin/tech_admin — a department leader must NOT
+// be able to widen their own department's default exposure (open product
+// decision, see DepartmentPageDefaultController docblock). Eligibility of each
+// page lives solely in DepartmentPageDefaultService.
+Route::middleware(['auth:sanctum', 'role:super_admin,tech_admin'])->prefix('admin/departments')->group(function () {
+    Route::get('/{department}/page-access', [\App\Http\Controllers\Admin\DepartmentPageDefaultController::class, 'show']);
+    Route::put('/{department}/page-access', [\App\Http\Controllers\Admin\DepartmentPageDefaultController::class, 'update']);
+});
+
 // ─── EMC Unified Tickets & Issue Tracking System Routes ────────────────────
 // Every action requires authentication; object-level authorization (creator/
 // assignee/department-leader/global) is enforced inside TicketController via

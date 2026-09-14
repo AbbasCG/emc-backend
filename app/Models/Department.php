@@ -60,6 +60,16 @@ class Department extends Model
         return $this->hasMany(UserDepartment::class, 'department_id');
     }
 
+    /**
+     * Phase 2A default PAGE ACCESS for this department's member/leader
+     * audiences. Page exposure only — never business authorization; see
+     * DepartmentPageDefault and DepartmentPageDefaultService.
+     */
+    public function pageDefaults(): HasMany
+    {
+        return $this->hasMany(DepartmentPageDefault::class, 'department_id');
+    }
+
     public function parent(): BelongsTo
     {
         return $this->belongsTo(Department::class, 'parent_id');
