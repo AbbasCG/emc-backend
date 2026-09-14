@@ -162,6 +162,13 @@ Route::prefix('auth')->middleware(['auth:sanctum', 'throttle:api'])->group(funct
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me',      [AuthController::class, 'me']);
     Route::get('/me/access-manifest', \App\Http\Controllers\AccessManifestController::class);
+    // Phase 2D — the caller's own EFFECTIVE PAGE ACCESS (read-only).
+    // PAGE ACCESS != BUSINESS AUTHORIZATION: deliberately separate from
+    // /me/access-manifest above, which returns effective PERMISSIONS. Open to
+    // every authenticated user because everyone has their own page access.
+    // Phase 2D does NOT switch the frontend — dashboardAccess.ts, the sidebar
+    // and DashboardAccessGuard remain authoritative until a later phase.
+    Route::get('/me/page-access', \App\Http\Controllers\EffectivePageAccessController::class);
 });
 
 // ─── Public: Certificate verification ────────────────────────────────────────
@@ -2133,6 +2140,12 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
     ->prefix('admin/users')->group(function () {
         Route::get('/{user}/page-access-overrides', [\App\Http\Controllers\Admin\UserPageAccessOverrideController::class, 'show']);
         Route::put('/{user}/page-access-overrides', [\App\Http\Controllers\Admin\UserPageAccessOverrideController::class, 'update']);
+        // Phase 2D — read-only inspection of the RESOLVED result (role +
+        // department + override + system protection) with provenance. Shares
+        // this group's coarse pre-filter; real authority is
+        // UserPageAccessOverrideService::canConfigure(), reused so inspection
+        // can never be wider than configuration.
+        Route::get('/{user}/effective-page-access', [\App\Http\Controllers\Admin\UserEffectivePageAccessController::class, 'show']);
     });
 
 // ─── Phase 2A: Department default page access (configure) ─────────────────────
