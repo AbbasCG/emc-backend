@@ -883,7 +883,7 @@ class EffectivePageAccessTest extends TestCase
     {
         $svc = app(RolePageDefaultService::class);
 
-        $this->assertCount(112, $svc->eligibleKeys());
+        $this->assertCount(121, $svc->eligibleKeys());
         $this->assertNotContains(self::PROTECTED_PAGE, $svc->eligibleKeys());
     }
 
@@ -902,7 +902,7 @@ class EffectivePageAccessTest extends TestCase
         $svc = app(UserPageAccessOverrideService::class);
         $target = $this->ordinaryUser();
 
-        $this->assertCount(112, $svc->eligibleKeys());
+        $this->assertCount(121, $svc->eligibleKeys());
         $this->assertSame([], $svc->getOverrides($target));
 
         $svc->setOverride($this->superAdmin(), $target, self::MEMBER_PAGE, UserPageAccessState::Allow);

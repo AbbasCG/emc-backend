@@ -853,7 +853,13 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     // TeamProfile integrity) fully replaces this surface at /api/department/sections*.
 
     // استيراد الكتالوج من قالب الإكسل (معاينة ثم اعتماد)
-    Route::post('catalog-import', [\App\Http\Controllers\Admin\CatalogImportController::class, 'store']);
+    // Phase 2G.1C — narrowed to the admin tier. This group carries
+    // operations_manager for the DEPARTMENT routes above; catalog import is a
+    // platform-administration action that merely sat in the same group, and
+    // operations_manager was never intended to reach it (no UI ever offered it).
+    Route::middleware('role:admin')->group(function () {
+        Route::post('catalog-import', [\App\Http\Controllers\Admin\CatalogImportController::class, 'store']);
+    });
 
     // تحليلات الزوار — قراءة اللوحة
     Route::get('visitor-analytics/overview', [\App\Http\Controllers\Admin\VisitorAnalyticsController::class, 'overview']);
@@ -1038,23 +1044,36 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     Route::get('reports/{report}/export/pdf',        [ReportController::class, 'exportPdf']);
     Route::get('reports/{report}/export/excel',      [ReportController::class, 'exportExcel']);
 
-    // ── Phase 7: Webhooks ─────────────────────────────────────────────────────
-    Route::get('webhook-endpoints',                  [WebhookEndpointController::class, 'index']);
-    Route::post('webhook-endpoints',                 [WebhookEndpointController::class, 'store']);
-    Route::get('webhook-endpoints/{webhookEndpoint}',[WebhookEndpointController::class, 'show']);
-    Route::put('webhook-endpoints/{webhookEndpoint}',[WebhookEndpointController::class, 'update']);
-    Route::delete('webhook-endpoints/{webhookEndpoint}', [WebhookEndpointController::class, 'destroy']);
-    Route::post('webhook-endpoints/{webhookEndpoint}/test', [WebhookEndpointController::class, 'test']);
-    Route::get('webhook-deliveries',                 [WebhookEndpointController::class, 'deliveries']);
+    // ── Phase 7: Webhooks / Integrations / API tokens ────────────────────────
+    // Phase 2G.1C — TECHNICAL PLATFORM ADMINISTRATION, narrowed to the admin
+    // tier (role:admin; RoleMiddleware passes super_admin/tech_admin through).
+    //
+    // These three blocks previously inherited this group's operations_manager
+    // grant purely by co-location: the group exists for the DEPARTMENT routes
+    // near its top, and nothing here is department work. The dedicated aliases
+    // the frontend actually calls — /api/integrations, /api/developer/api-tokens
+    // and /api/webhooks — are already `role:admin`, so the canonical routes were
+    // the only way operations_manager could reach webhooks, integration secrets
+    // or API tokens, and no UI ever offered it. This aligns the two spellings.
+    //
+    // Deliberately NOT root-only: PageAccessCatalog classifies these ADMIN_ONLY
+    // ("admin-tier roles (admin/tech_admin/super_admin)"), not SYSTEM_PROTECTED.
+    Route::middleware('role:admin')->group(function () {
+        Route::get('webhook-endpoints',                  [WebhookEndpointController::class, 'index']);
+        Route::post('webhook-endpoints',                 [WebhookEndpointController::class, 'store']);
+        Route::get('webhook-endpoints/{webhookEndpoint}',[WebhookEndpointController::class, 'show']);
+        Route::put('webhook-endpoints/{webhookEndpoint}',[WebhookEndpointController::class, 'update']);
+        Route::delete('webhook-endpoints/{webhookEndpoint}', [WebhookEndpointController::class, 'destroy']);
+        Route::post('webhook-endpoints/{webhookEndpoint}/test', [WebhookEndpointController::class, 'test']);
+        Route::get('webhook-deliveries',                 [WebhookEndpointController::class, 'deliveries']);
 
-    // ── Phase 7: Integration settings ────────────────────────────────────────
-    Route::get('integrations',                       [IntegrationSettingController::class, 'index']);
-    Route::put('integrations/{key}',                 [IntegrationSettingController::class, 'upsert']);
+        Route::get('integrations',                       [IntegrationSettingController::class, 'index']);
+        Route::put('integrations/{key}',                 [IntegrationSettingController::class, 'upsert']);
 
-    // ── Phase 7: API tokens ───────────────────────────────────────────────────
-    Route::get('api-tokens',                         [ApiTokenController::class, 'index']);
-    Route::post('api-tokens',                        [ApiTokenController::class, 'store']);
-    Route::delete('api-tokens/{id}',                 [ApiTokenController::class, 'destroy']);
+        Route::get('api-tokens',                         [ApiTokenController::class, 'index']);
+        Route::post('api-tokens',                        [ApiTokenController::class, 'store']);
+        Route::delete('api-tokens/{id}',                 [ApiTokenController::class, 'destroy']);
+    });
 
     // ── Email settings & logs ─────────────────────────────────────────────────
     // Read-only for the broader admin group above; modifying settings is

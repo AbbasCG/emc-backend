@@ -1,0 +1,368 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\Role;
+use App\Models\User;
+use App\Services\DepartmentPageDefaultService;
+use App\Services\RolePageDefaultService;
+use App\Services\UserPageAccessOverrideService;
+use App\Support\PageAccess\DepartmentPageAudience;
+use App\Support\PageAccess\PageAccessCatalog;
+use App\Support\PageAccess\PageAccessRiskLevel;
+use App\Support\PageAccess\UserPageAccessState;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use InvalidArgumentException;
+use Tests\TestCase;
+
+/**
+ * Phase 2G.1C — TECHNICAL ADMINISTRATION BOUNDARY.
+ *
+ * Two corrections are locked in here, and they are deliberately separate things:
+ *
+ *  1. CATALOG CLASSIFICATION — nine capabilities move
+ *     SYSTEM_PROTECTED -> ADMIN_ONLY. PageAccessRiskLevel defines ADMIN_ONLY as
+ *     "admin-tier roles (admin/tech_admin/super_admin)" and SYSTEM_PROTECTED as
+ *     "root-authority / platform-security surface". The nine are gated
+ *     role:admin(,super_admin,tech_admin) in the backend, which is admin-tier —
+ *     so SYSTEM_PROTECTED was one level too high. platform_scale and
+ *     mobile_readiness stay SYSTEM_PROTECTED: they have no backend endpoint at
+ *     all, so there is no evidence they are ordinary administrative surfaces.
+ *
+ *  2. BACKEND AUTHORIZATION — operations_manager loses technical platform
+ *     administration. Those routes inherited an operations_manager grant purely
+ *     because they sat inside a group that exists for DEPARTMENT routes. The
+ *     aliases the frontend actually calls were already role:admin.
+ *
+ * PAGE ACCESS != BUSINESS AUTHORIZATION: reclassifying a capability to
+ * ADMIN_ONLY changes only what may be stored as a page default. It grants no
+ * backend permission to anyone — asserted explicitly below.
+ */
+class TechnicalAdministrationBoundaryTest extends TestCase
+{
+    use RefreshDatabase;
+
+    /** The exact nine corrected by Phase 2G.1C. */
+    private const NINE_ADMIN_ONLY = [
+        'administration.integrations',
+        'administration.webhooks',
+        'administration.catalog_import',
+        'technical_system.ai_command_center',
+        'technical_system.ai_automations',
+        'technical_system.ai_insights',
+        'technical_system.ai_usage',
+        'technical_system.automations',
+        'technical_system.api_tokens',
+    ];
+
+    /** Must remain root-only — no backend endpoint exists for either. */
+    private const STILL_PROTECTED = [
+        'technical_system.platform_scale',
+        'technical_system.mobile_readiness',
+    ];
+
+    /** The six root surfaces that were never in scope and must not have moved. */
+    private const UNTOUCHED_PROTECTED = [
+        'administration.super_admin_overview',
+        'administration.roles',
+        'administration.permission_delegation_config',
+        'administration.email_settings',
+        'administration.attendance_settings',
+        'administration.email_logs',
+    ];
+
+    /** The corrected technical-administration endpoints (canonical spellings). */
+    private const TECHNICAL_ENDPOINTS = [
+        ['GET', '/api/admin/integrations'],
+        ['GET', '/api/admin/api-tokens'],
+        ['GET', '/api/admin/webhook-endpoints'],
+        ['GET', '/api/admin/webhook-deliveries'],
+    ];
+
+    private function user(string $role): User
+    {
+        Role::firstOrCreate(['name' => $role], ['display_name' => $role, 'is_system' => false]);
+
+        return User::factory()->create(['role' => $role, 'is_active' => true]);
+    }
+
+    // ── 1. Catalog classification ────────────────────────────────────────────
+
+    public function test_the_nine_corrected_capabilities_are_admin_only(): void
+    {
+        foreach (self::NINE_ADMIN_ONLY as $key) {
+            $entry = PageAccessCatalog::find($key);
+
+            $this->assertNotNull($entry, "Capability [{$key}] must exist in the catalog.");
+            $this->assertSame(
+                PageAccessRiskLevel::AdminOnly,
+                $entry->riskLevel,
+                "[{$key}] must be ADMIN_ONLY after Phase 2G.1C."
+            );
+        }
+    }
+
+    public function test_the_nine_corrected_capabilities_are_no_longer_system_protected(): void
+    {
+        foreach (self::NINE_ADMIN_ONLY as $key) {
+            $entry = PageAccessCatalog::find($key);
+
+            $this->assertFalse($entry->isProtected(), "[{$key}] must no longer be SYSTEM_PROTECTED.");
+            $this->assertNotSame(PageAccessRiskLevel::SystemProtected, $entry->riskLevel);
+        }
+    }
+
+    /**
+     * ADMIN_ONLY is NOT SAFE_DELEGATABLE. The correction moved exactly one step,
+     * and none of the nine may become delegatable to a department leader.
+     */
+    public function test_the_nine_did_not_become_delegatable(): void
+    {
+        $deptSvc = app(DepartmentPageDefaultService::class);
+
+        foreach (self::NINE_ADMIN_ONLY as $key) {
+            $entry = PageAccessCatalog::find($key);
+
+            $this->assertFalse($entry->delegatable, "[{$key}] must not be delegatable.");
+            $this->assertFalse($entry->departmentScoped, "[{$key}] must not be department-scoped.");
+            $this->assertNotSame(PageAccessRiskLevel::SafeDelegatable, $entry->riskLevel);
+
+            // Neither department audience may accept them.
+            $this->assertFalse($deptSvc->isEligible($entry, DepartmentPageAudience::Member));
+            $this->assertFalse($deptSvc->isEligible($entry, DepartmentPageAudience::Leader));
+        }
+    }
+
+    public function test_platform_scale_and_mobile_readiness_remain_system_protected(): void
+    {
+        foreach (self::STILL_PROTECTED as $key) {
+            $entry = PageAccessCatalog::find($key);
+
+            $this->assertNotNull($entry);
+            $this->assertSame(PageAccessRiskLevel::SystemProtected, $entry->riskLevel, "[{$key}] must stay protected.");
+            $this->assertTrue($entry->isProtected());
+            $this->assertFalse($entry->delegatable);
+        }
+    }
+
+    public function test_the_six_root_surfaces_were_not_touched(): void
+    {
+        foreach (self::UNTOUCHED_PROTECTED as $key) {
+            $entry = PageAccessCatalog::find($key);
+
+            $this->assertNotNull($entry);
+            $this->assertSame(PageAccessRiskLevel::SystemProtected, $entry->riskLevel, "[{$key}] must stay protected.");
+        }
+    }
+
+    public function test_exactly_eight_capabilities_remain_system_protected(): void
+    {
+        $protected = array_values(array_map(
+            fn ($e) => $e->key,
+            array_filter(PageAccessCatalog::all(), fn ($e) => $e->isProtected())
+        ));
+
+        sort($protected);
+        $expected = array_merge(self::STILL_PROTECTED, self::UNTOUCHED_PROTECTED);
+        sort($expected);
+
+        $this->assertSame($expected, $protected, 'The protected set must be exactly these eight capabilities.');
+    }
+
+    /** Nothing but the risk level changed — keys, routes and labels are stable identity. */
+    public function test_keys_routes_and_labels_are_unchanged(): void
+    {
+        $expected = [
+            'administration.integrations' => ['/dashboard/admin/integrations', 'التكاملات', 3],
+            'administration.webhooks' => ['/dashboard/admin/webhooks', 'الويب هوك', 2],
+            'administration.catalog_import' => ['/dashboard/admin/catalog-import', 'استيراد الكتالوج', 1],
+            'technical_system.ai_command_center' => ['/dashboard/admin/ai', 'مركز قيادة الذكاء الاصطناعي', 2],
+            'technical_system.ai_automations' => ['/dashboard/admin/ai/automations', 'أتمتة الذكاء الاصطناعي', 1],
+            'technical_system.ai_insights' => ['/dashboard/admin/ai/insights', 'رؤى الذكاء الاصطناعي', 1],
+            'technical_system.ai_usage' => ['/dashboard/admin/ai/usage', 'استخدام الذكاء الاصطناعي', 1],
+            'technical_system.automations' => ['/dashboard/admin/automations', 'الأتمتة العامة', 2],
+            'technical_system.api_tokens' => ['/dashboard/admin/developer/api-tokens', 'رموز واجهة البرمجة', 1],
+        ];
+
+        foreach ($expected as $key => [$route, $label, $patternCount]) {
+            $entry = PageAccessCatalog::find($key);
+
+            $this->assertSame($route, $entry->primaryRoute, "[{$key}] primary route must not change.");
+            $this->assertSame($label, $entry->labelAr, "[{$key}] label must not change.");
+            $this->assertCount($patternCount, $entry->routePatterns, "[{$key}] route patterns must not change.");
+            $this->assertSame($route, $entry->routePatterns[0]);
+        }
+    }
+
+    public function test_catalog_size_and_other_risk_levels_are_unchanged(): void
+    {
+        $all = PageAccessCatalog::all();
+        $this->assertCount(129, $all);
+
+        $byRisk = [];
+        foreach ($all as $e) {
+            $byRisk[$e->riskLevel->value] = ($byRisk[$e->riskLevel->value] ?? 0) + 1;
+        }
+
+        // Before Phase 2G.1C: 17 SYSTEM_PROTECTED + 66 ADMIN_ONLY + 46 SAFE_DELEGATABLE.
+        // After:               8 SYSTEM_PROTECTED + 75 ADMIN_ONLY + 46 SAFE_DELEGATABLE.
+        // The nine moved exactly one step, and SAFE_DELEGATABLE is untouched —
+        // which is why department member/leader eligibility does not change.
+        $this->assertSame(8, $byRisk['SYSTEM_PROTECTED']);
+        $this->assertSame(75, $byRisk['ADMIN_ONLY']);
+        $this->assertSame(46, $byRisk['SAFE_DELEGATABLE']);
+        $this->assertSame(129, array_sum($byRisk));
+    }
+
+    // ── 2. PAGE ACCESS != BUSINESS AUTHORIZATION ─────────────────────────────
+
+    /**
+     * The reclassification makes the nine STORABLE as role defaults. It does NOT
+     * grant anyone backend permission — the HTTP assertions below prove the
+     * backend still refuses operations_manager even with a role default stored.
+     */
+    public function test_reclassification_makes_them_storable_as_role_defaults_only(): void
+    {
+        $roleSvc = app(RolePageDefaultService::class);
+        $eligible = $roleSvc->eligibleKeys();
+
+        foreach (self::NINE_ADMIN_ONLY as $key) {
+            $this->assertContains($key, $eligible, "[{$key}] should now be storable as a role default.");
+        }
+
+        foreach (self::STILL_PROTECTED as $key) {
+            $this->assertNotContains($key, $eligible, "[{$key}] must remain unstorable.");
+        }
+    }
+
+    public function test_still_protected_capabilities_cannot_be_stored_in_any_mutable_table(): void
+    {
+        $superAdmin = $this->user('super_admin');
+        $target = $this->user('volunteer');
+        $role = Role::firstOrCreate(['name' => 'operations_manager'], ['display_name' => 'ops', 'is_system' => false]);
+
+        foreach (self::STILL_PROTECTED as $key) {
+            $this->assertThrows(
+                fn () => app(RolePageDefaultService::class)->replaceDefaults($role, [$key], $superAdmin),
+                InvalidArgumentException::class
+            );
+
+            $this->assertThrows(
+                fn () => app(UserPageAccessOverrideService::class)
+                    ->setOverride($superAdmin, $target, $key, UserPageAccessState::Allow),
+                InvalidArgumentException::class
+            );
+        }
+    }
+
+    // ── 3. Backend authorization boundary (real HTTP) ────────────────────────
+
+    public function test_operations_manager_is_refused_technical_administration(): void
+    {
+        $actor = $this->user('operations_manager');
+
+        foreach (self::TECHNICAL_ENDPOINTS as [$method, $uri]) {
+            $this->actingAs($actor)
+                ->json($method, $uri)
+                ->assertForbidden();
+        }
+
+        $this->actingAs($actor)
+            ->postJson('/api/admin/catalog-import', [])
+            ->assertForbidden();
+    }
+
+    public function test_operations_manager_is_refused_even_with_a_role_default_stored(): void
+    {
+        // PAGE ACCESS != BUSINESS AUTHORIZATION, proven directly: store the page
+        // default the reclassification now permits, then confirm the backend
+        // still refuses the request.
+        $superAdmin = $this->user('super_admin');
+        $role = Role::firstOrCreate(['name' => 'operations_manager'], ['display_name' => 'ops', 'is_system' => false]);
+        app(RolePageDefaultService::class)->replaceDefaults($role, self::NINE_ADMIN_ONLY, $superAdmin);
+
+        $actor = $this->user('operations_manager');
+
+        $this->actingAs($actor)->getJson('/api/admin/integrations')->assertForbidden();
+        $this->actingAs($actor)->getJson('/api/admin/api-tokens')->assertForbidden();
+    }
+
+    public function test_admin_and_root_retain_technical_administration(): void
+    {
+        foreach (['admin', 'super_admin', 'tech_admin'] as $role) {
+            $actor = $this->user($role);
+
+            foreach (self::TECHNICAL_ENDPOINTS as [$method, $uri]) {
+                $response = $this->actingAs($actor)->json($method, $uri);
+
+                $this->assertNotSame(
+                    403,
+                    $response->getStatusCode(),
+                    "[{$role}] must not be refused by the authorization boundary at {$uri}."
+                );
+            }
+        }
+    }
+
+    public function test_an_ordinary_role_is_refused_technical_administration(): void
+    {
+        foreach (['volunteer', 'instructor', 'finance_manager'] as $role) {
+            $actor = $this->user($role);
+
+            $this->actingAs($actor)->getJson('/api/admin/integrations')->assertForbidden();
+            $this->actingAs($actor)->getJson('/api/admin/api-tokens')->assertForbidden();
+        }
+    }
+
+    // ── 4. Legitimate operations access preserved ────────────────────────────
+
+    /**
+     * The narrowing must not cost operations_manager the DEPARTMENT routes the
+     * group exists for. Without this, removing the over-grant could silently
+     * break real Operations Management functionality.
+     */
+    public function test_operations_manager_retains_legitimate_department_access(): void
+    {
+        $actor = $this->user('operations_manager');
+
+        $response = $this->actingAs($actor)->getJson('/api/admin/departments');
+
+        $this->assertNotSame(
+            403,
+            $response->getStatusCode(),
+            'operations_manager must keep the department routes this group exists for.'
+        );
+    }
+
+    public function test_operations_manager_retains_the_operations_surface(): void
+    {
+        $actor = $this->user('operations_manager');
+
+        $response = $this->actingAs($actor)->getJson('/api/operations/volunteers');
+
+        $this->assertNotSame(403, $response->getStatusCode(), 'operations_manager must keep /api/operations access.');
+    }
+
+    // ── 5. AI separation is unaffected by the reclassification ───────────────
+
+    public function test_ai_separation_still_holds_after_reclassification(): void
+    {
+        $platform = PageAccessCatalog::find('technical_system.ai_command_center');
+        $workspace = PageAccessCatalog::find('organizational_departments.ai_workspace');
+
+        // Different capabilities, different categories, different routes.
+        $this->assertNotSame($platform->key, $workspace->key);
+        $this->assertNotSame($platform->category, $workspace->category);
+        $this->assertSame([], array_intersect($platform->routePatterns, $workspace->routePatterns));
+
+        // The platform is admin-tier and NEVER delegatable; the workspace is.
+        $this->assertSame(PageAccessRiskLevel::AdminOnly, $platform->riskLevel);
+        $this->assertFalse($platform->delegatable);
+        $this->assertTrue($workspace->delegatable);
+
+        // ai_manager is still refused the technical platform by the backend.
+        $this->actingAs($this->user('ai_manager'))
+            ->getJson('/api/admin/ai/prompts')
+            ->assertForbidden();
+    }
+}

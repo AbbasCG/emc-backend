@@ -77,9 +77,15 @@ class AccessDiffBaselineTest extends TestCase
     private const ROLE_PAGE_QUALITY = 'quality.dashboard';
     /**
      * The AI SEPARATION, as the catalog itself encodes it:
-     *   organizational_departments.ai_workspace  /dashboard/ai-department   SAFE_DELEGATABLE
-     *   technical_system.ai_command_center       /dashboard/admin/ai        SYSTEM_PROTECTED
+     *   organizational_departments.ai_workspace  /dashboard/ai-department  SAFE_DELEGATABLE
+     *   technical_system.ai_command_center       /dashboard/admin/ai       ADMIN_ONLY
      * An ai_manager legitimately reaches the first and must never reach the second.
+     *
+     * Phase 2G.1C reclassified the platform SYSTEM_PROTECTED -> ADMIN_ONLY (its
+     * backend gate is role:admin,super_admin,tech_admin — admin-tier, not root).
+     * The separation is unaffected: ADMIN_ONLY is still never auto-delegated to a
+     * department leader, and the entry remains delegatable=false, so no
+     * department default can ever hand it to ai_manager.
      */
     private const AI_DEPARTMENT_PAGE = 'organizational_departments.ai_workspace';
     private const AI_PLATFORM_PAGE = 'technical_system.ai_command_center';
@@ -453,7 +459,7 @@ class AccessDiffBaselineTest extends TestCase
             array_filter(PageAccessCatalog::all(), fn (PageAccessEntry $e) => $e->isProtected())
         ));
 
-        $this->assertCount(17, $protectedKeys);
+        $this->assertCount(8, $protectedKeys);
 
         foreach (['admin', 'executive_admin', 'operations_manager', 'ai_manager', 'instructor', 'student'] as $role) {
             $u = $this->makeUser($role);

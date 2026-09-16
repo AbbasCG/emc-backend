@@ -32,7 +32,10 @@ class RolePageDefaultTest extends TestCase
     private const ADMIN_PAGE = 'finance.transactions';                    // ADMIN_ONLY (the finance_manager use case)
     private const ADMIN_PAGE_2 = 'finance.manual_payments';               // ADMIN_ONLY
     private const PROTECTED_PAGE = 'administration.roles';                // SYSTEM_PROTECTED
-    private const PROTECTED_PAGE_2 = 'technical_system.ai_command_center';// SYSTEM_PROTECTED
+    // Phase 2G.1C: ai_command_center is now ADMIN_ONLY (admin-tier backend
+    // gate). platform_scale has no backend endpoint at all and remains
+    // SYSTEM_PROTECTED, so it is the correct fixture for "root-only" here.
+    private const PROTECTED_PAGE_2 = 'technical_system.platform_scale'; // SYSTEM_PROTECTED
 
     private function service(): RolePageDefaultService
     {
@@ -163,7 +166,7 @@ class RolePageDefaultTest extends TestCase
         $expected = array_map(fn ($e) => $e->key, array_filter(PageAccessCatalog::all(), fn ($e) => ! $e->isProtected()));
 
         $this->assertEqualsCanonicalizing(array_values($expected), $eligible);
-        $this->assertCount(count(PageAccessCatalog::all()) - 17, $eligible, 'all 17 SYSTEM_PROTECTED entries must be excluded');
+        $this->assertCount(count(PageAccessCatalog::all()) - 8, $eligible, 'all 8 SYSTEM_PROTECTED entries must be excluded');
     }
 
     // ── 5/6. Protected authority ─────────────────────────────────────────────

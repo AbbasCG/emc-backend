@@ -36,7 +36,10 @@ class UserPageAccessOverrideTest extends TestCase
     private const DELEGATABLE_PAGE_2 = 'operations.meeting_reports';// SAFE_DELEGATABLE, delegatable=true
     private const ADMIN_PAGE = 'quality.dashboard';                 // ADMIN_ONLY, delegatable=false
     private const PROTECTED_PAGE = 'administration.roles';          // SYSTEM_PROTECTED
-    private const PROTECTED_PAGE_2 = 'technical_system.ai_command_center';
+    // Phase 2G.1C: ai_command_center is now ADMIN_ONLY (admin-tier backend
+    // gate). platform_scale has no backend endpoint at all and remains
+    // SYSTEM_PROTECTED, so it is the correct fixture for "root-only" here.
+    private const PROTECTED_PAGE_2 = 'technical_system.platform_scale';
 
     private function service(): UserPageAccessOverrideService
     {

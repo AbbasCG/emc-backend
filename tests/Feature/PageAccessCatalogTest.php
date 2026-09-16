@@ -158,14 +158,27 @@ class PageAccessCatalogTest extends TestCase
 
     // ── AI department vs AI platform separation (Step 9) ────────────────────
 
-    public function test_technical_ai_platform_is_protected(): void
+    /**
+     * Phase 2G.1C — the technical AI Platform is ADMIN_ONLY, not SYSTEM_PROTECTED.
+     *
+     * SYSTEM_PROTECTED means root authority; ADMIN_ONLY is defined by
+     * PageAccessRiskLevel itself as "admin-tier roles (admin/tech_admin/
+     * super_admin)", which is exactly what /api/admin/ai/* grants
+     * (role:admin,super_admin,tech_admin — deliberately, see its route comment).
+     *
+     * What matters for the AI separation is unchanged and still asserted here:
+     * the platform is NOT delegatable and never reachable by a department
+     * leader or ai_manager through department defaults.
+     */
+    public function test_technical_ai_platform_is_admin_tier_and_never_delegatable(): void
     {
         $entry = PageAccessCatalog::find('technical_system.ai_command_center');
 
         $this->assertNotNull($entry);
-        $this->assertTrue($entry->isProtected());
-        $this->assertFalse($entry->delegatable);
-        $this->assertSame(PageAccessRiskLevel::SystemProtected, $entry->riskLevel);
+        $this->assertSame(PageAccessRiskLevel::AdminOnly, $entry->riskLevel);
+        $this->assertFalse($entry->isProtected());
+        $this->assertFalse($entry->delegatable, 'The technical AI Platform must never be delegatable.');
+        $this->assertFalse($entry->departmentScoped, 'The technical AI Platform is not department-scoped.');
     }
 
     public function test_organizational_ai_department_remains_separate_and_not_system_protected(): void

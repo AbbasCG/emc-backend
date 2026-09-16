@@ -274,10 +274,10 @@ final class PageAccessCatalog
             ['administration.partners_catalog', '/dashboard/super-admin/crud/partners', 'إدارة الشركاء', $C::Administration, $R::AdminOnly, false, P::MANAGE_PARTNERS, false, []],
             ['administration.audit_logs', '/dashboard/super-admin/audit-logs', 'سجلات التدقيق (سوبر أدمن)', $C::Administration, $R::AdminOnly, false, P::VIEW_AUDIT_LOGS, false, []],
             ['administration.admin_audit_logs', '/dashboard/admin/audit-logs', 'سجلات التدقيق (إداري)', $C::Administration, $R::AdminOnly, false, P::VIEW_AUDIT_LOGS, false, []],
-            ['administration.integrations', '/dashboard/admin/integrations', 'التكاملات', $C::Administration, $R::SystemProtected, false, P::MANAGE_INTEGRATIONS, false, [
+            ['administration.integrations', '/dashboard/admin/integrations', 'التكاملات', $C::Administration, $R::AdminOnly, false, P::MANAGE_INTEGRATIONS, false, [
                 '/dashboard/admin/integrations/whatsapp', '/dashboard/admin/integrations/email',
             ]],
-            ['administration.webhooks', '/dashboard/admin/webhooks', 'الويب هوك', $C::Administration, $R::SystemProtected, false, P::MANAGE_WEBHOOKS, false, [
+            ['administration.webhooks', '/dashboard/admin/webhooks', 'الويب هوك', $C::Administration, $R::AdminOnly, false, P::MANAGE_WEBHOOKS, false, [
                 '/dashboard/admin/webhooks/:id',
             ]],
             ['administration.email_settings', '/dashboard/super-admin/email-settings', 'إعدادات البريد', $C::Administration, $R::SystemProtected, false, P::MANAGE_SETTINGS, false, []],
@@ -287,7 +287,7 @@ final class PageAccessCatalog
             ['administration.financial_requests_oversight', '/dashboard/super-admin/financial-requests', 'الإشراف على الطلبات المالية', $C::Administration, $R::AdminOnly, false, P::VIEW_FINANCIAL_REPORTS, false, []],
             ['administration.quality_admin_overview', '/dashboard/admin/quality', 'إشراف الجودة (إداري)', $C::Administration, $R::AdminOnly, false, P::MANAGE_QUALITY, false, []],
             ['administration.visitor_analytics', '/dashboard/admin/visitor-analytics', 'تحليلات الزوار', $C::Administration, $R::AdminOnly, false, null, false, []],
-            ['administration.catalog_import', '/dashboard/admin/catalog-import', 'استيراد الكتالوج', $C::Administration, $R::SystemProtected, false, null, false, []],
+            ['administration.catalog_import', '/dashboard/admin/catalog-import', 'استيراد الكتالوج', $C::Administration, $R::AdminOnly, false, null, false, []],
             ['administration.tickets_admin', '/dashboard/tickets/admin', 'إدارة التذاكر', $C::Administration, $R::AdminOnly, false, null, false, []],
             ['administration.team_members', '/dashboard/admin/team-members', 'أعضاء الفريق', $C::Administration, $R::AdminOnly, false, P::MANAGE_TEAM, false, []],
             ['administration.knowledge_hub', '/dashboard/admin/knowledge', 'قاعدة المعرفة', $C::Administration, $R::AdminOnly, false, P::MANAGE_KNOWLEDGE, false, [
@@ -296,17 +296,17 @@ final class PageAccessCatalog
             ['administration.documents', '/dashboard/admin/documents', 'المستندات الإدارية', $C::Administration, $R::AdminOnly, false, null, false, []],
 
             // ── Technical System — AI Platform (distinct from AI dept above) ─
-            ['technical_system.ai_command_center', '/dashboard/admin/ai', 'مركز قيادة الذكاء الاصطناعي', $C::TechnicalSystem, $R::SystemProtected, false, P::USE_AI_ASSISTANT, false, [
+            ['technical_system.ai_command_center', '/dashboard/admin/ai', 'مركز قيادة الذكاء الاصطناعي', $C::TechnicalSystem, $R::AdminOnly, false, P::USE_AI_ASSISTANT, false, [
                 '/dashboard/admin/ai/expert-applications',
             ]],
-            ['technical_system.ai_automations', '/dashboard/admin/ai/automations', 'أتمتة الذكاء الاصطناعي', $C::TechnicalSystem, $R::SystemProtected, false, P::MANAGE_AI_PROMPTS, false, []],
-            ['technical_system.ai_insights', '/dashboard/admin/ai/insights', 'رؤى الذكاء الاصطناعي', $C::TechnicalSystem, $R::SystemProtected, false, P::MANAGE_AI_PROMPTS, false, []],
-            ['technical_system.ai_usage', '/dashboard/admin/ai/usage', 'استخدام الذكاء الاصطناعي', $C::TechnicalSystem, $R::SystemProtected, false, P::VIEW_AI_USAGE, false, []],
-            ['technical_system.automations', '/dashboard/admin/automations', 'الأتمتة العامة', $C::TechnicalSystem, $R::SystemProtected, false, null, false, [
+            ['technical_system.ai_automations', '/dashboard/admin/ai/automations', 'أتمتة الذكاء الاصطناعي', $C::TechnicalSystem, $R::AdminOnly, false, P::MANAGE_AI_PROMPTS, false, []],
+            ['technical_system.ai_insights', '/dashboard/admin/ai/insights', 'رؤى الذكاء الاصطناعي', $C::TechnicalSystem, $R::AdminOnly, false, P::MANAGE_AI_PROMPTS, false, []],
+            ['technical_system.ai_usage', '/dashboard/admin/ai/usage', 'استخدام الذكاء الاصطناعي', $C::TechnicalSystem, $R::AdminOnly, false, P::VIEW_AI_USAGE, false, []],
+            ['technical_system.automations', '/dashboard/admin/automations', 'الأتمتة العامة', $C::TechnicalSystem, $R::AdminOnly, false, null, false, [
                 '/dashboard/admin/automations/runs',
             ]],
             ['technical_system.platform_scale', '/dashboard/admin/platform-scale', 'قياس نمو المنصة', $C::TechnicalSystem, $R::SystemProtected, false, null, false, []],
-            ['technical_system.api_tokens', '/dashboard/admin/developer/api-tokens', 'رموز واجهة البرمجة', $C::TechnicalSystem, $R::SystemProtected, false, P::MANAGE_API_TOKENS, false, []],
+            ['technical_system.api_tokens', '/dashboard/admin/developer/api-tokens', 'رموز واجهة البرمجة', $C::TechnicalSystem, $R::AdminOnly, false, P::MANAGE_API_TOKENS, false, []],
             ['technical_system.mobile_readiness', '/dashboard/admin/mobile-readiness', 'جاهزية التطبيق المحمول', $C::TechnicalSystem, $R::SystemProtected, false, null, false, []],
 
             // ── Personal (self-service / role-home surfaces) ───────────────
