@@ -8,10 +8,13 @@ use App\Services\DepartmentPageDefaultService;
 use App\Support\PageAccess\DepartmentDefaultMap;
 use App\Support\PageAccess\DepartmentPageAudience;
 use App\Support\PageAccess\PageAccessCatalog;
+use App\Models\User;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
+use Throwable;
 
 /**
- * Phase 2G.4A — CANONICAL DEPARTMENT DEFAULT SYNC (PLAN ONLY).
+ * Phase 2G.4 — CANONICAL DEPARTMENT DEFAULT SYNC.
  *
  * PAGE ACCESS != BUSINESS AUTHORIZATION: this plans which dashboard pages a
  * department opens by default for its members and its canonical leader. It
@@ -26,18 +29,21 @@ use Illuminate\Console\Command;
  *                                 render (dry-run)
  *
  * ─────────────────────────────────────────────────────────────────────────
- * APPLY IS BLOCKED IN THIS PHASE
+ * SAFETY MODEL
  * ─────────────────────────────────────────────────────────────────────────
- * --apply is accepted by the signature purely so the refusal is explicit and
- * testable rather than an "unknown option" error. It ALWAYS refuses and always
- * reports zero writes. Phase 2G.4A is plan-and-review only; the persistent
- * write path is a separate, separately-approved phase.
- *
- * When that phase arrives, the apply must be ADDITIVE, exactly as the role
- * command is: DepartmentPageDefaultService::replaceDefaults() is desired-state
- * replacement and DELETES stored keys absent from the submitted list, so it
- * cannot be reused for canonical synchronisation without destroying custom
- * department defaults. That will need an additive counterpart, not a flag.
+ *   - READ-ONLY BY DEFAULT. Only --apply may write; there is no implicit apply.
+ *   - VALIDATE THE WHOLE PLAN FIRST. Any CONFLICT / INVALID_DEPARTMENT /
+ *     INVALID_PAGE_KEY aborts before a single row is written.
+ *   - ONE TRANSACTION. Every insert runs inside it; any failure rolls the whole
+ *     apply back, so a partial state is impossible.
+ *   - ADDITIVE ONLY, NEVER A PRUNE. Rows absent from DepartmentDefaultMap are
+ *     left untouched - this is compatibility synchronisation, not desired-state
+ *     replacement. That is why it calls the service's addDefaults() and not
+ *     replaceDefaults(), which deletes unlisted keys.
+ *   - DEFENCE IN DEPTH. Writes go through DepartmentPageDefaultService, which
+ *     re-validates every key against the one canonical eligibility rule, so a
+ *     malformed plan still cannot store a SYSTEM_PROTECTED page.
+ *   - ROLE DEFAULTS AND USER OVERRIDES ARE NEVER TOUCHED.
  *
  * DEPARTMENT IDENTITY IS THE SLUG. Numeric ids never appear in the map; the
  * slug is resolved to a row here, at execution time, against the live table.
@@ -46,10 +52,10 @@ class SyncDepartmentDefaultsCommand extends Command
 {
     protected $signature = 'access:sync-department-defaults
         {--dry-run : Report the plan without writing (default behaviour)}
-        {--apply : BLOCKED in Phase 2G.4A — always refuses and writes nothing}
+        {--apply : Execute the planned inserts inside one transaction}
         {--department= : Limit the plan to one department slug}';
 
-    protected $description = 'Plan the canonical department page-access defaults (dry-run only in Phase 2G.4A).';
+    protected $description = 'Plan and (with --apply) additively synchronise the canonical department page-access defaults.';
 
     // Action codes, also used as summary buckets.
     public const INSERT = 'INSERT';
@@ -71,20 +77,115 @@ class SyncDepartmentDefaultsCommand extends Command
 
         $this->render($plan, $summary);
 
-        if ($this->option('apply')) {
+        $apply = (bool) $this->option('apply');
+
+        $blocking = array_values(array_filter(
+            $plan,
+            fn (array $a) => in_array($a['action'], self::BLOCKING, true),
+        ));
+
+        if ($apply && $blocking !== []) {
             $this->line('');
-            $this->error('REFUSED — --apply is blocked in Phase 2G.4A.');
-            $this->line('  This phase plans and reviews the canonical Department Default mapping only.');
-            $this->line('  No persistent department_page_defaults row may be written until the apply');
-            $this->line('  phase is separately approved.');
+            $this->error('ABORTED before writing - the plan contains '.count($blocking).' blocking action(s):');
+            $this->table(
+                ['DEPARTMENT', 'AUDIENCE', 'PAGE_KEY', 'ACTION', 'REASON'],
+                array_map(fn (array $a) => [
+                    $a['department'], $a['audience'], $a['page_key'], $a['action'], $a['reason'],
+                ], $blocking),
+            );
             $this->line('  Writes performed                : 0');
 
             return self::FAILURE;
         }
 
-        $this->line('  Writes performed                : 0');
+        if (! $apply) {
+            $this->line('  Writes performed                : 0');
+
+            return self::SUCCESS;
+        }
+
+        try {
+            $written = $this->executePlan($plan);
+        } catch (Throwable $e) {
+            // DB::transaction() has already rolled everything back.
+            $this->line('');
+            $this->error('APPLY FAILED - transaction rolled back: '.$e->getMessage());
+            $this->line('  Writes performed                : 0');
+
+            return self::FAILURE;
+        }
+
+        $this->line('  Writes performed                : '.$written);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Executes ONLY INSERT actions, all inside ONE transaction.
+     *
+     * @param  array<int, array<string, string>>  $plan
+     */
+    protected function executePlan(array $plan): int
+    {
+        $service = app(DepartmentPageDefaultService::class);
+        $actor = $this->resolveActor();
+
+        $grouped = [];
+        foreach ($plan as $action) {
+            if ($action['action'] === self::INSERT) {
+                $grouped[$action['department']][$action['audience']][] = $action['page_key'];
+            }
+        }
+
+        if ($grouped === []) {
+            return 0;
+        }
+
+        return DB::transaction(function () use ($grouped, $service, $actor): int {
+            $written = 0;
+
+            foreach ($grouped as $slug => $byAudience) {
+                $department = Department::query()->where('slug', $slug)->firstOrFail();
+
+                foreach ($byAudience as $audienceValue => $keys) {
+                    $audience = DepartmentPageAudience::from($audienceValue);
+
+                    foreach ($keys as $key) {
+                        // One pair at a time through the canonical service, so every
+                        // key is re-validated against the single eligibility rule
+                        // even though the planner already classified it.
+                        $written += count($this->applyPair($service, $department, $audience, $key, $actor));
+                    }
+                }
+            }
+
+            return $written;
+        });
+    }
+
+    /**
+     * Seam for one pair's write. Isolated so a test can inject a deterministic
+     * mid-transaction failure without touching the production schema.
+     *
+     * @return array<int, string> keys actually inserted
+     */
+    protected function applyPair(
+        DepartmentPageDefaultService $service,
+        Department $department,
+        DepartmentPageAudience $audience,
+        string $pageKey,
+        ?User $actor,
+    ): array {
+        return $service->addDefaults($department, $audience, [$pageKey], $actor);
+    }
+
+    /** Provenance actor for created_by/updated_by. Null is acceptable. */
+    protected function resolveActor(): ?User
+    {
+        return User::query()
+            ->whereIn('role', ['super_admin', 'tech_admin'])
+            ->orderBy('id')
+            ->first();
     }
 
     /**

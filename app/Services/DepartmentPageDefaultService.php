@@ -170,6 +170,55 @@ class DepartmentPageDefaultService
     // ── Writes ───────────────────────────────────────────────────────────────
 
     /**
+     * ADDITIVELY store one audience's defaults for a department.
+     *
+     * The additive counterpart to replaceDefaults(). replaceDefaults() is
+     * desired-state replacement: it DELETES any stored key absent from the
+     * submitted list. Canonical synchronisation must never do that, because a
+     * department default an administrator added by hand is legitimate data, not
+     * drift. The two have genuinely different contracts, so this is a separate
+     * method rather than a flag on the other one.
+     *
+     * Validation is the SAME canonical rule: keys run through validateKeys() for
+     * the given audience, so a SYSTEM_PROTECTED or audience-ineligible key is
+     * rejected here exactly as it is there. Callers never re-derive eligibility.
+     *
+     * No transaction is opened here: a bulk caller wraps many departments in ONE
+     * transaction, and nesting would defeat its all-or-nothing guarantee.
+     *
+     * @param  array<int, string>  $pageKeys
+     * @return array<int, string> the keys actually inserted (already-present keys are not returned)
+     */
+    public function addDefaults(
+        Department $department,
+        DepartmentPageAudience $audience,
+        array $pageKeys,
+        ?User $actor = null,
+    ): array {
+        $valid = $this->validateKeys($pageKeys, $audience);
+
+        $existing = DepartmentPageDefault::query()
+            ->where('department_id', $department->id)
+            ->forAudience($audience)
+            ->pluck('page_key')
+            ->all();
+
+        $toInsert = array_values(array_diff($valid, $existing));
+
+        foreach ($toInsert as $key) {
+            DepartmentPageDefault::create([
+                'department_id' => $department->id,
+                'page_key' => $key,
+                'audience' => $audience->value,
+                'created_by' => $actor?->id,
+                'updated_by' => $actor?->id,
+            ]);
+        }
+
+        return $toInsert;
+    }
+
+    /**
      * Atomically REPLACE one audience's defaults for a department.
      *
      * Validation runs fully before any write, so an invalid key aborts with

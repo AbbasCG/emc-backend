@@ -108,14 +108,13 @@ class SyncDepartmentDefaultsCommandTest extends TestCase
         $this->assertSame(0, DepartmentPageDefault::query()->count());
     }
 
-    public function test_apply_is_refused_in_this_phase_and_writes_nothing(): void
+    public function test_apply_requires_the_explicit_flag(): void
     {
         $this->seedDepartments();
 
-        $this->artisan('access:sync-department-defaults --apply')
-            ->expectsOutputToContain('REFUSED')
-            ->expectsOutputToContain('Writes performed                : 0')
-            ->assertExitCode(1);
+        // Neither bare nor --dry-run may ever write; only --apply does.
+        $this->artisan('access:sync-department-defaults')->assertExitCode(0);
+        $this->artisan('access:sync-department-defaults --dry-run')->assertExitCode(0);
 
         $this->assertSame(0, DepartmentPageDefault::query()->count());
     }
