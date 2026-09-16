@@ -2106,17 +2106,23 @@ Route::prefix('institute')->group(function () {
 });
 
 // ─── Department Leadership & Structure Routes (Permissions & Org Chart) ───────
-// The role list below is a COARSE pre-filter only (excludes accounts that can
-// never hold departments.leader_id — student/volunteer/partner/instructor/
-// support_agent) — it is defense-in-depth, not the authority. Every method on
-// both controllers independently re-checks via DepartmentAccessService
-// (canManageDepartment/getLedDepartmentIds), so an actual department leader
-// whose role slug isn't in this list is still blocked at the route layer —
-// this list is kept as the full manager/admin role roster specifically so
-// that never happens: any role capable of legitimately holding leader_id
-// (all "_manager" roles, department_manager, section_lead, admin-tier) is
-// included, only structurally-non-leader accounts are excluded.
-Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,department_manager,section_lead,finance_manager,marketing_manager,quality_manager,hr_manager,programs_manager,operations_manager,partnerships_manager,community_manager,ai_manager,strategy_planning_manager,digital_ambassadors_manager,advisors_manager'])->prefix('department')->group(function () {
+// ENTRY RULE: an administrative/manager role OR the canonical leader of an
+// ACTIVE department (departments.leader_id, via DepartmentAccessService).
+//
+// The previous role-only list encoded an assumption the data does not
+// guarantee — that "structurally-non-leader" accounts never hold leader_id.
+// departments.leader_id is a plain FK to users, and real rows assign it to
+// non-manager roles, so a genuine department leader was refused at the route
+// layer while every controller behind it would have authorised them. The
+// role.or.leader middleware closes that contradiction at the narrowest point.
+//
+// This is ENTRY ONLY, and defence-in-depth rather than the authority: every
+// method on both controllers independently re-checks via DepartmentAccessService
+// (canManageDepartment/getLedDepartmentIds), so a leader of department A still
+// cannot touch department B, and permission grants remain gated by
+// PermissionDelegationService. No global admin authority is conferred, and
+// leadership of an archived/inactive department confers no entry at all.
+Route::middleware(['auth:sanctum', 'role.or.leader:admin,super_admin,tech_admin,executive_admin,department_manager,section_lead,finance_manager,marketing_manager,quality_manager,hr_manager,programs_manager,operations_manager,partnerships_manager,community_manager,ai_manager,strategy_planning_manager,digital_ambassadors_manager,advisors_manager'])->prefix('department')->group(function () {
     Route::get('/employees', [\App\Http\Controllers\DepartmentPermissionController::class, 'getEmployees']);
     Route::get('/employees/{employee}/permission-tree', [\App\Http\Controllers\DepartmentPermissionController::class, 'getEmployeePermissionTree']);
     Route::post('/employees/{employee}/permissions/grant', [\App\Http\Controllers\DepartmentPermissionController::class, 'grantPermission']);

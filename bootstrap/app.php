@@ -20,6 +20,10 @@ return Application::configure(basePath: dirname(__DIR__))
 
         $middleware->alias([
             'role'               => \App\Http\Middleware\RoleMiddleware::class,
+            // Department-leadership route entry: a listed role OR the canonical
+            // leader of an active department. Grants entry only; every controller
+            // behind it still performs its own department-scoped check.
+            'role.or.leader'     => \App\Http\Middleware\DepartmentLeaderOrRoleMiddleware::class,
             'permission'         => \App\Http\Middleware\PermissionMiddleware::class,
             'optional.sanctum'   => \App\Http\Middleware\OptionalSanctumAuth::class,
             'active'             => \App\Http\Middleware\EnsureUserIsActive::class,
