@@ -279,16 +279,23 @@ class EffectivePageAccessService
         $member = [];
         $leader = [];
 
+        // ONE query for every relevant department's defaults, rather than two
+        // per department: a user leading several departments is ordinary here.
+        $defaults = $this->departmentDefaults->getDefaultsForDepartments(
+            $departments->pluck('id')->all()
+        );
+
         foreach ($departments as $department) {
             $isLeader = $ledIds->contains($department->id);
+            $stored = $defaults[$department->id] ?? ['member' => [], 'leader' => []];
 
             // Phase 2A additive rule: a leader also receives member defaults.
             if ($isLeader || $memberIds->contains($department->id)) {
-                $member = array_merge($member, $this->departmentDefaults->getMemberDefaults($department));
+                $member = array_merge($member, $stored['member']);
             }
 
             if ($isLeader) {
-                $leader = array_merge($leader, $this->departmentDefaults->getLeaderDefaults($department));
+                $leader = array_merge($leader, $stored['leader']);
             }
         }
 

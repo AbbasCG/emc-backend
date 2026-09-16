@@ -132,6 +132,60 @@ class DepartmentPageDefaultService
     }
 
     /**
+     * Batch counterpart to getMemberDefaults()/getLeaderDefaults().
+     *
+     * Reads EVERY audience for MANY departments in ONE query, so a caller
+     * resolving a user who belongs to N departments costs 1 query rather than
+     * 2N. A user leading several departments is ordinary in this platform, so
+     * that difference is real rather than theoretical.
+     *
+     * The eligibility filter and the canonical catalog ordering are IDENTICAL
+     * to storedKeys() - both funnel through eligibleKeys(), the one rule - so a
+     * stale or reclassified row is dropped here exactly as it is there. This is
+     * a query optimisation, never a second policy.
+     *
+     * @param  array<int, int>  $departmentIds
+     * @return array<int, array{member: array<int,string>, leader: array<int,string>}>
+     *         keyed by department id; departments with no rows are present and empty
+     */
+    public function getDefaultsForDepartments(array $departmentIds): array
+    {
+        $result = [];
+        foreach ($departmentIds as $id) {
+            $result[(int) $id] = ['member' => [], 'leader' => []];
+        }
+
+        if ($departmentIds === []) {
+            return $result;
+        }
+
+        $rows = DepartmentPageDefault::query()
+            ->whereIn('department_id', $departmentIds)
+            ->get(['department_id', 'page_key', 'audience']);
+
+        $stored = [];
+        foreach ($rows as $row) {
+            $stored[(int) $row->department_id][$row->audience->value][] = $row->page_key;
+        }
+
+        $eligible = [
+            DepartmentPageAudience::Member->value => $this->eligibleKeys(DepartmentPageAudience::Member),
+            DepartmentPageAudience::Leader->value => $this->eligibleKeys(DepartmentPageAudience::Leader),
+        ];
+
+        foreach ($stored as $departmentId => $byAudience) {
+            foreach ($byAudience as $audience => $keys) {
+                $result[$departmentId][$audience] = array_values(array_filter(
+                    $eligible[$audience],
+                    fn (string $k) => in_array($k, $keys, true),
+                ));
+            }
+        }
+
+        return $result;
+    }
+
+    /**
      * What this user actually receives by default from THIS department.
      *
      * ADDITIVE: a canonical leader (departments.leader_id, resolved via
