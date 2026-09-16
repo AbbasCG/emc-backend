@@ -69,6 +69,10 @@ class TechnicalAdministrationBoundaryTest extends TestCase
         'administration.email_settings',
         'administration.attendance_settings',
         'administration.email_logs',
+        // Added after 2G.1C, not reclassified by it: the central Access Control
+        // page EDITS the access-control tables, so it is a root-authority
+        // surface by the same logic as administration.roles above.
+        'administration.access_control',
     ];
 
     /** The corrected technical-administration endpoints (canonical spellings). */
@@ -155,7 +159,7 @@ class TechnicalAdministrationBoundaryTest extends TestCase
         }
     }
 
-    public function test_exactly_eight_capabilities_remain_system_protected(): void
+    public function test_the_protected_set_is_exactly_the_expected_capabilities(): void
     {
         $protected = array_values(array_map(
             fn ($e) => $e->key,
@@ -166,7 +170,8 @@ class TechnicalAdministrationBoundaryTest extends TestCase
         $expected = array_merge(self::STILL_PROTECTED, self::UNTOUCHED_PROTECTED);
         sort($expected);
 
-        $this->assertSame($expected, $protected, 'The protected set must be exactly these eight capabilities.');
+        $this->assertSame($expected, $protected, 'The protected set must be exactly these capabilities.');
+        $this->assertCount(count($expected), $protected);
     }
 
     /** Nothing but the risk level changed — keys, routes and labels are stable identity. */
@@ -197,7 +202,7 @@ class TechnicalAdministrationBoundaryTest extends TestCase
     public function test_catalog_size_and_other_risk_levels_are_unchanged(): void
     {
         $all = PageAccessCatalog::all();
-        $this->assertCount(129, $all);
+        $this->assertCount(130, $all);
 
         $byRisk = [];
         foreach ($all as $e) {
@@ -208,10 +213,16 @@ class TechnicalAdministrationBoundaryTest extends TestCase
         // After:               8 SYSTEM_PROTECTED + 75 ADMIN_ONLY + 46 SAFE_DELEGATABLE.
         // The nine moved exactly one step, and SAFE_DELEGATABLE is untouched —
         // which is why department member/leader eligibility does not change.
-        $this->assertSame(8, $byRisk['SYSTEM_PROTECTED']);
+        //
+        // administration.access_control was added later as a ninth protected
+        // surface. That is the ONLY reason SYSTEM_PROTECTED is 9 rather than 8,
+        // and the two assertions that actually carry the 2G.1C invariant —
+        // ADMIN_ONLY holding the nine reclassified entries, and SAFE_DELEGATABLE
+        // being untouched — are unchanged.
+        $this->assertSame(count(self::STILL_PROTECTED) + count(self::UNTOUCHED_PROTECTED), $byRisk['SYSTEM_PROTECTED']);
         $this->assertSame(75, $byRisk['ADMIN_ONLY']);
         $this->assertSame(46, $byRisk['SAFE_DELEGATABLE']);
-        $this->assertSame(129, array_sum($byRisk));
+        $this->assertSame(130, array_sum($byRisk));
     }
 
     // ── 2. PAGE ACCESS != BUSINESS AUTHORIZATION ─────────────────────────────

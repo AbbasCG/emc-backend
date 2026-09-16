@@ -348,7 +348,7 @@ class AccessDiffBaselineTest extends TestCase
         );
 
         $this->assertFileExists($dir.'/baseline.json');
-        $this->assertCount(129, $catalog);
+        $this->assertCount(130, $catalog);
         $this->assertNotEmpty($unseeded);
         $this->assertNotEmpty($seeded);
     }
@@ -483,7 +483,7 @@ class AccessDiffBaselineTest extends TestCase
             array_filter(PageAccessCatalog::all(), fn (PageAccessEntry $e) => $e->isProtected())
         ));
 
-        $this->assertCount(8, $protectedKeys);
+        $this->assertCount(9, $protectedKeys);
 
         foreach (['admin', 'executive_admin', 'operations_manager', 'ai_manager', 'instructor', 'student'] as $role) {
             $u = $this->makeUser($role);

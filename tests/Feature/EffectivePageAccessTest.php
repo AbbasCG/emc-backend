@@ -805,7 +805,7 @@ class EffectivePageAccessTest extends TestCase
 
         // Deliberately not pinned to an exact number (framework internals make
         // that brittle). What matters is that the cost is bounded by the user's
-        // department count, not by the 129-entry catalog.
+        // department count, not by the 130-entry catalog.
         $this->assertLessThan(
             (int) ($catalogSize / 4),
             $count,
@@ -967,7 +967,7 @@ class EffectivePageAccessTest extends TestCase
     {
         $all = PageAccessCatalog::all();
 
-        $this->assertCount(129, $all);
+        $this->assertCount(130, $all);
         $this->assertTrue(PageAccessCatalog::find(self::PROTECTED_PAGE)->isProtected());
         $this->assertFalse(PageAccessCatalog::find(self::MEMBER_PAGE)->isProtected());
     }

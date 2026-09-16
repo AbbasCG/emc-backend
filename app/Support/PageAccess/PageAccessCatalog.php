@@ -263,6 +263,16 @@ final class PageAccessCatalog
             ['administration.users', '/dashboard/super-admin/crud/users', 'إدارة المستخدمين', $C::Administration, $R::AdminOnly, false, P::VIEW_USERS, false, []],
             ['administration.roles', '/dashboard/super-admin/crud/roles', 'الأدوار والصلاحيات', $C::Administration, $R::SystemProtected, false, P::MANAGE_ROLES, false, []],
             ['administration.permission_delegation_config', '/dashboard/super-admin/crud/permissions', 'إعدادات تفويض الصلاحيات', $C::Administration, $R::SystemProtected, false, P::MANAGE_ROLES, false, []],
+            // Central Access Control management surface. SYSTEM_PROTECTED for the
+            // same reason as the two rows above: it EDITS the access-control tables
+            // themselves (role defaults, department defaults, user overrides), and
+            // its most restrictive backend tab - department defaults - is gated
+            // role:super_admin,tech_admin. Classifying it any lower would let a page
+            // that configures access be delegated through the very mechanism it
+            // configures. delegatable=false and SYSTEM_PROTECTED together mean it can
+            // never be stored as a role default, a department default, or a user
+            // ALLOW override - every one of those layers rejects it by rule.
+            ['administration.access_control', '/dashboard/super-admin/access-control', 'إدارة الوصول والصلاحيات', $C::Administration, $R::SystemProtected, false, P::MANAGE_ROLES, false, []],
             ['administration.departments', '/dashboard/super-admin/crud/departments', 'إدارة الأقسام', $C::Administration, $R::AdminOnly, false, P::MANAGE_DEPARTMENTS, false, []],
             ['administration.team', '/dashboard/super-admin/crud/team', 'إدارة الفريق', $C::Administration, $R::AdminOnly, false, P::MANAGE_TEAM, false, []],
             ['administration.students', '/dashboard/super-admin/crud/students', 'إدارة الطلاب', $C::Administration, $R::AdminOnly, false, null, false, [

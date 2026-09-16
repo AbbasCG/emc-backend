@@ -166,7 +166,16 @@ class RolePageDefaultTest extends TestCase
         $expected = array_map(fn ($e) => $e->key, array_filter(PageAccessCatalog::all(), fn ($e) => ! $e->isProtected()));
 
         $this->assertEqualsCanonicalizing(array_values($expected), $eligible);
-        $this->assertCount(count(PageAccessCatalog::all()) - 8, $eligible, 'all 8 SYSTEM_PROTECTED entries must be excluded');
+
+        // Derived, not hardcoded: the count must follow the catalog so adding a
+        // protected entry can never quietly loosen this guard.
+        $protectedCount = count(array_filter(PageAccessCatalog::all(), fn ($e) => $e->isProtected()));
+        $this->assertGreaterThan(0, $protectedCount, 'Guard would be vacuous with no protected entries.');
+        $this->assertCount(
+            count(PageAccessCatalog::all()) - $protectedCount,
+            $eligible,
+            "all {$protectedCount} SYSTEM_PROTECTED entries must be excluded",
+        );
     }
 
     // ── 5/6. Protected authority ─────────────────────────────────────────────

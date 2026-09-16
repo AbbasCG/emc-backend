@@ -101,7 +101,7 @@ class AuthenticatedBaselineTest extends TestCase
             fn (PageAccessEntry $e) => ! in_array($e->key, self::BASELINE, true)
         );
 
-        $this->assertCount(123, $nonBaseline);
+        $this->assertCount(124, $nonBaseline);
 
         foreach ($nonBaseline as $entry) {
             $this->assertFalse($entry->authenticatedBaseline, "[{$entry->key}] must not be baseline.");
@@ -115,7 +115,7 @@ class AuthenticatedBaselineTest extends TestCase
         $protected = array_filter(PageAccessCatalog::all(), fn (PageAccessEntry $e) => $e->isProtected());
 
         // Derived from the catalog, not hardcoded to a pair of keys.
-        $this->assertCount(8, $protected);
+        $this->assertCount(9, $protected);
 
         foreach ($protected as $entry) {
             $this->assertFalse(
@@ -448,7 +448,7 @@ class AuthenticatedBaselineTest extends TestCase
         $svc = $this->resolver();
         $all = $svc->resolveAll($user);
 
-        $this->assertCount(129, $all);
+        $this->assertCount(130, $all);
 
         foreach ($all as $key => $row) {
             $this->assertSame($row->allowed, $svc->canAccess($user, $key), "canAccess disagreed for [{$key}].");
