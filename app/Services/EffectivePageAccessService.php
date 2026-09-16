@@ -54,7 +54,24 @@ use Illuminate\Support\Collection;
  *   5. DEPARTMENT LEADER DEFAULT
  *   6. DEPARTMENT MEMBER DEFAULT
  *   7. ROLE DEFAULT
- *   8. NO SOURCE              — deny (default-deny)
+ *   8. AUTHENTICATED BASELINE — catalog-declared, no stored row
+ *   9. NO SOURCE              — deny (default-deny)
+ *
+ * AUTHENTICATED BASELINE (Phase 2G.2) sits at the BOTTOM of the positive
+ * sources on purpose. It grants the handful of capabilities that belong to any
+ * authenticated account — a user's own profile, notifications, notification
+ * preferences, their own tickets and HR requests, the volunteer application
+ * form — without a row in any mutable table, so a NEW role inherits them
+ * automatically and no role edit can take someone's own profile away.
+ *
+ * Being lowest means it never masks a more specific provenance: if a role also
+ * grants the page, primary_source still reads `role`.
+ *
+ * It cannot reach SYSTEM_PROTECTED: PageAccessEntry's constructor refuses the
+ * combination outright, and resolveEntry() short-circuits protected pages
+ * before any source is collected. USER DENY still outranks it (rung 3) —
+ * Phase 2G.2 deliberately did NOT invent per-page denyability, leaving the
+ * existing override semantics exactly as they were.
  *
  * SYSTEM PROTECTION is deliberately NOT the naive "always false for everyone".
  * The 17 SYSTEM_PROTECTED pages are reachable SOLELY through canonical ROOT
@@ -303,6 +320,16 @@ class EffectivePageAccessService
             $sources[] = PageAccessSource::DepartmentLeader;
         }
 
+        // Phase 2G.2 — AUTHENTICATED BASELINE. Declared on the catalog entry, so
+        // it needs no query and no stored row: any authenticated account reaching
+        // this resolver already satisfies it. Added as the LOWEST-precedence
+        // positive source, so a role/department/allow grant still wins the
+        // primary_source slot and the UI keeps reporting the more specific
+        // reason.
+        if ($entry->authenticatedBaseline) {
+            $sources[] = PageAccessSource::AuthenticatedBaseline;
+        }
+
         $stored = $layers['overrides'][$entry->key] ?? null;
         $state = $stored !== null ? UserPageAccessState::from($stored) : null;
 
@@ -369,7 +396,7 @@ class EffectivePageAccessService
             );
         }
 
-        // 5/6/7. Highest-precedence positive default wins as primary_source,
+        // 5/6/7/8. Highest-precedence positive source wins as primary_source,
         //        while every contributing source stays visible.
         if ($sources !== []) {
             $primary = $this->highestPrecedence($sources);
@@ -385,7 +412,7 @@ class EffectivePageAccessService
             );
         }
 
-        // 8. Default-deny.
+        // 9. Default-deny.
         return new EffectivePageAccess(
             key: $entry->key,
             allowed: false,

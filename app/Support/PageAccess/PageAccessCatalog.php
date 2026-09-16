@@ -129,7 +129,7 @@ final class PageAccessCatalog
             ]],
             ['operations.tickets', '/dashboard/tickets', 'تذاكر EMC', $C::Operations, $R::SafeDelegatable, false, null, false, [
                 '/dashboard/tickets/new', '/dashboard/tickets/:id',
-            ]],
+            ], true],
             ['operations.tickets_workspace', '/dashboard/tickets/workspace', 'مساحة عمل التذاكر', $C::Operations, $R::SafeDelegatable, true, null, false, []],
             ['operations.registrations_requests', '/dashboard/admin/registrations', 'طلبات التسجيل', $C::Operations, $R::AdminOnly, false, P::VIEW_REGISTRATIONS, false, []],
             ['operations.calendar', '/dashboard/admin/calendar', 'التقويم الإداري', $C::Operations, $R::AdminOnly, false, null, false, []],
@@ -169,7 +169,7 @@ final class PageAccessCatalog
             ['hr.dashboard', '/dashboard/hr', 'لوحة الموارد البشرية', $C::Hr, $R::AdminOnly, false, P::VIEW_TEAM, false, []],
             ['hr.my_requests', '/dashboard/hr/my-requests', 'طلباتي', $C::Hr, $R::SafeDelegatable, true, null, true, [
                 '/dashboard/department/hr-requests',
-            ]],
+            ], true],
             ['hr.incoming_requests', '/dashboard/hr/incoming-requests', 'الطلبات الواردة', $C::Hr, $R::SafeDelegatable, true, P::MANAGE_TEAM, true, []],
             ['hr.volunteers', '/dashboard/hr/volunteers', 'المتطوعون', $C::Hr, $R::SafeDelegatable, true, P::VIEW_VOLUNTEERS, true, [
                 '/dashboard/hr/volunteers/:id',
@@ -312,10 +312,10 @@ final class PageAccessCatalog
             // ── Personal (self-service / role-home surfaces) ───────────────
             // Always self-scoped to the signed-in user; "delegatable" does not
             // meaningfully apply, so it's false throughout this category.
-            ['personal.profile', '/dashboard/profile', 'الملف الشخصي', $C::Personal, $R::SafeDelegatable, false, null, false, []],
-            ['personal.notifications', '/dashboard/notifications', 'الإشعارات', $C::Personal, $R::SafeDelegatable, false, null, false, []],
-            ['personal.notification_preferences', '/dashboard/settings/notifications', 'تفضيلات الإشعارات', $C::Personal, $R::SafeDelegatable, false, null, false, []],
-            ['personal.volunteer_hr_profile', '/dashboard/volunteer/hr-profile', 'ملف المتطوع', $C::Personal, $R::SafeDelegatable, false, null, false, []],
+            ['personal.profile', '/dashboard/profile', 'الملف الشخصي', $C::Personal, $R::SafeDelegatable, false, null, false, [], true],
+            ['personal.notifications', '/dashboard/notifications', 'الإشعارات', $C::Personal, $R::SafeDelegatable, false, null, false, [], true],
+            ['personal.notification_preferences', '/dashboard/settings/notifications', 'تفضيلات الإشعارات', $C::Personal, $R::SafeDelegatable, false, null, false, [], true],
+            ['personal.volunteer_hr_profile', '/dashboard/volunteer/hr-profile', 'ملف المتطوع', $C::Personal, $R::SafeDelegatable, false, null, false, [], true],
             ['personal.resource_center_courses', '/dashboard/resources/courses', 'مركز الموارد', $C::Personal, $R::SafeDelegatable, false, null, false, []],
             ['personal.student_learning', '/dashboard/student', 'مساحة الطالب التعليمية', $C::Personal, $R::SafeDelegatable, false, null, false, [
                 '/dashboard/student/learning-paths', '/dashboard/student/learning-paths/:id', '/dashboard/student/courses', '/dashboard/student/learn/:courseId',
@@ -355,6 +355,9 @@ final class PageAccessCatalog
                 requiredPermission: $r[6],
                 departmentScoped: $r[7],
                 routePatterns: $r[8],
+                // Phase 2G.2 — optional 10th element; every existing row keeps its
+                // 9-element shape and defaults to false.
+                authenticatedBaseline: $r[9] ?? false,
             ),
             $rows
         );

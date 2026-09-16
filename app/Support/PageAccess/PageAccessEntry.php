@@ -38,10 +38,31 @@ final class PageAccessEntry
         public readonly ?string $requiredPermission = null,
         public readonly bool $departmentScoped = false,
         array $routePatterns = [],
+        /**
+         * Phase 2G.2 — AUTHENTICATED BASELINE.
+         *
+         * True when this capability belongs to any authenticated dashboard
+         * account regardless of role, department membership or leadership.
+         * Owned here in the catalog rather than duplicated into every role's
+         * defaults, so a NEW role inherits it automatically and no admin can
+         * remove someone's own profile page by editing a role.
+         *
+         * Baseline still grants PAGE ACCESS ONLY — see the class docblock.
+         */
+        public readonly bool $authenticatedBaseline = false,
     ) {
         if ($this->riskLevel === PageAccessRiskLevel::SystemProtected && $this->delegatable) {
             throw new InvalidArgumentException(
                 "Page access entry [{$this->key}] is SYSTEM_PROTECTED and cannot be marked delegatable."
+            );
+        }
+
+        // A root-authority surface can never be handed to every authenticated
+        // account. Enforced in the constructor so no future catalog edit can
+        // introduce the combination, not even by accident.
+        if ($this->riskLevel === PageAccessRiskLevel::SystemProtected && $this->authenticatedBaseline) {
+            throw new InvalidArgumentException(
+                "Page access entry [{$this->key}] is SYSTEM_PROTECTED and cannot be an authenticated baseline."
             );
         }
 
@@ -83,6 +104,7 @@ final class PageAccessEntry
             'delegatable' => $this->delegatable,
             'required_permission' => $this->requiredPermission,
             'department_scoped' => $this->departmentScoped,
+            'authenticated_baseline' => $this->authenticatedBaseline,
         ];
     }
 }

@@ -46,6 +46,38 @@ class EffectivePageAccessTest extends TestCase
     /** SYSTEM_PROTECTED — may never be stored in any Phase 2A/2B/2C table. */
     private const PROTECTED_PAGE = 'administration.roles';
 
+    /**
+     * Phase 2G.2 — every authenticated account receives these six from
+     * PageAccessCatalog, with no stored row anywhere. Assertions below add them
+     * explicitly rather than loosening to "contains", so an unexpected SEVENTH
+     * baseline entry would still fail the suite.
+     */
+    private const AUTHENTICATED_BASELINE = [
+        'operations.tickets',
+        'hr.my_requests',
+        'personal.profile',
+        'personal.notifications',
+        'personal.notification_preferences',
+        'personal.volunteer_hr_profile',
+    ];
+
+    /** @param array<int,string> $extra */
+    private function baselinePlus(array $extra = []): array
+    {
+        $keys = array_merge(self::AUTHENTICATED_BASELINE, $extra);
+        sort($keys);
+
+        return $keys;
+    }
+
+    /** @param array<int,string> $keys */
+    private function sorted(array $keys): array
+    {
+        sort($keys);
+
+        return $keys;
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private function service(): EffectivePageAccessService
@@ -147,9 +179,14 @@ class EffectivePageAccessTest extends TestCase
         $this->assertNull($result->overrideState);
     }
 
-    public function test_user_with_no_sources_has_empty_allowed_keys(): void
+    public function test_user_with_no_sources_gets_only_the_authenticated_baseline(): void
     {
-        $this->assertSame([], $this->service()->allowedKeys($this->ordinaryUser()));
+        // Phase 2G.2: no role/department/override source means the baseline and
+        // nothing else — not an empty set.
+        $this->assertSame(
+            $this->baselinePlus(),
+            $this->sorted($this->service()->allowedKeys($this->ordinaryUser()))
+        );
     }
 
     // ── 2. Role default => allowed ───────────────────────────────────────────
@@ -676,7 +713,9 @@ class EffectivePageAccessTest extends TestCase
 
         $allowed = $this->service()->allowedKeys($user);
 
-        $this->assertSame([self::MEMBER_PAGE], $allowed);
+        // MEMBER_PAGE_2 is denied by the override; MEMBER_PAGE survives, and the
+        // authenticated baseline is present for every user.
+        $this->assertSame($this->baselinePlus([self::MEMBER_PAGE]), $this->sorted($allowed));
     }
 
     public function test_can_access_agrees_with_resolve_for_every_catalog_page(): void
@@ -785,9 +824,14 @@ class EffectivePageAccessTest extends TestCase
 
         $response = $this->actingAs($user)->getJson('/api/auth/me/page-access');
 
-        $response->assertOk()
-            ->assertJsonPath('success', true)
-            ->assertJsonPath('data.allowed_keys', [self::MEMBER_PAGE]);
+        $response->assertOk()->assertJsonPath('success', true);
+
+        // The endpoint returns canonical CATALOG order, so compare membership
+        // exactly but order-insensitively rather than re-encoding that order here.
+        $this->assertEqualsCanonicalizing(
+            $this->baselinePlus([self::MEMBER_PAGE]),
+            $response->json('data.allowed_keys'),
+        );
 
         // Page keys contain dots, so assertJsonPath() cannot address them —
         // index the decoded payload directly instead.
@@ -816,10 +860,14 @@ class EffectivePageAccessTest extends TestCase
         $target = $this->ordinaryUser();
         $this->setOverride($target, self::MEMBER_PAGE, UserPageAccessState::Allow);
 
-        $this->actingAs($this->superAdmin())
+        $response = $this->actingAs($this->superAdmin())
             ->getJson("/api/admin/users/{$target->id}/effective-page-access")
-            ->assertOk()
-            ->assertJsonPath('data.allowed_keys', [self::MEMBER_PAGE]);
+            ->assertOk();
+
+        $this->assertEqualsCanonicalizing(
+            $this->baselinePlus([self::MEMBER_PAGE]),
+            $response->json('data.allowed_keys'),
+        );
     }
 
     public function test_ordinary_user_cannot_inspect_another_user(): void

@@ -40,6 +40,15 @@ enum PageAccessSource: string
     /** Role default (Phase 2B). */
     case Role = 'role';
 
+    /**
+     * Phase 2G.2 — AUTHENTICATED BASELINE: the capability belongs to any
+     * authenticated dashboard account, independent of role, department
+     * membership or leadership. Declared in PageAccessCatalog, never stored in
+     * a mutable table, and deliberately its own source so provenance never
+     * misreports it as a role or department grant.
+     */
+    case AuthenticatedBaseline = 'authenticated_baseline';
+
     /** No layer granted the page — default deny. */
     case None = 'none';
 
@@ -47,7 +56,8 @@ enum PageAccessSource: string
      * Precedence, highest wins. Mirrors the approved Phase 2D ladder, with
      * canonical root authority seated above it:
      * root authority > system protection > user deny > user allow >
-     * department leader > department member > role > none.
+     * department leader > department member > role > authenticated baseline >
+     * none.
      */
     public function precedence(): int
     {
@@ -59,6 +69,7 @@ enum PageAccessSource: string
             self::DepartmentLeader => 30,
             self::DepartmentMember => 20,
             self::Role => 10,
+            self::AuthenticatedBaseline => 5,
             self::None => 0,
         };
     }
@@ -74,6 +85,7 @@ enum PageAccessSource: string
             self::DepartmentLeader => 'لأنه قائد الإدارة',
             self::DepartmentMember => 'من الإدارة',
             self::Role => 'من الدور',
+            self::AuthenticatedBaseline => 'متاح لجميع المستخدمين المسجلين',
             self::None => 'لا يوجد مصدر',
         };
     }

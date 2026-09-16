@@ -35,12 +35,16 @@ use Tests\TestCase;
  *
  *   `unseeded` — mirrors PRODUCTION TODAY. All three Phase 2A/2B/2C tables are
  *                empty in the live database (verified: 0 rows each), so this is
- *                literally what a cutover today would produce.
+ *                literally what a cutover today would produce. Since Phase 2G.2
+ *                that means every non-root persona resolves to the six
+ *                AUTHENTICATED BASELINE capabilities — which are declared on the
+ *                catalog and stored in no table — and nothing else.
  *
  *   `seeded`   — a representative configuration, so the harness can be shown to
  *                detect leadership, membership, overrides, protection and the
  *                AI separation correctly. Without seeded rows those paths are
- *                untestable, since every non-root persona resolves to nothing.
+ *                untestable, since every non-root persona resolves to the
+ *                baseline alone.
  *
  * The emitted file is consumed by the frontend as a committed fixture. This
  * test both GENERATES and ASSERTS it, so the two repositories cannot drift
@@ -314,6 +318,7 @@ class AccessDiffBaselineTest extends TestCase
             'protected' => $e->isProtected(),
             'delegatable' => $e->delegatable,
             'department_scoped' => $e->departmentScoped,
+            'authenticated_baseline' => $e->authenticatedBaseline,
         ], PageAccessCatalog::all());
 
         // ORDER MATTERS: the unseeded scenario is resolved while all three
@@ -350,23 +355,42 @@ class AccessDiffBaselineTest extends TestCase
 
     // ── Invariants the baseline must satisfy ─────────────────────────────────
 
-    public function test_production_today_grants_nothing_to_non_root_personas(): void
+    /**
+     * The three tables are still empty, so every non-root persona resolves to
+     * the AUTHENTICATED BASELINE and nothing more.
+     *
+     * Before Phase 2G.2 this asserted an empty set. Baseline is catalog-declared
+     * and stores no rows, so "no stored source" now means six pages rather than
+     * zero — still the single most important Phase 2F finding, and still unable
+     * to regress silently, because the expected set is asserted exactly.
+     */
+    public function test_production_today_grants_only_the_authenticated_baseline(): void
     {
-        // Sanity check of the live shape: the three tables are empty, so every
-        // non-root persona resolves to ZERO pages. This is the single most
-        // important Phase 2F finding and must not regress silently.
         $this->assertSame(0, DB::table('role_page_defaults')->count());
         $this->assertSame(0, DB::table('department_page_defaults')->count());
         $this->assertSame(0, DB::table('user_page_access_overrides')->count());
 
-        $ordinary = $this->makeUser('finance_manager');
-        $this->assertSame([], $this->resolver()->allowedKeys($ordinary));
+        $expected = array_values(array_map(
+            fn (PageAccessEntry $e) => $e->key,
+            array_filter(PageAccessCatalog::all(), fn (PageAccessEntry $e) => $e->authenticatedBaseline)
+        ));
+        sort($expected);
+        $this->assertCount(6, $expected);
 
+        $ordinary = $this->makeUser('finance_manager');
+        $ordinaryKeys = $this->resolver()->allowedKeys($ordinary);
+        sort($ordinaryKeys);
+        $this->assertSame($expected, $ordinaryKeys);
+
+        // A canonical leader gains nothing extra either, because no department
+        // default exists to inherit.
         $dept = $this->makeDepartment('empty-tables');
         $leader = $this->makeUser('operations_manager');
         $this->makeMember($leader, $dept);
         $this->makeLeader($leader, $dept);
-        $this->assertSame([], $this->resolver()->allowedKeys($leader));
+        $leaderKeys = $this->resolver()->allowedKeys($leader);
+        sort($leaderKeys);
+        $this->assertSame($expected, $leaderKeys);
     }
 
     public function test_root_pair_is_unrestricted_with_empty_tables(): void
