@@ -129,6 +129,50 @@ class RolePageDefaultService
     // ── Writes ───────────────────────────────────────────────────────────────
 
     /**
+     * ADDITIVELY grant page defaults to a role — insert what is missing, never
+     * delete, never overwrite.
+     *
+     * Phase 2G.3A/B counterpart to replaceDefaults(). The distinction matters:
+     * replaceDefaults() is DESIRED-STATE REPLACEMENT and deletes any stored key
+     * absent from the submitted list, which would silently prune a default an
+     * administrator added by hand. Canonical compatibility synchronisation must
+     * be purely additive, so it needs this method rather than a flag on the
+     * other one — the two have genuinely different contracts.
+     *
+     * Validation is the SAME canonical rule: keys run through validateKeys(), so
+     * a SYSTEM_PROTECTED (or otherwise ineligible) key is rejected here exactly
+     * as it is there. Callers never re-derive eligibility.
+     *
+     * No transaction is opened here: a bulk caller wraps many roles in ONE
+     * transaction, and nesting would defeat its all-or-nothing guarantee.
+     *
+     * @param  array<int, string>  $pageKeys
+     * @return array<int, string> the keys actually inserted (already-present keys are not returned)
+     */
+    public function addDefaults(Role $role, array $pageKeys, ?User $actor = null): array
+    {
+        $valid = $this->validateKeys($pageKeys);
+
+        $existing = RolePageDefault::query()
+            ->where('role_id', $role->id)
+            ->pluck('page_key')
+            ->all();
+
+        $toInsert = array_values(array_diff($valid, $existing));
+
+        foreach ($toInsert as $key) {
+            RolePageDefault::create([
+                'role_id' => $role->id,
+                'page_key' => $key,
+                'created_by' => $actor?->id,
+                'updated_by' => $actor?->id,
+            ]);
+        }
+
+        return $toInsert;
+    }
+
+    /**
      * Atomically REPLACE a role's page defaults.
      *
      * Validation runs fully before any write, so an invalid key aborts with
