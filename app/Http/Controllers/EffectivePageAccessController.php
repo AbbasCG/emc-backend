@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\EffectivePageAccessService;
+use App\Support\PageAccess\PageAccessCatalog;
 use App\Support\PageAccess\EffectivePageAccess;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -58,10 +59,24 @@ class EffectivePageAccessController extends Controller
                 // allowed_keys so a denial can be explained ("محمية من النظام",
                 // "محجوبة بشكل خاص") instead of rendering a blank redirect —
                 // same resolver call, no extra queries.
-                'pages' => array_map(
-                    fn (EffectivePageAccess $r) => $r->toArray(),
+                //
+                // Each row also carries its catalog ROUTES, so the frontend can
+                // map the URL it is about to render onto a capability without a
+                // second request and without re-deriving the mapping itself.
+                // PageAccessCatalog is a static in-memory declaration, so this
+                // enrichment costs no queries.
+                'pages' => array_values(array_map(
+                    function (EffectivePageAccess $r): array {
+                        $entry = PageAccessCatalog::find($r->key);
+
+                        return $r->toArray() + [
+                            'primary_route' => $entry?->primaryRoute,
+                            'route_patterns' => $entry?->routePatterns ?? [],
+                            'label_ar' => $entry?->labelAr,
+                        ];
+                    },
                     $resolved
-                ),
+                )),
             ],
         ]);
     }
