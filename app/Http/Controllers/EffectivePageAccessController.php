@@ -65,7 +65,10 @@ class EffectivePageAccessController extends Controller
                 // second request and without re-deriving the mapping itself.
                 // PageAccessCatalog is a static in-memory declaration, so this
                 // enrichment costs no queries.
-                'pages' => array_values(array_map(
+                // Keyed BY PAGE KEY, which is what a route guard wants to look
+                // up. array_values() here would silently turn the documented map
+                // into a list and break every caller indexing it.
+                'pages' => array_map(
                     function (EffectivePageAccess $r): array {
                         $entry = PageAccessCatalog::find($r->key);
 
@@ -76,7 +79,7 @@ class EffectivePageAccessController extends Controller
                         ];
                     },
                     $resolved
-                )),
+                ),
             ],
         ]);
     }
