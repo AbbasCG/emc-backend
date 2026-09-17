@@ -15,8 +15,14 @@ class TicketAttachment extends Model
         'file_url',
         'file_name',
         'file_type',
+        'mime_type',
+        'file_size',
         'attachment_context',
         'uploaded_by',
+    ];
+
+    protected $casts = [
+        'file_size' => 'integer',
     ];
 
     /**
@@ -26,7 +32,23 @@ class TicketAttachment extends Model
      */
     protected $hidden = ['file_url'];
 
-    protected $appends = ['preview_url'];
+    protected $appends = ['preview_url', 'is_image'];
+
+    /**
+     * Should the UI fetch this inline as an image?
+     *
+     * mime_type is NULL for rows created before it was recorded, so fall back
+     * to the coarse file_type the row has always carried. Nothing here decides
+     * authorization - it only decides how the client renders the attachment.
+     */
+    public function getIsImageAttribute(): bool
+    {
+        if (is_string($this->mime_type) && $this->mime_type !== '') {
+            return str_starts_with($this->mime_type, 'image/');
+        }
+
+        return $this->file_type === 'IMAGE';
+    }
 
     public function getPreviewUrlAttribute(): ?string
     {

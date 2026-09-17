@@ -12,6 +12,8 @@ use App\Models\User;
 use App\Services\DepartmentAccessService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use App\Services\TicketAttachmentService;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 
@@ -292,9 +294,12 @@ class TicketController extends Controller
     /**
      * Submit a new ticket with optional file attachments. Any authenticated user.
      */
-    public function store(Request $request)
+    public function store(Request $request, TicketAttachmentService $attachments)
     {
         $user = $request->user();
+
+        /** @var array<int, string> Files written to disk, for compensating cleanup. */
+        $storedPaths = [];
 
         $validator = Validator::make($request->all(), [
             'title' => 'required|string|max:255',
@@ -304,7 +309,10 @@ class TicketController extends Controller
             'department_id' => 'required|exists:departments,id',
             'created_by_name' => 'required|string|max:150',
             'created_by_email' => 'nullable|email|max:150',
-            'attachments.*' => 'nullable|file|mimes:jpg,jpeg,png,webp,mp4,mov,avi,pdf,doc,docx|max:51200', // max 50MB
+            // ONE canonical policy, owned by TicketAttachmentService. Video and
+            // SVG are deliberately absent: a ticket attachment is a screenshot or
+            // a document, and SVG is active content browsers execute.
+            'attachments.*' => 'nullable|file|mimes:'.TicketAttachmentService::MIMES_RULE.'|max:'.TicketAttachmentService::MAX_KILOBYTES,
         ]);
 
         if ($validator->fails()) {
@@ -317,10 +325,7 @@ class TicketController extends Controller
 
         DB::beginTransaction();
         try {
-            // Generate ticket number: EMC-TCK-YYYY-XXX
-            $year = date('Y');
-            $count = Ticket::whereYear('created_at', $year)->withTrashed()->count() + 1;
-            $ticketNumber = sprintf('EMC-TCK-%s-%03d', $year, $count);
+            $ticketNumber = $this->nextTicketNumber();
 
             $ticket = Ticket::create([
                 'ticket_number' => $ticketNumber,
@@ -335,24 +340,20 @@ class TicketController extends Controller
                 'status' => 'PENDING_APPROVAL',
             ]);
 
-            // Handle file attachments
+            // Handle file attachments. Every write goes through the one service
+            // that owns the policy, the optimisation and the storage naming.
             if ($request->hasFile('attachments')) {
                 foreach ($request->file('attachments') as $file) {
-                    $mime = $file->getMimeType();
-                    $fileType = 'DOCUMENT';
-                    if (str_contains($mime, 'image')) {
-                        $fileType = 'IMAGE';
-                    } elseif (str_contains($mime, 'video')) {
-                        $fileType = 'VIDEO';
-                    }
-
-                    $path = $file->store('tickets/attachments', 'private');
+                    $stored = $attachments->store($file);
+                    $storedPaths[] = $stored['path'];
 
                     TicketAttachment::create([
                         'ticket_id' => $ticket->id,
-                        'file_url' => $path,
-                        'file_name' => $file->getClientOriginalName(),
-                        'file_type' => $fileType,
+                        'file_url' => $stored['path'],
+                        'file_name' => $stored['original_name'],
+                        'file_type' => $stored['category'],
+                        'mime_type' => $stored['mime'],
+                        'file_size' => $stored['size'],
                         'attachment_context' => 'INITIAL_SUBMISSION',
                         'uploaded_by' => $user->id,
                     ]);
@@ -379,13 +380,64 @@ class TicketController extends Controller
                 'data' => $ticket->load(['department', 'attachments', 'activityLogs']),
             ], 201);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
+
+            // The DB is rolled back, but files already written are not - remove
+            // them so a failed submission cannot leave orphans on the disk.
+            $attachments->cleanup($storedPaths);
+
+            // The user message stays generic on purpose; the diagnostic context
+            // belongs in the log, which previously received nothing at all.
+            Log::error('Ticket creation failed.', [
+                'user_id' => $user->id,
+                'department_id' => $request->input('department_id'),
+                'attachment_count' => count($storedPaths),
+                'exception' => $e::class,
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+
             return response()->json([
                 'success' => false,
-                'message' => 'حدث خطأ أثناء حفظ التذكرة',
+                'message' => 'حدث خطأ أثناء حفظ التذكرة. حاول مرة أخرى.',
             ], 500);
         }
+    }
+
+    /**
+     * Next ticket number, collision-safe.
+     *
+     * The previous generator used `count() + 1`, which is not a sequence: a
+     * hard-deleted ticket lowers the count so the next number lands on one that
+     * already exists, and two concurrent submissions read the same count. Either
+     * way Ticket::create() hit the UNIQUE index on ticket_number, threw, and was
+     * swallowed into the generic 500 - the production symptom.
+     *
+     * Deriving from the highest EXISTING number is monotonic under deletion, and
+     * the retry loop closes the concurrency window. Width grows past 999 instead
+     * of wrapping.
+     */
+    private function nextTicketNumber(): string
+    {
+        $year = date('Y');
+        $prefix = 'EMC-TCK-'.$year.'-';
+
+        $highest = Ticket::withTrashed()
+            ->where('ticket_number', 'like', $prefix.'%')
+            ->selectRaw('MAX(CAST(SUBSTRING(ticket_number, ?) AS UNSIGNED)) AS seq', [strlen($prefix) + 1])
+            ->value('seq');
+
+        $next = ((int) $highest) + 1;
+
+        // Skip any number already taken (possible if a row was inserted by
+        // another path or another request between the read and the write).
+        while (Ticket::withTrashed()->where('ticket_number', $prefix.sprintf('%03d', $next))->exists()) {
+            $next++;
+        }
+
+        return $prefix.sprintf('%03d', $next);
     }
 
     /**
