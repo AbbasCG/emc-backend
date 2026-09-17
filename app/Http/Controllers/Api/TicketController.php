@@ -102,6 +102,50 @@ class TicketController extends Controller
         return $this->departmentAccess->canAccessDepartment($assignee, $departmentId);
     }
 
+    /**
+     * The canonical per-ticket, per-user capability set.
+     *
+     * ONE authoritative place, reusing the EXACT SAME authorization helpers
+     * every mutating endpoint already guards itself with (canManage/
+     * isAssignee) and the EXACT SAME status guards each endpoint already
+     * enforces server-side. This does not decide authorization - it REPORTS
+     * the decision those endpoints would already make, so the frontend can
+     * show only the actions that would actually succeed instead of drifting
+     * out of sync with the real rules (as the Admin table's "reassign"
+     * button had: it showed for REJECTED_BY_ASSIGNEE, a status reassign()
+     * has never accepted).
+     *
+     * `assign` and `reassign` intentionally share one flag: there is no
+     * separate "assign" endpoint. approve() optionally sets the first
+     * assignee; reassign() is the ONLY endpoint that sets one afterwards,
+     * for both "assign for the first time post-approval" and "true
+     * reassignment" - it guards on status only, never on whether an
+     * assignee already exists. The frontend derives its OWN button label
+     * ("تعيين" vs "إعادة التوجيه") from whether ticket.assignee is null;
+     * that is presentation, not a second authorization decision.
+     *
+     * `comment` is always true here because building capabilities at all
+     * implies canView() already passed for this ticket.
+     *
+     * @return array<string, bool>
+     */
+    private function buildCapabilities(User $user, Ticket $ticket): array
+    {
+        $canManage = $this->canManage($user, (int) $ticket->department_id);
+        $isAssignee = $this->isAssignee($user, $ticket);
+
+        return [
+            'approve' => $canManage && $ticket->status === 'PENDING_APPROVAL',
+            'reject' => $canManage && $ticket->status === 'PENDING_APPROVAL',
+            'reassign' => $canManage && in_array($ticket->status, ['ASSIGNED', 'IN_PROGRESS'], true),
+            'accept_task' => $isAssignee && $ticket->status === 'ASSIGNED',
+            'reject_task' => $isAssignee && $ticket->status === 'ASSIGNED',
+            'complete_task' => $isAssignee && $ticket->status === 'IN_PROGRESS',
+            'add_internal_note' => $canManage,
+            'comment' => true,
+        ];
+    }
+
     private function forbidden(string $message = 'ليست لديك صلاحية للوصول إلى هذه التذكرة.')
     {
         return response()->json(['success' => false, 'message' => $message], 403);
@@ -285,6 +329,16 @@ class TicketController extends Controller
         }
 
         $tickets = $query->orderBy('created_at', 'desc')->paginate($request->get('per_page', 20));
+
+        // Same capability computation as show() - one canonical source, so the
+        // Admin table and Ticket Detail can never drift on which actions a
+        // given ticket/user pair actually permits.
+        $tickets->getCollection()->transform(function (Ticket $ticket) use ($user) {
+            $data = $ticket->toArray();
+            $data['capabilities'] = $this->buildCapabilities($user, $ticket);
+
+            return $data;
+        });
 
         return response()->json([
             'success' => true,
@@ -516,9 +570,12 @@ class TicketController extends Controller
             return $this->forbidden();
         }
 
+        $data = $ticket->toArray();
+        $data['capabilities'] = $this->buildCapabilities($request->user(), $ticket);
+
         return response()->json([
             'success' => true,
-            'data' => $ticket,
+            'data' => $data,
         ]);
     }
 
