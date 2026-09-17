@@ -11,6 +11,7 @@ use App\Models\TicketAttachment;
 use App\Models\User;
 use App\Services\DepartmentAccessService;
 use Illuminate\Http\Request;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use App\Services\TicketAttachmentService;
 use Illuminate\Support\Facades\Log;
@@ -325,20 +326,7 @@ class TicketController extends Controller
 
         DB::beginTransaction();
         try {
-            $ticketNumber = $this->nextTicketNumber();
-
-            $ticket = Ticket::create([
-                'ticket_number' => $ticketNumber,
-                'title' => $request->title,
-                'description' => $request->description,
-                'ticket_category' => $request->ticket_category,
-                'priority' => $request->priority ?? 'MEDIUM',
-                'department_id' => $request->department_id,
-                'created_by_id' => $user->id,
-                'created_by_name' => $request->created_by_name,
-                'created_by_email' => $request->created_by_email,
-                'status' => 'PENDING_APPROVAL',
-            ]);
+            $ticket = $this->createTicketWithUniqueNumber($request, $user);
 
             // Handle file attachments. Every write goes through the one service
             // that owns the policy, the optimisation and the storage naming.
@@ -407,19 +395,78 @@ class TicketController extends Controller
     }
 
     /**
-     * Next ticket number, collision-safe.
+     * Create the Ticket row with a collision-safe number.
      *
      * The previous generator used `count() + 1`, which is not a sequence: a
      * hard-deleted ticket lowers the count so the next number lands on one that
-     * already exists, and two concurrent submissions read the same count. Either
-     * way Ticket::create() hit the UNIQUE index on ticket_number, threw, and was
-     * swallowed into the generic 500 - the production symptom.
+     * already exists. Ticket::create() then hit the UNIQUE index on
+     * ticket_number, threw, and was swallowed into the generic 500 - the
+     * confirmed production symptom.
      *
-     * Deriving from the highest EXISTING number is monotonic under deletion, and
-     * the retry loop closes the concurrency window. Width grows past 999 instead
-     * of wrapping.
+     * nextTicketNumber() fixes that by deriving from the highest EXISTING
+     * number, which is monotonic under deletion. But its own existence check is
+     * a plain SELECT, not a lock: two requests racing in the same instant can
+     * both read the same MAX() before either commits, and both compute the same
+     * candidate. That is a genuinely different race, not the deletion bug, and
+     * no amount of pre-checking closes it without serialising every ticket
+     * creation behind a table lock - which would throttle submissions for a
+     * race that barely ever fires.
+     *
+     * Instead we let the UNIQUE index be the actual safety net: a collision
+     * throws a duplicate-entry QueryException, caught here and retried with a
+     * freshly computed number. No duplicate ticket_number can ever be
+     * persisted - the constraint guarantees that regardless of this loop - and
+     * a genuine race now self-heals inside one request instead of surfacing a
+     * 500 the user would have to retry by hand.
      */
-    private function nextTicketNumber(): string
+    private function createTicketWithUniqueNumber(Request $request, User $user): Ticket
+    {
+        $maxAttempts = 5;
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            try {
+                return Ticket::create([
+                    'ticket_number' => $this->nextTicketNumber(),
+                    'title' => $request->title,
+                    'description' => $request->description,
+                    'ticket_category' => $request->ticket_category,
+                    'priority' => $request->priority ?? 'MEDIUM',
+                    'department_id' => $request->department_id,
+                    'created_by_id' => $user->id,
+                    'created_by_name' => $request->created_by_name,
+                    'created_by_email' => $request->created_by_email,
+                    'status' => 'PENDING_APPROVAL',
+                ]);
+            } catch (QueryException $e) {
+                // SQLSTATE 23000 = integrity constraint violation. Only a
+                // duplicate ticket_number is worth retrying; any other
+                // constraint failure (e.g. an invalid department_id slipping
+                // past validation) must propagate immediately.
+                $isDuplicate = $e->getCode() === '23000'
+                    && str_contains(strtolower($e->getMessage()), 'ticket_number');
+
+                if (! $isDuplicate || $attempt === $maxAttempts) {
+                    throw $e;
+                }
+
+                // Fall through and recompute on the next iteration. A single
+                // MySQL statement failing inside a transaction does not abort
+                // the transaction itself (unlike Postgres), so the same
+                // DB::beginTransaction() from store() remains valid to commit
+                // once this loop succeeds.
+            }
+        }
+
+        // Unreachable: the loop above always returns or throws.
+        throw new \RuntimeException('Failed to allocate a unique ticket number.');
+    }
+
+    /**
+     * Next candidate ticket number. NOT concurrency-safe on its own - see
+     * createTicketWithUniqueNumber(), which is the only caller and which
+     * treats this purely as a candidate to attempt, not a guarantee.
+     */
+    protected function nextTicketNumber(): string
     {
         $year = date('Y');
         $prefix = 'EMC-TCK-'.$year.'-';
@@ -431,8 +478,10 @@ class TicketController extends Controller
 
         $next = ((int) $highest) + 1;
 
-        // Skip any number already taken (possible if a row was inserted by
-        // another path or another request between the read and the write).
+        // Skip any number already committed (e.g. a gap-filling row inserted by
+        // a previous request). This still doesn't see another transaction's
+        // UNCOMMITTED insert - that residual race is what the caller's retry
+        // loop exists to close.
         while (Ticket::withTrashed()->where('ticket_number', $prefix.sprintf('%03d', $next))->exists()) {
             $next++;
         }

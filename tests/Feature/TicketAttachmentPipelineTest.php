@@ -339,6 +339,114 @@ class TicketAttachmentPipelineTest extends TestCase
         $this->assertCount(5, array_unique($numbers), 'Ticket numbers must be unique.');
     }
 
+    /**
+     * PROVES THE ACTUAL CONCURRENCY FIX, not just the deletion-gap fix above.
+     *
+     * nextTicketNumber() reads MAX() with a plain SELECT, not a lock, so two
+     * requests racing in the same instant can both compute the same candidate
+     * before either commits - no amount of pre-checking closes that with a
+     * single connection/process. This test simulates exactly that race: a
+     * stubbed nextTicketNumber() returns an ALREADY-TAKEN number on its first
+     * call (as if another transaction had just committed it), and only a real,
+     * distinct number on the second call.
+     *
+     * If createTicketWithUniqueNumber() only wrapped the call once, this would
+     * surface the production 500 (duplicate-entry QueryException). If the retry
+     * classifies the exception correctly and asks for a fresh number, the
+     * ticket is created successfully with the SECOND candidate.
+     */
+    public function test_a_ticket_number_collision_from_a_true_race_is_retried_not_500ed(): void
+    {
+        $prefix = 'EMC-TCK-'.date('Y').'-';
+        $owner = $this->makeUser();
+
+        // The number the racing request "already committed" a moment ago.
+        Ticket::create([
+            'ticket_number' => $prefix.'001', 'title' => 't', 'description' => 'd',
+            'ticket_category' => 'OLD_ISSUE', 'priority' => 'MEDIUM',
+            'department_id' => $this->department->id,
+            'created_by_id' => $owner->id, 'created_by_name' => 'x',
+            'status' => 'PENDING_APPROVAL',
+        ]);
+
+        $controller = new class($this->app->make(\App\Services\DepartmentAccessService::class)) extends \App\Http\Controllers\Api\TicketController {
+            public int $calls = 0;
+
+            protected function nextTicketNumber(): string
+            {
+                $this->calls++;
+
+                // First call: simulate having lost the race - hand back the
+                // number the other transaction just took, bypassing this
+                // process's own gap-check (which cannot see across processes).
+                if ($this->calls === 1) {
+                    return 'EMC-TCK-'.date('Y').'-001';
+                }
+
+                // Second call: a real, uncontested candidate.
+                return parent::nextTicketNumber();
+            }
+        };
+
+        $this->app->instance(\App\Http\Controllers\Api\TicketController::class, $controller);
+
+        $response = $this->submit([], $owner);
+
+        $response->assertCreated();
+        $this->assertSame(2, $controller->calls, 'Must retry exactly once after the simulated collision.');
+
+        $numbers = Ticket::query()->pluck('ticket_number')->all();
+        $this->assertCount(2, $numbers);
+        $this->assertCount(2, array_unique($numbers), 'The collision must never be persisted twice.');
+        $this->assertNotContains($prefix.'001', array_diff($numbers, [$prefix.'001']), 'Sanity: no corruption of the pre-existing row.');
+    }
+
+    /**
+     * A non-duplicate constraint failure must NOT be retried or masked as if it
+     * were a ticket_number collision.
+     *
+     * Both a duplicate ticket_number AND a duplicate departments.slug report the
+     * SAME SQLSTATE class (23000 - integrity constraint violation), so getCode()
+     * alone cannot tell them apart; this is a genuine, unrelated UNIQUE
+     * violation (departments.slug), thrown for real by the DB rather than
+     * hand-constructed, proving the message-content discriminator actually
+     * works and not merely that a code check happened to match.
+     */
+    public function test_a_non_duplicate_query_exception_is_not_retried(): void
+    {
+        $owner = $this->makeUser();
+
+        $controller = new class($this->app->make(\App\Services\DepartmentAccessService::class)) extends \App\Http\Controllers\Api\TicketController {
+            public int $calls = 0;
+            public Department $department;
+
+            protected function nextTicketNumber(): string
+            {
+                $this->calls++;
+
+                // A real, unrelated UNIQUE violation - same SQLSTATE class as a
+                // ticket_number collision, different column entirely.
+                \App\Models\Department::create([
+                    'name' => 'dup', 'name_ar' => 'dup', 'slug' => $this->department->slug,
+                    'status' => 'active', 'is_active' => true,
+                ]);
+
+                return 'unreachable';
+            }
+        };
+        $controller->department = $this->department;
+
+        $this->app->instance(\App\Http\Controllers\Api\TicketController::class, $controller);
+
+        $response = $this->submit([], $owner);
+
+        // Propagated to the outer catch, logged, generic 500 - not silently
+        // retried as if it were a ticket_number collision.
+        $response->assertStatus(500);
+        $this->assertSame(1, $controller->calls, 'A non-collision constraint failure must not be retried.');
+        $this->assertSame(0, Ticket::query()->count());
+    }
+
     // ── 13/14. Image optimisation ────────────────────────────────────────────
 
     public function test_a_large_image_is_scaled_down_and_stays_decodable(): void
