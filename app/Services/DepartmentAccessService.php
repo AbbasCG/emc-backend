@@ -139,50 +139,74 @@ class DepartmentAccessService
     }
 
     /**
-     * The manifest the frontend uses to build the report-CREATION UI —
-     * always leadership-scoped (or global), never membership-scoped, since
+     * The manifest the frontend uses to build department-scoped UI. It
+     * describes TWO deliberately separate scopes, because READ authority is
+     * not WRITE authority:
+     *
+     * CREATE scope — `department_scope`, `allowed_departments`,
+     * `can_select_any_department`, `can_create_report`. Always
+     * leadership-scoped (or global admin), never membership-scoped, since
      * only leaders (and global admins) may create reports. An empty
      * `allowed_departments` for a non-global user means they lead nothing
-     * (selectable) and the create action must be hidden, not shown with an
-     * empty field.
+     * and the create action must be hidden, not shown with an empty field.
+     * Several consumers (the create-form department field, sole-department
+     * auto-select, the department dashboards) depend on these keys meaning
+     * exactly this, so read-only access must never be folded into them.
      *
-     * Selectable options are restricted to active departments (`->active()`)
-     * — a new report is a new organizational assignment, and an archived
-     * department (e.g. a merged-away duplicate) must not be offered as a
-     * target for one. This does NOT affect getLedDepartmentIds()/
-     * canManageDepartment() below, which remain unfiltered by status: those
-     * answer "does this user have authority over department X" for EXISTING
-     * data (already-created reports, department overview), a fact that must
-     * keep working regardless of the department's current status — only the
-     * "what can I pick to create something new" listing changes here.
+     * READ scope — `read_scope`, `readable_departments`,
+     * `can_view_multiple_departments`. Mirrors getAccessibleDepartmentIds():
+     * membership ∪ leadership, or every department for global and
+     * read-only-global roles. Drives browsing/filtering only. A read-only
+     * global user (quality/quality_manager) therefore gets every department
+     * here while their CREATE scope stays whatever canonical leadership
+     * (departments.leader_id) independently grants — usually nothing.
+     *
+     * Both lists offer only active departments (`->active()`), consistent
+     * with the pre-existing create picker: an archived department (e.g. a
+     * merged-away duplicate) is not offered as a new target or filter
+     * option. This does NOT affect getLedDepartmentIds()/
+     * canManageDepartment()/getAccessibleDepartmentIds(), which remain
+     * unfiltered by status and keep answering authority questions about
+     * EXISTING data regardless of a department's current status.
      */
     public function manifest(User $user): array
     {
-        if ($this->isGlobal($user)) {
-            return [
-                'department_scope'        => 'global',
-                'allowed_departments'     => Department::query()
-                    ->active()
-                    ->orderBy('sort_order')
-                    ->get(['id', 'name'])
-                    ->map(fn (Department $d) => ['id' => $d->id, 'name' => $d->name]),
-                'can_select_any_department' => true,
-                'can_create_report'       => true,
-            ];
-        }
+        $isGlobal = $this->isGlobal($user);
+        $readsEveryDepartment = $isGlobal || $this->isReadOnlyGlobal($user);
 
-        $ids = $this->getLedDepartmentIds($user);
+        $ledIds = $isGlobal ? collect() : $this->getLedDepartmentIds($user);
+
+        $allowedDepartments = $this->activeDepartmentOptions($isGlobal ? null : $ledIds);
+        $readableDepartments = $this->activeDepartmentOptions(
+            $readsEveryDepartment ? null : $this->getAccessibleDepartmentIds($user)
+        );
 
         return [
-            'department_scope'        => 'restricted',
-            'allowed_departments'     => Department::query()
-                ->whereIn('id', $ids)
-                ->active()
-                ->orderBy('sort_order')
-                ->get(['id', 'name'])
-                ->map(fn (Department $d) => ['id' => $d->id, 'name' => $d->name]),
-            'can_select_any_department' => false,
-            'can_create_report'       => $ids->isNotEmpty(),
+            // CREATE scope — unchanged meaning (leadership or global admin only).
+            'department_scope'          => $isGlobal ? 'global' : 'restricted',
+            'allowed_departments'       => $allowedDepartments,
+            'can_select_any_department' => $isGlobal,
+            'can_create_report'         => $isGlobal || $ledIds->isNotEmpty(),
+
+            // READ scope — browsing/filtering only, never grants creation.
+            'read_scope'                    => $readsEveryDepartment ? 'global' : 'restricted',
+            'readable_departments'          => $readableDepartments,
+            'can_view_multiple_departments' => $readableDepartments->count() > 1,
         ];
+    }
+
+    /**
+     * Active departments as {id, name} options, ordered for display.
+     * `null` means "every active department"; a collection restricts to it.
+     */
+    private function activeDepartmentOptions(?Collection $restrictToIds): Collection
+    {
+        return Department::query()
+            ->when($restrictToIds !== null, fn (Builder $q) => $q->whereIn('id', $restrictToIds))
+            ->active()
+            ->orderBy('sort_order')
+            ->get(['id', 'name'])
+            ->map(fn (Department $d) => ['id' => $d->id, 'name' => $d->name])
+            ->values();
     }
 }
