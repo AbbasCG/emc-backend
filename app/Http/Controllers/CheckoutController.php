@@ -49,6 +49,26 @@ class CheckoutController extends Controller
             ], 422);
         }
 
+        // Never charge a price Finance has actively objected to or has not yet
+        // reviewed. Without this, a course whose price was edited after
+        // approval — which now correctly sits back in 'pending' — would still
+        // charge the new, unreviewed price to anyone holding a checkout URL,
+        // even though the course has already vanished from the public catalog.
+        //
+        // Deliberately blocks only 'pending' and 'rejected', NOT
+        // 'not_required'. Paid courses predating the finance workflow still
+        // carry 'not_required' (that drift is what programs:audit-finance
+        // reports), and refusing those would stop legitimate live sales.
+        // Tightening to a strict "must be approved" is a data-cleanup
+        // decision, not a code one — see the report.
+        if (in_array($course->finance_approval_status, ['pending', 'rejected'], true)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'سعر هذه الدورة بانتظار الاعتماد المالي.',
+                'code'    => 'finance_approval_required',
+            ], 422);
+        }
+
         if ($course->price === null || (float) $course->price <= 0) {
             Log::error('Checkout blocked: course has no valid price', ['course_id' => $course->id]);
             return response()->json([

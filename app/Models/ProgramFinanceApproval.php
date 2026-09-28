@@ -20,13 +20,20 @@ class ProgramFinanceApproval extends Model
         'rejection_reason',
         'price_snapshot',
         'currency_snapshot',
+        'request_type',
+        'changes_snapshot',
+        'proposed_hash',
     ];
 
     protected $casts = [
-        'submitted_at'    => 'datetime',
-        'reviewed_at'     => 'datetime',
-        'price_snapshot'  => 'decimal:2',
+        'submitted_at'     => 'datetime',
+        'reviewed_at'      => 'datetime',
+        'price_snapshot'   => 'decimal:2',
+        'changes_snapshot' => 'array',
     ];
+
+    public function isCreateRequest(): bool { return ($this->request_type ?? 'create') === 'create'; }
+    public function isUpdateRequest(): bool { return ($this->request_type ?? 'create') === 'update'; }
 
     public function approvable(): MorphTo
     {
