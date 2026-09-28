@@ -38,9 +38,22 @@ class DepartmentAccessService
     /** Roles that operate across every department without an explicit assignment. */
     private const GLOBAL_ROLES = ['super_admin', 'tech_admin', 'executive_admin', 'admin'];
 
+    /**
+     * Roles with read-only global access to all department data
+     * (view reports, view members) — without creation/management rights.
+     * Quality management must oversee all departments' performance reports.
+     */
+    private const READ_ONLY_GLOBAL_ROLES = ['quality_manager', 'quality'];
+
     public function isGlobal(User $user): bool
     {
         return in_array($user->role, self::GLOBAL_ROLES, true);
+    }
+
+    /** True for roles with read-only access to all departments. */
+    public function isReadOnlyGlobal(User $user): bool
+    {
+        return in_array($user->role, self::READ_ONLY_GLOBAL_ROLES, true);
     }
 
     /**
@@ -68,20 +81,20 @@ class DepartmentAccessService
         return $pivotIds->merge($teamIds)->unique()->values();
     }
 
-    /** Departments this user may READ (view reports/members) for: member ∪ leader ∪ all-if-global. */
+    /** Departments this user may READ (view reports/members) for: member ∪ leader ∪ all-if-global ∪ all-if-read-only-global. */
     public function getAccessibleDepartmentIds(User $user): Collection
     {
-        if ($this->isGlobal($user)) {
+        if ($this->isGlobal($user) || $this->isReadOnlyGlobal($user)) {
             return Department::query()->pluck('id');
         }
 
         return $this->getLedDepartmentIds($user)->merge($this->getMemberDepartmentIds($user))->unique()->values();
     }
 
-    /** May this user READ this department's reports/roster? Membership OR leadership OR global. */
+    /** May this user READ this department's reports/roster? Membership OR leadership OR global OR read-only-global. */
     public function canAccessDepartment(User $user, int $departmentId): bool
     {
-        if ($this->isGlobal($user)) {
+        if ($this->isGlobal($user) || $this->isReadOnlyGlobal($user)) {
             return true;
         }
 
@@ -103,10 +116,10 @@ class DepartmentAccessService
         return $this->getLedDepartmentIds($user)->contains($departmentId);
     }
 
-    /** Restrict a list (read) query to the user's accessible departments. No-op for global roles. */
+    /** Restrict a list (read) query to the user's accessible departments. No-op for global or read-only-global roles. */
     public function scopeQuery(Builder $query, User $user, string $column = 'department_id'): Builder
     {
-        if ($this->isGlobal($user)) {
+        if ($this->isGlobal($user) || $this->isReadOnlyGlobal($user)) {
             return $query;
         }
 
@@ -147,27 +160,29 @@ class DepartmentAccessService
     {
         if ($this->isGlobal($user)) {
             return [
-                'department_scope' => 'global',
-                'allowed_departments' => Department::query()
+                'department_scope'        => 'global',
+                'allowed_departments'     => Department::query()
                     ->active()
                     ->orderBy('sort_order')
                     ->get(['id', 'name'])
                     ->map(fn (Department $d) => ['id' => $d->id, 'name' => $d->name]),
                 'can_select_any_department' => true,
+                'can_create_report'       => true,
             ];
         }
 
         $ids = $this->getLedDepartmentIds($user);
 
         return [
-            'department_scope' => 'restricted',
-            'allowed_departments' => Department::query()
+            'department_scope'        => 'restricted',
+            'allowed_departments'     => Department::query()
                 ->whereIn('id', $ids)
                 ->active()
                 ->orderBy('sort_order')
                 ->get(['id', 'name'])
                 ->map(fn (Department $d) => ['id' => $d->id, 'name' => $d->name]),
             'can_select_any_department' => false,
+            'can_create_report'       => $ids->isNotEmpty(),
         ];
     }
 }
