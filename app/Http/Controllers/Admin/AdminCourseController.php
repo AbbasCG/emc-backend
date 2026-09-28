@@ -369,27 +369,41 @@ class AdminCourseController extends Controller
         unset($data['features'], $data['learning_path_id']);
 
         // ── Finance approval guard ─────────────────────────────────────────────
-        // Detect price/currency changes that would reset an approved status
-        $priceChanged    = array_key_exists('price', $data) && (float) $data['price'] !== (float) $course->price;
+        // The finance-relevant diff is computed ONCE, before the write, from
+        // the canonical field list in ProgramFinanceApprovalService. It drives
+        // both the publish guard below and the reviewer-facing snapshot, so
+        // the two can never disagree about whether this edit is financial.
+        $financeChanges  = $this->financeService->financeChanges($course, $data);
         $typeChanged     = array_key_exists('type', $data) && $data['type'] !== $course->type;
-        $becameFreeToPaid = $typeChanged && $data['type'] === 'paid' && $course->type !== 'paid';
         $becamePaidToFree = $typeChanged && $data['type'] === 'free' && $course->type === 'paid';
 
-        // Free → paid: requires new finance approval
-        if ($becameFreeToPaid) {
-            $data['finance_approval_status']  = 'pending';
-            $data['submitted_for_finance_at'] = now();
-        }
-        // Paid → free: approval no longer required
+        // Paid → free: approval no longer required.
+        // NOTE: existing EMC policy, preserved deliberately — removing pricing
+        // is not gated on Finance today. Flagged as a product decision rather
+        // than silently changed here.
         if ($becamePaidToFree) {
             $data['finance_approval_status'] = 'not_required';
             $data['price']                   = 0;
         }
 
+        // Will this edit still leave a paid course once applied?
+        $willBePaid = ! $becamePaidToFree && (
+            (array_key_exists('type', $data) ? $data['type'] === 'paid' : $course->type === 'paid')
+            || (float) ($data['price'] ?? $course->price) > 0
+            || (bool) ($data['is_paid'] ?? $course->is_paid)
+        );
+
+        // A financial edit puts the course back into review, so it cannot also
+        // be published by the same request — otherwise an unapproved price
+        // would be live for as long as it took Finance to notice.
+        $needsReapproval = $willBePaid && $financeChanges !== [];
+
         // Block publishing a paid program without finance approval
         $newStatus = $data['status'] ?? null;
-        if ($newStatus === 'published' && $course->isPaid()) {
-            $effectiveApprovalStatus = $data['finance_approval_status'] ?? $course->finance_approval_status;
+        if ($newStatus === 'published' && ($course->isPaid() || $willBePaid)) {
+            $effectiveApprovalStatus = $needsReapproval
+                ? 'pending'
+                : ($data['finance_approval_status'] ?? $course->finance_approval_status);
             if ($effectiveApprovalStatus !== 'approved') {
                 return response()->json([
                     'success' => false,
@@ -397,15 +411,6 @@ class AdminCourseController extends Controller
                     'code'    => 'FINANCE_APPROVAL_REQUIRED',
                 ], 422);
             }
-        }
-
-        // Price changed after approval → reset to pending
-        if ($priceChanged && $course->finance_approval_status === 'approved' && $course->isPaid()) {
-            $data['finance_approval_status'] = 'pending';
-            AuditLogService::log('PROGRAM_PRICE_CHANGED', 'Course', $course->id, $course->title,
-                ['old_price' => $course->price, 'new_price' => $data['price'], 'finance_approval_status' => 'reset_to_pending'],
-                null, null, $request
-            );
         }
 
         // Track who last updated the record
@@ -437,7 +442,26 @@ class AdminCourseController extends Controller
             }
         }
 
-        $course->update($data);
+        // ── THE fix for "Finance never gets told about edits" ──────────────
+        // Previously this method flipped the denormalized
+        // courses.finance_approval_status column straight to 'pending' and
+        // stopped there. The program_finance_approvals row — the ONLY thing
+        // the Finance approvals screen and its notifications read — was left
+        // untouched, still saying 'approved' with the old price_snapshot. So
+        // an edited course silently vanished from the public catalog while
+        // never appearing in anyone's review queue. Routing through the
+        // canonical service instead creates/refreshes the approval record,
+        // captures the diff, and notifies Finance — one code path shared with
+        // Learning Paths and with first-time submissions. applyEdit() writes
+        // the new values together with 'pending' and opens the request in the
+        // same transaction, so the new price is never readable as approved.
+        $this->financeService->applyEdit(
+            $course,
+            $request->user(),
+            $data,
+            $needsReapproval ? $financeChanges : [],
+        );
+
         $fresh = $course->fresh(['instructor.user', 'track', 'features', 'department']);
 
         if ($features !== null) {

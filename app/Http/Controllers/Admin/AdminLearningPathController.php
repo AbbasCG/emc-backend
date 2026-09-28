@@ -264,22 +264,35 @@ class AdminLearningPathController extends Controller
         unset($data['course_ids']);
 
         // ── Finance guard ──────────────────────────────────────────────────────
-        $priceChanged    = array_key_exists('price', $data) && (float) $data['price'] !== (float) $learningPath->price;
-        $becameFreeToPaid = $priceChanged && (float) $data['price'] > 0 && (float) $learningPath->price <= 0;
+        // Same canonical engine the Course flow uses. For a path the diff also
+        // covers course membership: the buyer pays the path's own price for a
+        // specific bundle, so swapping courses in or out changes what is being
+        // sold even when the number does not move.
+        $financeChanges = $this->financeService->financeChanges(
+            $learningPath,
+            $data,
+            $courseIds !== null ? array_map('intval', $courseIds) : null,
+        );
+
+        $priceChanged     = array_key_exists('price', $data) && (float) $data['price'] !== (float) $learningPath->price;
         $becamePaidToFree = $priceChanged && (float) $data['price'] <= 0 && (float) $learningPath->price > 0;
 
-        if ($becameFreeToPaid) {
-            $data['finance_approval_status']  = 'pending';
-            $data['submitted_for_finance_at'] = now();
-        }
+        // Paid → free: existing EMC policy, preserved — not gated on Finance.
         if ($becamePaidToFree) {
             $data['finance_approval_status'] = 'not_required';
             $data['price']                   = 0;
         }
 
+        $willBePaid = ! $becamePaidToFree
+            && (float) ($data['price'] ?? $learningPath->price) > 0;
+
+        $needsReapproval = $willBePaid && $financeChanges !== [];
+
         $newStatus = $data['status'] ?? null;
-        if ($newStatus === 'published' && $learningPath->isPaid()) {
-            $effectiveStatus = $data['finance_approval_status'] ?? $learningPath->finance_approval_status;
+        if ($newStatus === 'published' && ($learningPath->isPaid() || $willBePaid)) {
+            $effectiveStatus = $needsReapproval
+                ? 'pending'
+                : ($data['finance_approval_status'] ?? $learningPath->finance_approval_status);
             if ($effectiveStatus !== 'approved') {
                 return response()->json([
                     'success' => false,
@@ -289,25 +302,32 @@ class AdminLearningPathController extends Controller
             }
         }
 
-        if ($priceChanged && $learningPath->finance_approval_status === 'approved' && $learningPath->isPaid()) {
-            $data['finance_approval_status'] = 'pending';
-        }
-
         $data['updated_by'] = $request->user()->id;
 
         $oldInstructorId = $learningPath->instructor_id;
 
-        DB::transaction(function () use ($learningPath, $data, $courseIds, $oldInstructorId) {
-            $learningPath->update($data);
-            if ($courseIds !== null) {
-                $this->syncCourses($learningPath, $courseIds);
-            }
-            // Sync instructor to linked courses when it changes
-            $newInstructorId = $learningPath->instructor_id;
-            if (array_key_exists('instructor_id', $data) && $newInstructorId !== $oldInstructorId) {
-                $this->syncInstructorToLinkedCourses($learningPath, $oldInstructorId);
-            }
-        });
+        // Financially material edit to a paid path → back to Finance, with the
+        // diff (including any course-membership change) attached. Previously
+        // this only flipped the denormalized column, so the request never
+        // reached the approvals queue or anyone's notifications. applyEdit()
+        // runs the row update, the membership sync and the review request in
+        // ONE transaction, with 'pending' written alongside the new values.
+        $this->financeService->applyEdit(
+            $learningPath,
+            $request->user(),
+            $data,
+            $needsReapproval ? $financeChanges : [],
+            function () use ($learningPath, $data, $courseIds, $oldInstructorId) {
+                if ($courseIds !== null) {
+                    $this->syncCourses($learningPath, $courseIds);
+                }
+                // Sync instructor to linked courses when it changes
+                $newInstructorId = $learningPath->instructor_id;
+                if (array_key_exists('instructor_id', $data) && $newInstructorId !== $oldInstructorId) {
+                    $this->syncInstructorToLinkedCourses($learningPath, $oldInstructorId);
+                }
+            },
+        );
 
         $newStatus   = $learningPath->status;
         $lpAction    = 'updated';
