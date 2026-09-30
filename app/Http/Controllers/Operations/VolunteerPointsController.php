@@ -111,8 +111,13 @@ class VolunteerPointsController extends Controller
     /** لوحة صدارة الأثر — تُغذي Hall of Impact واختيار أفضل متطوع. */
     public function leaderboard(Request $request): JsonResponse
     {
+        // whereHas('user'): awards survive a user's SOFT delete (the FK only
+        // cascades on a hard delete), and the eager load below would then yield
+        // `user: null` — a row the client cannot render. Such rows are dropped
+        // server-side instead of shipping a null identity to every reader.
         $rows = VolunteerPointAward::query()
             ->select('user_id', DB::raw('SUM(points) as lifetime_points'))
+            ->whereHas('user')
             ->when($request->since, fn ($q) => $q->where('awarded_at', '>=', $request->since))
             ->groupBy('user_id')
             ->orderByDesc('lifetime_points')

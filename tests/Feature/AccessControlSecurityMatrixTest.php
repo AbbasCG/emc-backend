@@ -82,7 +82,7 @@ class AccessControlSecurityMatrixTest extends TestCase
         return $user;
     }
 
-    /** The full canonical configuration: 163 role pairs + 28 department pairs. */
+    /** The full canonical configuration: 179 role pairs + 28 department pairs. */
     private function seedCanonical(): Department
     {
         $actor = $this->makeUser('super_admin');
