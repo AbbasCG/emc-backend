@@ -122,6 +122,7 @@ final class RoleDefaultMap
             'operations.tickets_workspace',
             'operations.volunteers_management',
             'operations.workshop_requests',
+            'organizational_departments.ai_expert_applications',
             'organizational_departments.consultant_applications',
             'organizational_departments.department_units',
             'organizational_departments.partners',
@@ -141,6 +142,7 @@ final class RoleDefaultMap
         'ai_manager' => [
             'operations.impact_points',
             'operations.meeting_lounge',
+            'organizational_departments.ai_expert_applications',
             'organizational_departments.ai_workspace',
         ],
         'community_manager' => [

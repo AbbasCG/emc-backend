@@ -761,7 +761,9 @@ Route::middleware('auth:sanctum')->group(function () {
 // Platform separation review. Permanent ownership (HR? Partnerships?
 // Community?) is an open product decision — reverted to admin-tier access
 // only in the meantime, not guessed at.
-Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix('admin/expert-applications')->group(function () {
+// Expert / trainer applications: the admin tier plus the AI department
+// manager, who owns this intake (page: organizational_departments.ai_expert_applications).
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,ai_manager'])->prefix('admin/expert-applications')->group(function () {
     Route::get('/', [\App\Http\Controllers\Admin\AdminExpertApplicationController::class, 'index']);
     Route::get('/{id}', [\App\Http\Controllers\Admin\AdminExpertApplicationController::class, 'show']);
     Route::put('/{id}/status', [\App\Http\Controllers\Admin\AdminExpertApplicationController::class, 'updateStatus']);
@@ -818,13 +820,17 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
     Route::get('volunteer-points/my-awards',         [VolunteerPointsController::class, 'myAwards']);
     Route::get('volunteer-points/leaderboard',       [VolunteerPointsController::class, 'leaderboard']);
 
+    // منح/استبدال نقاط الأثر وقائمة المستحقين: الصلاحية التجارية تُفحص داخل
+    // المتحكم (members.recognize / members.manage + نطاق الإدارة) — لا قائمة أدوار.
+    Route::get('volunteer-points/recipients',        [VolunteerPointsController::class, 'recipients']);
+    Route::post('volunteer-points/awards',           [VolunteerPointsController::class, 'award']);
+    Route::post('volunteer-points/redemptions',      [VolunteerPointsController::class, 'redeem']);
+
     // لوحة التشغيل: تحريك الحالة — العضو لمهامه والمدير للجميع (منطق المتحكم)
     Route::patch('board/tasks/{task}/status',        [\App\Http\Controllers\Admin\TaskController::class, 'updateStatus']);
 
-    // كتابة نقاط الأثر ومهام اللوحة: مدراء مخوَّلون (بلا تغيير عن السابق)
+    // كتابة مهام اللوحة: مدراء مخوَّلون (بلا تغيير عن السابق)
     Route::middleware('role:admin,super_admin,tech_admin,executive_admin,hr_manager,operations_manager,department_manager')->group(function () {
-        Route::post('volunteer-points/awards',       [VolunteerPointsController::class, 'award']);
-        Route::post('volunteer-points/redemptions',  [VolunteerPointsController::class, 'redeem']);
         Route::post('board/tasks',                   [\App\Http\Controllers\Admin\TaskController::class, 'store']);
         Route::post('tasks/{task}/lock',             [\App\Http\Controllers\Admin\TaskController::class, 'lock']);
         Route::post('tasks/{task}/unlock',           [\App\Http\Controllers\Admin\TaskController::class, 'unlock']);
