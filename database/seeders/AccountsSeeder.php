@@ -37,7 +37,7 @@ class AccountsSeeder extends Seeder
             ['code' => '31',   'name_ar' => 'مرتبات وأجور',                     'name_en' => 'Salaries & Wages',         'type' => 'debit',  'parent_code' => '3',  'is_selectable' => false],
             ['code' => '3101', 'name_ar' => 'رواتب الكادر الإداري والتقني',       'name_en' => 'Staff Salaries',           'type' => 'debit',  'parent_code' => '31', 'is_selectable' => true],
             ['code' => '3102', 'name_ar' => 'مكافآت ومستحقات المتطوعين',         'name_en' => 'Volunteers Rewards',       'type' => 'debit',  'parent_code' => '31', 'is_selectable' => true],
-            ['code' => '32',   'name_ar' => 'مصاريف التقنية والاشتراكات',         'name_en' => 'Tech & Subscriptions',     'type' => 'debit',  'parent_code' => '32', 'is_selectable' => false],
+            ['code' => '32',   'name_ar' => 'مصاريف التقنية والاشتراكات',         'name_en' => 'Tech & Subscriptions',     'type' => 'debit',  'parent_code' => '3',  'is_selectable' => false],
             ['code' => '3201', 'name_ar' => 'اشتراكات سحابية وسيرفرات',          'name_en' => 'Cloud & Servers',          'type' => 'debit',  'parent_code' => '32', 'is_selectable' => true],
             ['code' => '3202', 'name_ar' => 'اشتراكات أدوات الذكاء الاصطناعي',     'name_en' => 'AI Tools Subscriptions',   'type' => 'debit',  'parent_code' => '32', 'is_selectable' => true],
             ['code' => '33',   'name_ar' => 'مصاريف تشغيلية',                    'name_en' => 'Operational Expenses',     'type' => 'debit',  'parent_code' => '3',  'is_selectable' => false],

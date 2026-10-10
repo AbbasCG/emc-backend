@@ -163,6 +163,12 @@ final class PageAccessCatalog
                 '/dashboard/admin/finance/accounts',
             ]],
             ['finance.program_approvals', '/dashboard/finance/program-approvals', 'اعتماد البرامج', $C::Finance, $R::AdminOnly, false, P::MANAGE_PROGRAMS, false, []],
+            ['finance.expenses', '/dashboard/finance/expenses', 'سندات المصروفات', $C::Finance, $R::AdminOnly, false, P::MANAGE_PAYMENTS, false, [
+                '/dashboard/admin/finance/expenses',
+            ]],
+            ['finance.revenues', '/dashboard/finance/revenues', 'سندات القبض والإيرادات', $C::Finance, $R::AdminOnly, false, P::VIEW_REVENUE, false, [
+                '/dashboard/admin/finance/revenues',
+            ]],
             ['finance.executive_financial_requests', '/dashboard/executive/financial-requests', 'الطلبات المالية التنفيذية', $C::Finance, $R::AdminOnly, false, P::VIEW_FINANCIAL_REPORTS, false, []],
 
             // ── HR ───────────────────────────────────────────────────────────

@@ -1376,6 +1376,14 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_ma
     Route::delete('coupons/{coupon}',     [CouponController::class,     'destroy']);
     Route::post('coupons/validate',       [CouponController::class,     'validate']);
 
+    // Manual Expenses (سندات المصروفات اليدوية)
+    Route::get('expenses/suggest-voucher-no',     [\App\Http\Controllers\Admin\ExpenseController::class, 'suggestVoucherNo']);
+    Route::apiResource('expenses',                 \App\Http\Controllers\Admin\ExpenseController::class);
+
+    // Manual Revenues (سندات القبض والإيرادات اليدوية)
+    Route::get('revenues/suggest-receipt-no',     [\App\Http\Controllers\Admin\RevenueController::class, 'suggestReceiptNo']);
+    Route::apiResource('revenues',                 \App\Http\Controllers\Admin\RevenueController::class);
+
     // Finance accounts & manual transactions
     Route::get('accounts',                                           [FinanceAccountController::class, 'index']);
     Route::post('accounts',                                          [FinanceAccountController::class, 'store']);
@@ -1422,6 +1430,14 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_ma
         Route::post('accounts',                       [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'store']);
         Route::put('accounts/{id}',                   [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'update']);
         Route::delete('accounts/{id}',                [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'destroy']);
+
+        // Manual Expenses (سندات المصروفات اليدوية)
+        Route::get('expenses/suggest-voucher-no',     [\App\Http\Controllers\Admin\ExpenseController::class, 'suggestVoucherNo']);
+        Route::apiResource('expenses',                 \App\Http\Controllers\Admin\ExpenseController::class);
+
+        // Manual Revenues (سندات القبض والإيرادات اليدوية)
+        Route::get('revenues/suggest-receipt-no',     [\App\Http\Controllers\Admin\RevenueController::class, 'suggestReceiptNo']);
+        Route::apiResource('revenues',                 \App\Http\Controllers\Admin\RevenueController::class);
     });
 
 // ─── KPI unified endpoint (?tab=overview|education|finance|…) ────────────────
