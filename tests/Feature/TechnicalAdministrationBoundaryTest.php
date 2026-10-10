@@ -181,7 +181,9 @@ class TechnicalAdministrationBoundaryTest extends TestCase
             'administration.integrations' => ['/dashboard/admin/integrations', 'التكاملات', 3],
             'administration.webhooks' => ['/dashboard/admin/webhooks', 'الويب هوك', 2],
             'administration.catalog_import' => ['/dashboard/admin/catalog-import', 'استيراد الكتالوج', 1],
-            'technical_system.ai_command_center' => ['/dashboard/admin/ai', 'مركز قيادة الذكاء الاصطناعي', 2],
+            // 1 pattern: /dashboard/admin/ai/expert-applications moved to its own
+            // capability, organizational_departments.ai_expert_applications.
+            'technical_system.ai_command_center' => ['/dashboard/admin/ai', 'مركز قيادة الذكاء الاصطناعي', 1],
             'technical_system.ai_automations' => ['/dashboard/admin/ai/automations', 'أتمتة الذكاء الاصطناعي', 1],
             'technical_system.ai_insights' => ['/dashboard/admin/ai/insights', 'رؤى الذكاء الاصطناعي', 1],
             'technical_system.ai_usage' => ['/dashboard/admin/ai/usage', 'استخدام الذكاء الاصطناعي', 1],
@@ -202,7 +204,7 @@ class TechnicalAdministrationBoundaryTest extends TestCase
     public function test_catalog_size_and_other_risk_levels_are_unchanged(): void
     {
         $all = PageAccessCatalog::all();
-        $this->assertCount(130, $all);
+        $this->assertCount(131, $all);
 
         $byRisk = [];
         foreach ($all as $e) {
@@ -220,9 +222,12 @@ class TechnicalAdministrationBoundaryTest extends TestCase
         // ADMIN_ONLY holding the nine reclassified entries, and SAFE_DELEGATABLE
         // being untouched — are unchanged.
         $this->assertSame(count(self::STILL_PROTECTED) + count(self::UNTOUCHED_PROTECTED), $byRisk['SYSTEM_PROTECTED']);
-        $this->assertSame(75, $byRisk['ADMIN_ONLY']);
+        // +1 ADMIN_ONLY afterwards: organizational_departments.ai_expert_applications,
+        // a NEW capability (not a reclassification), so the 2G.1C invariant —
+        // the nine moved entries plus an untouched SAFE_DELEGATABLE — still holds.
+        $this->assertSame(76, $byRisk['ADMIN_ONLY']);
         $this->assertSame(46, $byRisk['SAFE_DELEGATABLE']);
-        $this->assertSame(130, array_sum($byRisk));
+        $this->assertSame(131, array_sum($byRisk));
     }
 
     // ── 2. PAGE ACCESS != BUSINESS AUTHORIZATION ─────────────────────────────

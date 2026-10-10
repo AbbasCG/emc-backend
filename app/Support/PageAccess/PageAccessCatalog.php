@@ -246,6 +246,11 @@ final class PageAccessCatalog
             ['organizational_departments.structure', '/dashboard/department/structure', 'هيكل الإدارة', $C::OrganizationalDepartments, $R::AdminOnly, false, P::DEPTS_MANAGE, true, []],
             ['organizational_departments.permissions_delegation', '/dashboard/department/permissions', 'تفويض صلاحيات الإدارة', $C::OrganizationalDepartments, $R::AdminOnly, false, null, true, []],
             ['organizational_departments.ai_workspace', '/dashboard/ai-department', 'مساحة عمل إدارة الذكاء الاصطناعي', $C::OrganizationalDepartments, $R::SafeDelegatable, true, null, true, []],
+            // Expert / trainer applications intake, managed by the AI department
+            // (ai_manager) and the admin tier. Its OWN capability — formerly a
+            // route pattern of technical_system.ai_command_center, which tied it
+            // to the technical AI platform and kept ai_manager out of both.
+            ['organizational_departments.ai_expert_applications', '/dashboard/admin/ai/expert-applications', 'طلبات انضمام الخبراء', $C::OrganizationalDepartments, $R::AdminOnly, false, null, false, []],
             ['organizational_departments.programs_manager', '/dashboard/programs-manager', 'لوحة مدير البرامج', $C::OrganizationalDepartments, $R::SafeDelegatable, true, null, true, []],
             ['organizational_departments.operations_manager', '/dashboard/operations-manager', 'لوحة مدير العمليات', $C::OrganizationalDepartments, $R::SafeDelegatable, true, null, true, []],
             ['organizational_departments.partnerships_manager', '/dashboard/partnerships-manager', 'لوحة مدير الشراكات', $C::OrganizationalDepartments, $R::SafeDelegatable, true, null, true, []],
@@ -312,9 +317,7 @@ final class PageAccessCatalog
             ['administration.documents', '/dashboard/admin/documents', 'المستندات الإدارية', $C::Administration, $R::AdminOnly, false, null, false, []],
 
             // ── Technical System — AI Platform (distinct from AI dept above) ─
-            ['technical_system.ai_command_center', '/dashboard/admin/ai', 'مركز قيادة الذكاء الاصطناعي', $C::TechnicalSystem, $R::AdminOnly, false, P::USE_AI_ASSISTANT, false, [
-                '/dashboard/admin/ai/expert-applications',
-            ]],
+            ['technical_system.ai_command_center', '/dashboard/admin/ai', 'مركز قيادة الذكاء الاصطناعي', $C::TechnicalSystem, $R::AdminOnly, false, P::USE_AI_ASSISTANT, false, []],
             ['technical_system.ai_automations', '/dashboard/admin/ai/automations', 'أتمتة الذكاء الاصطناعي', $C::TechnicalSystem, $R::AdminOnly, false, P::MANAGE_AI_PROMPTS, false, []],
             ['technical_system.ai_insights', '/dashboard/admin/ai/insights', 'رؤى الذكاء الاصطناعي', $C::TechnicalSystem, $R::AdminOnly, false, P::MANAGE_AI_PROMPTS, false, []],
             ['technical_system.ai_usage', '/dashboard/admin/ai/usage', 'استخدام الذكاء الاصطناعي', $C::TechnicalSystem, $R::AdminOnly, false, P::VIEW_AI_USAGE, false, []],

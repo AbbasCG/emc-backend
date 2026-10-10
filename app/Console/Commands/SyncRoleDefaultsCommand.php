@@ -55,7 +55,8 @@ class SyncRoleDefaultsCommand extends Command
     protected $signature = 'access:sync-role-defaults
         {--dry-run : Report the plan without writing (default behaviour)}
         {--apply : Execute the planned inserts inside one transaction}
-        {--role= : Limit the plan to one role slug}';
+        {--role= : Limit the plan to one role slug}
+        {--page= : Limit the plan to one PageAccessCatalog page key}';
 
     protected $description = 'Plan and (with --apply) additively synchronise the canonical role page-access defaults.';
 
@@ -75,8 +76,19 @@ class SyncRoleDefaultsCommand extends Command
     public function handle(): int
     {
         $apply = (bool) $this->option('apply');
+        $onlyPage = $this->option('page');
 
-        $plan = $this->buildPlan($this->option('role'));
+        // A page filter must name a real catalog key. Refused BEFORE planning,
+        // so a typo can never silently resolve to "nothing to do" — or, worse,
+        // be mistaken for a successful scoped sync.
+        if ($onlyPage !== null && PageAccessCatalog::find($onlyPage) === null) {
+            $this->error("Unknown page key [{$onlyPage}] — not present in PageAccessCatalog.");
+            $this->line('  Writes performed                : 0');
+
+            return self::FAILURE;
+        }
+
+        $plan = $this->buildPlan($this->option('role'), $onlyPage);
         $summary = $this->summarize($plan);
 
         $this->render($plan, $summary, $apply);
@@ -122,9 +134,16 @@ class SyncRoleDefaultsCommand extends Command
      * additionally scans the stored table for rows that have drifted out of
      * canonical eligibility.
      *
+     * $onlyPage narrows the MAPPED pairs to one page key — it filters this same
+     * canonical plan, it is not a second calculator. Every classification rule
+     * (protected, baseline, deferred, invalid role/key, present) still applies
+     * to the pairs that remain. The drift scan is deliberately NOT narrowed: a
+     * stored row that has fallen out of eligibility anywhere in the table still
+     * blocks an apply, scoped or not, exactly as before.
+     *
      * @return array<int, array{role: string, page_key: string, current: string, proposed: string, action: string, reason: string}>
      */
-    protected function buildPlan(?string $onlyRole = null): array
+    protected function buildPlan(?string $onlyRole = null, ?string $onlyPage = null): array
     {
         $plan = [];
         $deferred = array_flip(array_merge(RoleDefaultMap::DEFERRED_PRODUCT_DECISION, RoleDefaultMap::LEADER_OWNED));
@@ -140,6 +159,10 @@ class SyncRoleDefaultsCommand extends Command
                 : [];
 
             foreach ($pageKeys as $pageKey) {
+                if ($onlyPage !== null && $pageKey !== $onlyPage) {
+                    continue;
+                }
+
                 $entry = PageAccessCatalog::find($pageKey);
 
                 [$action, $reason, $current, $proposed] = match (true) {

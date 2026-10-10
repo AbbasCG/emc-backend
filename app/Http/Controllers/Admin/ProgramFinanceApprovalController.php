@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Exceptions\FinanceApprovalNotPendingException;
+use App\Exceptions\StaleFinanceApprovalException;
 use App\Http\Controllers\Controller;
 use App\Models\Course;
 use App\Models\LearningPath;
@@ -89,11 +91,21 @@ class ProgramFinanceApprovalController extends Controller
         if (! $course->isPaid()) {
             return response()->json(['success' => false, 'message' => 'البرنامج مجاني ولا يحتاج لمراجعة مالية.'], 422);
         }
-        if ($course->finance_approval_status === 'approved') {
-            return response()->json(['success' => false, 'message' => 'البرنامج معتمد بالفعل.'], 422);
+
+        // An already-approved program may legitimately be re-submitted: that
+        // is precisely the "edited after approval" case. Only block a
+        // re-submission that would propose nothing new, so Finance is not
+        // handed an empty request.
+        $isResubmission = $course->finance_approval_status === 'approved';
+        if ($isResubmission && ! $this->hasUnreviewedChanges($course)) {
+            return response()->json(['success' => false, 'message' => 'البرنامج معتمد بالفعل ولا توجد تغييرات مالية جديدة.'], 422);
         }
 
-        $approval = $this->service->submit($course, $request->user());
+        $approval = $this->service->submit(
+            $course,
+            $request->user(),
+            $isResubmission ? 'update' : 'create',
+        );
 
         return response()->json([
             'success' => true,
@@ -110,11 +122,17 @@ class ProgramFinanceApprovalController extends Controller
         if (! $learningPath->isPaid()) {
             return response()->json(['success' => false, 'message' => 'المسار التعليمي مجاني ولا يحتاج لمراجعة مالية.'], 422);
         }
-        if ($learningPath->finance_approval_status === 'approved') {
-            return response()->json(['success' => false, 'message' => 'المسار التعليمي معتمد بالفعل.'], 422);
+
+        $isResubmission = $learningPath->finance_approval_status === 'approved';
+        if ($isResubmission && ! $this->hasUnreviewedChanges($learningPath)) {
+            return response()->json(['success' => false, 'message' => 'المسار التعليمي معتمد بالفعل ولا توجد تغييرات مالية جديدة.'], 422);
         }
 
-        $approval = $this->service->submit($learningPath, $request->user());
+        $approval = $this->service->submit(
+            $learningPath,
+            $request->user(),
+            $isResubmission ? 'update' : 'create',
+        );
 
         return response()->json([
             'success' => true,
@@ -133,11 +151,27 @@ class ProgramFinanceApprovalController extends Controller
         ]);
 
         if ($programFinanceApproval->status !== 'pending') {
-            return response()->json(['success' => false, 'message' => 'هذا الطلب ليس في حالة انتظار.'], 422);
+            return $this->notPendingResponse();
         }
 
-        $program  = $programFinanceApproval->approvable;
-        $approval = $this->service->approve($program, $request->user(), $data['review_note'] ?? null);
+        $program = $programFinanceApproval->approvable;
+
+        try {
+            $approval = $this->service->approve($program, $request->user(), $data['review_note'] ?? null);
+        } catch (FinanceApprovalNotPendingException) {
+            // Another reviewer's decision committed between the check above
+            // and the row lock — same answer as the pre-check, never a second
+            // terminal transition.
+            return $this->notPendingResponse();
+        } catch (StaleFinanceApprovalException $e) {
+            // The program was edited again after this request was raised, so
+            // approving would bless a version the reviewer never saw.
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+                'code'    => 'FINANCE_APPROVAL_STALE',
+            ], 409);
+        }
 
         return response()->json([
             'success' => true,
@@ -157,11 +191,16 @@ class ProgramFinanceApprovalController extends Controller
         ]);
 
         if ($programFinanceApproval->status !== 'pending') {
-            return response()->json(['success' => false, 'message' => 'هذا الطلب ليس في حالة انتظار.'], 422);
+            return $this->notPendingResponse();
         }
 
-        $program  = $programFinanceApproval->approvable;
-        $approval = $this->service->reject($program, $request->user(), $data['rejection_reason'], $data['review_note'] ?? null);
+        $program = $programFinanceApproval->approvable;
+
+        try {
+            $approval = $this->service->reject($program, $request->user(), $data['rejection_reason'], $data['review_note'] ?? null);
+        } catch (FinanceApprovalNotPendingException) {
+            return $this->notPendingResponse();
+        }
 
         return response()->json([
             'success' => true,
@@ -171,6 +210,15 @@ class ProgramFinanceApprovalController extends Controller
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
+
+    private function notPendingResponse(): JsonResponse
+    {
+        return response()->json([
+            'success' => false,
+            'message' => 'هذا الطلب ليس في حالة انتظار.',
+            'code'    => 'FINANCE_APPROVAL_NOT_PENDING',
+        ], 422);
+    }
 
     private function ensureCanReview(Request $request): void
     {
@@ -189,6 +237,26 @@ class ProgramFinanceApprovalController extends Controller
         ])) {
             abort(403, 'غير مصرح لك بإرسال البرامج للمراجعة المالية.');
         }
+    }
+
+    /**
+     * True when the program's current finance-relevant state differs from what
+     * the existing approval row already recorded — i.e. there is genuinely
+     * something new for Finance to look at.
+     */
+    private function hasUnreviewedChanges(mixed $program): bool
+    {
+        $approval = ProgramFinanceApproval::where('approvable_type', get_class($program))
+            ->where('approvable_id', $program->id)
+            ->first();
+
+        if (! $approval || $approval->proposed_hash === null) {
+            return true; // nothing recorded to compare against — let it through
+        }
+
+        $current = $this->service->fingerprintHash($this->service->financeFingerprint($program));
+
+        return $current !== $approval->proposed_hash;
     }
 
     private function resolveModel(string $fqn): ?string
@@ -227,6 +295,11 @@ class ProgramFinanceApprovalController extends Controller
         return [
             'id'               => $a->id,
             'status'           => $a->status,
+            'request_type'     => $a->request_type ?? 'create',
+            // {field: {from, to}} captured at submit time — what the reviewer
+            // is actually being asked to approve, rather than the program's
+            // current (mutable, possibly already re-edited) columns.
+            'changes'          => $a->changes_snapshot ?: null,
             'approvable_type'  => class_basename($a->approvable_type),
             'approvable_id'    => $a->approvable_id,
             'submitted_at'     => $a->submitted_at?->toIso8601String(),

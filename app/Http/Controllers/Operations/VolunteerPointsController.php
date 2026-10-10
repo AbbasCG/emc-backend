@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\VolunteerPointAward;
 use App\Models\VolunteerPointRedemption;
+use App\Services\AuditLogService;
+use App\Services\ImpactPointsRecipients;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -35,6 +37,16 @@ class VolunteerPointsController extends Controller
 
     /** €10 لكل 1,000 نقطة. */
     public const EURO_PER_1000 = 10;
+
+    /**
+     * السقف الشهري لنقاط المستلم الموجبة (كل المصادر) — يُعلَن في policy()
+     * ويُطبَّق على المنح اليدوية. الخصم (نقاط سالبة) لا يُحتسب ضمنه.
+     */
+    public const MONTHLY_CAP = 2500;
+
+    public function __construct(private readonly ImpactPointsRecipients $recipients)
+    {
+    }
 
     private function summarize(User $user): array
     {
@@ -71,7 +83,32 @@ class VolunteerPointsController extends Controller
     /** ملخصي: النقاط والمستوى المؤهَّل له وباقة سديم. */
     public function mySummary(Request $request): JsonResponse
     {
-        return response()->json(['success' => true, 'data' => $this->summarize($request->user())]);
+        // can_award comes from the server so the page never guesses business
+        // authority from a role list; the award endpoint re-checks it anyway.
+        return response()->json(['success' => true, 'data' => $this->summarize($request->user()) + [
+            'can_award'   => $this->recipients->canAward($request->user()),
+            'monthly_cap' => self::MONTHLY_CAP,
+        ]]);
+    }
+
+    /** المستحقون الذين يجوز للمستخدم منحهم — أعضاء فريق EMC الفعليون ضمن نطاقه. */
+    public function recipients(Request $request): JsonResponse
+    {
+        if (! $this->recipients->canAward($request->user())) {
+            return $this->forbidden();
+        }
+
+        return response()->json(['success' => true, 'data' => $this->recipients->forActor($request->user())]);
+    }
+
+    private function forbidden(): JsonResponse
+    {
+        return response()->json(['success' => false, 'message' => 'ليست لديك صلاحية منح نقاط الأثر.'], 403);
+    }
+
+    private function rejected(string $message, string $code): JsonResponse
+    {
+        return response()->json(['success' => false, 'message' => $message, 'code' => $code], 422);
     }
 
     /** سجل منحي (أحدث أولًا). */
@@ -86,9 +123,15 @@ class VolunteerPointsController extends Controller
         return response()->json(['success' => true, 'data' => $awards]);
     }
 
-    /** منح نقاط — للمدراء المخوَّلين فقط (مقيَّدة في المسار). */
+    /** منح نقاط — لحاملي صلاحية التكريم، لأعضاء الفريق ضمن نطاقهم فقط. */
     public function award(Request $request): JsonResponse
     {
+        $actor = $request->user();
+
+        if (! $this->recipients->canAward($actor)) {
+            return $this->forbidden();
+        }
+
         $data = $request->validate([
             'user_id'  => 'required|exists:users,id',
             'category' => 'required|in:' . implode(',', VolunteerPointAward::CATEGORIES),
@@ -96,10 +139,33 @@ class VolunteerPointsController extends Controller
             'reason'   => 'required|string|max:500',
         ]);
 
+        $recipientId = (int) $data['user_id'];
+
+        if ($recipientId === $actor->id) {
+            return $this->rejected('لا يمكنك منح نقاط لنفسك.', 'SELF_AWARD');
+        }
+
+        if (! $this->recipients->isAwardableBy($actor, $recipientId)) {
+            return $this->rejected('هذا المستخدم ليس عضوًا فعّالًا في فريق EMC ضمن نطاق صلاحيتك.', 'RECIPIENT_NOT_ELIGIBLE');
+        }
+
+        if ($data['points'] > 0) {
+            $used = $this->recipients->monthPoints($recipientId);
+            if ($used + $data['points'] > self::MONTHLY_CAP) {
+                $left = max(0, self::MONTHLY_CAP - $used);
+
+                return $this->rejected("يتجاوز السقف الشهري (".self::MONTHLY_CAP." نقطة) — المتبقي لهذا العضو هذا الشهر {$left} نقطة.", 'MONTHLY_CAP_EXCEEDED');
+            }
+        }
+
         $award = VolunteerPointAward::create([
             ...$data,
-            'awarded_by' => $request->user()->id,
+            'awarded_by' => $actor->id,
             'awarded_at' => now(),
+        ]);
+
+        AuditLogService::log('IMPACT_POINTS_AWARDED', 'VolunteerPointAward', $award->id, null, null, [
+            'user_id' => $recipientId, 'category' => $data['category'], 'points' => $data['points'],
         ]);
 
         return response()->json([
@@ -111,8 +177,13 @@ class VolunteerPointsController extends Controller
     /** لوحة صدارة الأثر — تُغذي Hall of Impact واختيار أفضل متطوع. */
     public function leaderboard(Request $request): JsonResponse
     {
+        // whereHas('user'): awards survive a user's SOFT delete (the FK only
+        // cascades on a hard delete), and the eager load below would then yield
+        // `user: null` — a row the client cannot render. Such rows are dropped
+        // server-side instead of shipping a null identity to every reader.
         $rows = VolunteerPointAward::query()
             ->select('user_id', DB::raw('SUM(points) as lifetime_points'))
+            ->whereHas('user')
             ->when($request->since, fn ($q) => $q->where('awarded_at', '>=', $request->since))
             ->groupBy('user_id')
             ->orderByDesc('lifetime_points')
@@ -130,12 +201,26 @@ class VolunteerPointsController extends Controller
     /** استبدال نقاط برصيد تعليمي — تسجيل معتمد من HR/الإدارة. */
     public function redeem(Request $request): JsonResponse
     {
+        $actor = $request->user();
+
+        if (! $this->recipients->canAward($actor)) {
+            return $this->forbidden();
+        }
+
         $data = $request->validate([
             'user_id' => 'required|exists:users,id',
             'points'  => 'required|integer|min:100|max:100000',
             'purpose' => 'required|string|max:255',
             'note'    => 'nullable|string|max:500',
         ]);
+
+        if ((int) $data['user_id'] === $actor->id) {
+            return $this->rejected('لا يمكنك اعتماد استبدال نقاطك بنفسك.', 'SELF_REDEMPTION');
+        }
+
+        if (! $this->recipients->isAwardableBy($actor, (int) $data['user_id'])) {
+            return $this->rejected('هذا المستخدم ليس عضوًا فعّالًا في فريق EMC ضمن نطاق صلاحيتك.', 'RECIPIENT_NOT_ELIGIBLE');
+        }
 
         $user     = User::findOrFail($data['user_id']);
         $summary  = $this->summarize($user);
@@ -149,7 +234,11 @@ class VolunteerPointsController extends Controller
 
         $redemption = VolunteerPointRedemption::create([
             ...$data,
-            'approved_by' => $request->user()->id,
+            'approved_by' => $actor->id,
+        ]);
+
+        AuditLogService::log('IMPACT_POINTS_REDEEMED', 'VolunteerPointRedemption', $redemption->id, null, null, [
+            'user_id' => (int) $data['user_id'], 'points' => $data['points'],
         ]);
 
         return response()->json(['success' => true, 'data' => $redemption], 201);
@@ -163,7 +252,7 @@ class VolunteerPointsController extends Controller
             'data'    => [
                 'levels'        => self::LEVELS,
                 'euro_per_1000' => self::EURO_PER_1000,
-                'monthly_cap'   => 2500,
+                'monthly_cap'   => self::MONTHLY_CAP,
                 'version'       => '1.0',
             ],
         ]);

@@ -114,7 +114,9 @@ final class DepartmentDefaultMap
         // applies NO department scoping — department_id is an optional filter.
         'operations.board',
         // VolunteerPointsController is entirely personal (mySummary/myAwards/
-        // leaderboard). No department is consulted anywhere in the controller.
+        // leaderboard). No department is consulted anywhere in the controller,
+        // so it is never a department default — it is opened by a ROLE default
+        // instead (see RoleDefaultMap).
         'operations.impact_points',
         // MeetingReportController::index() applies no department scoping; only
         // show()/store() re-check the department, i.e. per-record, not per-page.

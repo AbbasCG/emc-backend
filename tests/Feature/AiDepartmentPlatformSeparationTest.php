@@ -144,17 +144,17 @@ class AiDepartmentPlatformSeparationTest extends TestCase
         $this->actingAs($admin)->getJson('/api/admin/ai/usage')->assertOk();
     }
 
-    public function test_ai_manager_no_longer_has_expert_applications_access(): void
+    public function test_ai_manager_manages_expert_applications_but_not_the_ai_platform(): void
     {
-        // ExpertApplication's real fields (trainer/consultant/mentor/evaluator
-        // application data, LinkedIn, WhatsApp, bio) confirm this is a talent/
-        // expert-recruitment intake, not an AI system feature — it was only
-        // ever nested under /admin/ai/* historically, with no other
-        // justification for ai_manager to hold it. Reverted to admin-tier
-        // access only; permanent ownership is an open product decision.
+        // Ownership of the expert/trainer intake was left as an open product
+        // decision here. It is now decided: the AI department manager manages
+        // expert applications. That grant is the intake ONLY — the technical
+        // AI platform stays separated, exactly as asserted above.
         $aiManager = User::factory()->create(['role' => 'ai_manager', 'is_active' => true]);
 
-        $this->actingAs($aiManager)->getJson('/api/admin/expert-applications')->assertStatus(403);
+        $this->actingAs($aiManager)->getJson('/api/admin/expert-applications')->assertOk();
+        $this->actingAs($aiManager)->getJson('/api/admin/ai/usage')->assertForbidden();
+        $this->actingAs($aiManager)->getJson('/api/admin/ai/insights')->assertForbidden();
     }
 
     public function test_admin_tier_roles_retain_expert_applications_access(): void

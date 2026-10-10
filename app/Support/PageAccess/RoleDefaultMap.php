@@ -32,9 +32,22 @@ namespace App\Support\PageAccess;
  *     imply the role is what grants them.
  *   - Every SYSTEM_PROTECTED page — structurally unstorable anyway
  *     (RolePageDefaultService rejects them), listed here as intent too.
- *   - The 4 shared operations surfaces (weekly_reports, meeting_reports, board,
- *     impact_points) — DEFERRED_PRODUCT_DECISION: role default vs department
- *     member default is unresolved.
+ *   - The 3 shared operations surfaces (weekly_reports, meeting_reports,
+ *     board) — DEFERRED_PRODUCT_DECISION: role default vs department member
+ *     default is unresolved.
+ *
+ * operations.impact_points is NOT deferred. It was, as the fourth shared
+ * surface, but that left the page openable by root alone while its backend
+ * (VolunteerPointsController, 4 personal read endpoints) authorizes every
+ * team role — so every non-root team member was redirected away from a page
+ * the API serves them. The mechanism question is settled by the data itself:
+ * DepartmentDefaultMap records that the controller consults no department, so
+ * a department default is the wrong tool and a role default is the only one
+ * that fits. The mapped roles are EXACTLY the canonical, non-root roles of the
+ * read route group in routes/api.php (`operations` prefix) — never more, so
+ * page access cannot open a page whose reads would 403. Awarding/redeeming
+ * stays gated by that route group's narrower manager middleware; opening the
+ * page grants none of it.
  *   - organizational_departments.members — DEFERRED pending the data-exposure
  *     decision.
  *   - The 3 leader-owned surfaces (structure, permissions_delegation,
@@ -51,7 +64,6 @@ final class RoleDefaultMap
         'operations.weekly_reports',
         'operations.meeting_reports',
         'operations.board',
-        'operations.impact_points',
         'organizational_departments.members',
     ];
 
@@ -104,6 +116,7 @@ final class RoleDefaultMap
             'operations.accepted_volunteers',
             'operations.calendar',
             'operations.forms',
+            'operations.impact_points',
             'operations.meeting_lounge',
             'operations.meetings',
             'operations.registrations_requests',
@@ -111,6 +124,7 @@ final class RoleDefaultMap
             'operations.tickets_workspace',
             'operations.volunteers_management',
             'operations.workshop_requests',
+            'organizational_departments.ai_expert_applications',
             'organizational_departments.consultant_applications',
             'organizational_departments.department_units',
             'organizational_departments.partners',
@@ -128,11 +142,14 @@ final class RoleDefaultMap
             'organizational_departments.workspace',
         ],
         'ai_manager' => [
+            'operations.impact_points',
             'operations.meeting_lounge',
+            'organizational_departments.ai_expert_applications',
             'organizational_departments.ai_workspace',
         ],
         'community_manager' => [
             'operations.forms',
+            'operations.impact_points',
             'operations.meeting_lounge',
             'operations.meetings',
             'operations.tasks',
@@ -142,6 +159,7 @@ final class RoleDefaultMap
             'personal.resource_center_courses',
         ],
         'department_manager' => [
+            'operations.impact_points',
             'operations.meeting_lounge',
             'operations.workshop_requests',
             'organizational_departments.department_overview',
@@ -153,6 +171,7 @@ final class RoleDefaultMap
         'executive_admin' => [
             'finance.executive_financial_requests',
             'operations.dashboard_overview',
+            'operations.impact_points',
             'operations.kpi_dashboard',
             'operations.meeting_lounge',
             'operations.reports_dashboard',
@@ -173,6 +192,7 @@ final class RoleDefaultMap
             'finance.program_approvals',
             'finance.revenues',
             'finance.transactions',
+            'operations.impact_points',
             'operations.meeting_lounge',
             'operations.workshop_requests',
             'personal.resource_center_courses',
@@ -190,16 +210,19 @@ final class RoleDefaultMap
             'hr.volunteer_requests',
             'hr.volunteers',
             'operations.accepted_volunteers',
+            'operations.impact_points',
             'operations.meeting_lounge',
             'operations.workshop_requests',
             'personal.resource_center_courses',
         ],
         'instructor' => [
+            'operations.impact_points',
             'operations.meeting_lounge',
             'personal.instructor_workspace',
             'personal.resource_center_courses',
         ],
         'marketing_manager' => [
+            'operations.impact_points',
             'operations.meeting_lounge',
             'operations.workshop_requests',
             'organizational_departments.marketing',
@@ -207,6 +230,7 @@ final class RoleDefaultMap
         ],
         'operations_manager' => [
             'operations.forms',
+            'operations.impact_points',
             'operations.meeting_lounge',
             'operations.meetings',
             'operations.tasks',
@@ -220,6 +244,7 @@ final class RoleDefaultMap
         ],
         'partnerships_manager' => [
             'lms.programs',
+            'operations.impact_points',
             'operations.meeting_lounge',
             'operations.workshop_requests',
             'organizational_departments.partners',
@@ -236,6 +261,7 @@ final class RoleDefaultMap
             'lms.programs',
             'lms.progress',
             'lms.sessions',
+            'operations.impact_points',
             'operations.meeting_lounge',
             'operations.registrations_requests',
             'operations.workshop_requests',
@@ -243,6 +269,7 @@ final class RoleDefaultMap
             'personal.resource_center_courses',
         ],
         'quality_manager' => [
+            'operations.impact_points',
             'operations.meeting_lounge',
             'operations.workshop_requests',
             'personal.resource_center_courses',
@@ -258,6 +285,7 @@ final class RoleDefaultMap
             'quality.team',
         ],
         'section_lead' => [
+            'operations.impact_points',
             'operations.meeting_lounge',
             'organizational_departments.section_lead',
         ],
@@ -270,6 +298,7 @@ final class RoleDefaultMap
             'personal.student_learning',
         ],
         'support_agent' => [
+            'operations.impact_points',
             'operations.meeting_lounge',
             'operations.support_tickets',
             'operations.tickets_workspace',
@@ -277,6 +306,7 @@ final class RoleDefaultMap
             'personal.resource_center_courses',
         ],
         'volunteer' => [
+            'operations.impact_points',
             'operations.meeting_lounge',
             'personal.resource_center_courses',
         ],
