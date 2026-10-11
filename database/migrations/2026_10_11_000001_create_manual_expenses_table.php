@@ -1,0 +1,39 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('manual_expenses', function (Blueprint $table) {
+            $table->id();
+            $table->string('voucher_no', 50)->unique();
+            $table->date('date');
+            $table->foreignId('expense_account_id')->constrained('accounts')->onDelete('restrict');
+            $table->foreignId('payment_account_id')->constrained('accounts')->onDelete('restrict');
+            $table->decimal('amount', 15, 2);
+            $table->string('currency', 10)->default('USD');
+            $table->foreignId('department_id')->nullable()->constrained('departments')->onDelete('set null');
+            $table->string('department_name')->nullable();
+            $table->text('description');
+            $table->string('attachment_path')->nullable();
+            $table->string('attachment_name')->nullable();
+            $table->string('status', 30)->default('posted'); // posted, draft, cancelled
+            $table->foreignId('created_by')->nullable()->constrained('users')->onDelete('set null');
+            $table->foreignId('updated_by')->nullable()->constrained('users')->onDelete('set null');
+            $table->timestamps();
+
+            $table->index(['date', 'status']);
+            $table->index('expense_account_id');
+            $table->index('payment_account_id');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('manual_expenses');
+    }
+};

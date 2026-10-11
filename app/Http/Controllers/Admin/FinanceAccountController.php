@@ -49,7 +49,7 @@ class FinanceAccountController extends Controller
         $data = $request->validate([
             'name'             => 'required|string|max:191',
             'type'             => 'required|in:bank,cash,paypal,stripe,ing,other,payment_gateway,wallet',
-            'currency'         => 'required|in:EUR,USD,SAR,TRY,GBP',
+            'currency'         => 'required|in:EUR,USD,YER,SAR,TRY,GBP',
             'opening_balance'  => 'nullable|numeric|min:0',
             'notes'            => 'nullable|string|max:1000',
             'bank_name'        => 'nullable|string|max:191',
@@ -74,7 +74,7 @@ class FinanceAccountController extends Controller
         $data = $request->validate([
             'name'           => 'sometimes|string|max:191',
             'type'           => 'sometimes|in:bank,cash,paypal,stripe,ing,other,payment_gateway,wallet',
-            'currency'       => 'sometimes|in:EUR,USD,SAR,TRY,GBP',
+            'currency'       => 'sometimes|in:EUR,USD,YER,SAR,TRY,GBP',
             'notes'          => 'nullable|string|max:1000',
             'is_active'      => 'sometimes|boolean',
             'bank_name'      => 'nullable|string|max:191',

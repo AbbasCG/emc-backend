@@ -1428,6 +1428,19 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_ma
         Route::post('accounts',                       [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'store']);
         Route::put('accounts/{id}',                   [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'update']);
         Route::delete('accounts/{id}',                [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'destroy']);
+
+        // Manual Expenses (سندات المصروفات اليدوية)
+        Route::get('expenses/suggest-voucher-no',     [\App\Http\Controllers\Admin\ExpenseController::class, 'suggestVoucherNo']);
+        Route::apiResource('expenses',                 \App\Http\Controllers\Admin\ExpenseController::class);
+        // Attachments are private: served only through these authorized, audited endpoints.
+        Route::get('expenses/{expense}/attachment',         [\App\Http\Controllers\Admin\ExpenseController::class, 'downloadAttachment'])->name('expenses.attachment.download');
+        Route::get('expenses/{expense}/attachment/preview', [\App\Http\Controllers\Admin\ExpenseController::class, 'previewAttachment'])->name('expenses.attachment.preview');
+
+        // Manual Revenues (سندات القبض والإيرادات اليدوية)
+        Route::get('revenues/suggest-receipt-no',     [\App\Http\Controllers\Admin\RevenueController::class, 'suggestReceiptNo']);
+        Route::apiResource('revenues',                 \App\Http\Controllers\Admin\RevenueController::class);
+        Route::get('revenues/{revenue}/attachment',         [\App\Http\Controllers\Admin\RevenueController::class, 'downloadAttachment'])->name('revenues.attachment.download');
+        Route::get('revenues/{revenue}/attachment/preview', [\App\Http\Controllers\Admin\RevenueController::class, 'previewAttachment'])->name('revenues.attachment.preview');
     });
 
 // ─── KPI unified endpoint (?tab=overview|education|finance|…) ────────────────

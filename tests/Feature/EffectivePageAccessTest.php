@@ -805,7 +805,7 @@ class EffectivePageAccessTest extends TestCase
 
         // Deliberately not pinned to an exact number (framework internals make
         // that brittle). What matters is that the cost is bounded by the user's
-        // department count, not by the 131-entry catalog.
+        // department count, not by the 133-entry catalog.
         $this->assertLessThan(
             (int) ($catalogSize / 4),
             $count,
@@ -931,7 +931,7 @@ class EffectivePageAccessTest extends TestCase
     {
         $svc = app(RolePageDefaultService::class);
 
-        $this->assertCount(122, $svc->eligibleKeys());
+        $this->assertCount(124, $svc->eligibleKeys());
         $this->assertNotContains(self::PROTECTED_PAGE, $svc->eligibleKeys());
     }
 
@@ -950,7 +950,7 @@ class EffectivePageAccessTest extends TestCase
         $svc = app(UserPageAccessOverrideService::class);
         $target = $this->ordinaryUser();
 
-        $this->assertCount(122, $svc->eligibleKeys());
+        $this->assertCount(124, $svc->eligibleKeys());
         $this->assertSame([], $svc->getOverrides($target));
 
         $svc->setOverride($this->superAdmin(), $target, self::MEMBER_PAGE, UserPageAccessState::Allow);
@@ -967,7 +967,7 @@ class EffectivePageAccessTest extends TestCase
     {
         $all = PageAccessCatalog::all();
 
-        $this->assertCount(131, $all);
+        $this->assertCount(133, $all);
         $this->assertTrue(PageAccessCatalog::find(self::PROTECTED_PAGE)->isProtected());
         $this->assertFalse(PageAccessCatalog::find(self::MEMBER_PAGE)->isProtected());
     }

@@ -1,0 +1,40 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('manual_revenues', function (Blueprint $table) {
+            $table->id();
+            $table->string('receipt_no', 50)->unique();
+            $table->date('date');
+            $table->foreignId('revenue_account_id')->constrained('accounts')->onDelete('restrict');
+            $table->foreignId('deposit_account_id')->constrained('accounts')->onDelete('restrict');
+            $table->decimal('amount', 15, 2);
+            $table->string('currency', 10)->default('USD');
+            $table->string('payer_name')->comment('اسم المودع / الجهة الدافعة');
+            $table->unsignedBigInteger('program_id')->nullable();
+            $table->string('program_name')->nullable();
+            $table->text('description');
+            $table->string('attachment_path')->nullable();
+            $table->string('attachment_name')->nullable();
+            $table->string('status', 30)->default('posted'); // posted, draft, cancelled
+            $table->foreignId('created_by')->nullable()->constrained('users')->onDelete('set null');
+            $table->foreignId('updated_by')->nullable()->constrained('users')->onDelete('set null');
+            $table->timestamps();
+
+            $table->index(['date', 'status']);
+            $table->index('revenue_account_id');
+            $table->index('deposit_account_id');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('manual_revenues');
+    }
+};

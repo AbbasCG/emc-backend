@@ -187,6 +187,8 @@ class AppServiceProvider extends ServiceProvider
 
         // Finance manual payments
         Gate::policy(ManualPayment::class, ManualPaymentPolicy::class);
+        Gate::policy(\App\Models\ManualExpense::class, \App\Policies\ManualExpensePolicy::class);
+        Gate::policy(\App\Models\ManualRevenue::class, \App\Policies\ManualRevenuePolicy::class);
         Gate::policy(ProductUpdate::class, ProductUpdatePolicy::class);
     }
 
