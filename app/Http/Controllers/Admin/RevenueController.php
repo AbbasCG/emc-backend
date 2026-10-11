@@ -8,18 +8,29 @@ use App\Models\AccountJournalEntry;
 use App\Models\ManualRevenue;
 use App\Models\Course;
 use App\Services\AuditLogService;
+use App\Services\Finance\VoucherAttachmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\Response;
 
 class RevenueController extends Controller
 {
+    private const ATTACHMENT_DIR = 'receipt_vouchers';
+
+    /** Same set FinanceAccountController accepts. */
+    private const CURRENCIES = ['EUR', 'USD', 'YER', 'SAR', 'TRY', 'GBP'];
+
+    public function __construct(private readonly VoucherAttachmentService $attachments) {}
+
     /**
      * Get list of manual revenues with filtering and summary metrics.
      */
     public function index(Request $request): JsonResponse
     {
+        $this->authorize('viewAny', ManualRevenue::class);
+
         $query = ManualRevenue::with([
             'revenueAccount',
             'depositAccount',
@@ -69,7 +80,7 @@ class RevenueController extends Controller
 
         $query->orderBy('date', 'desc')->orderBy('id', 'desc');
 
-        $perPage = $request->input('per_page', 20);
+        $perPage = min(max((int) $request->input('per_page', 20), 1), 100);
         $revenues = $query->paginate($perPage);
 
         // Summary statistics
@@ -78,8 +89,17 @@ class RevenueController extends Controller
 
         $byCategory = ManualRevenue::where('manual_revenues.status', 'posted')
             ->join('accounts', 'manual_revenues.revenue_account_id', '=', 'accounts.id')
-            ->select('accounts.name_ar as category_name', 'accounts.code as category_code', DB::raw('SUM(manual_revenues.amount) as total'))
-            ->groupBy('accounts.name_ar', 'accounts.code')
+            ->select('accounts.name_ar as category_name', 'accounts.code as category_code', 'manual_revenues.currency', DB::raw('SUM(manual_revenues.amount) as total'))
+            ->groupBy('accounts.name_ar', 'accounts.code', 'manual_revenues.currency')
+            ->toBase()
+            ->get();
+
+        // Amounts in different currencies are never added together.
+        $byCurrency = ManualRevenue::where('status', 'posted')
+            ->select('currency', DB::raw('SUM(amount) as total'), DB::raw('COUNT(*) as count'))
+            ->groupBy('currency')
+            ->orderBy('currency')
+            ->toBase()
             ->get();
 
         return response()->json([
@@ -89,6 +109,7 @@ class RevenueController extends Controller
                 'total_amount' => $totalAmount,
                 'total_count'  => $totalCount,
                 'by_category'  => $byCategory,
+                'by_currency'  => $byCurrency,
             ],
         ]);
     }
@@ -98,6 +119,8 @@ class RevenueController extends Controller
      */
     public function suggestReceiptNo(): JsonResponse
     {
+        $this->authorize('create', ManualRevenue::class);
+
         $year = date('Y');
         $prefix = "RV-{$year}-";
 
@@ -125,14 +148,15 @@ class RevenueController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        $this->authorize('create', ManualRevenue::class);
+
         $validated = $request->validate([
-            'receipt_no font'    => ['nullable', 'string', 'max:50'],
             'receipt_no'         => ['nullable', 'string', 'max:50', 'unique:manual_revenues,receipt_no'],
             'date'               => ['required', 'date'],
             'revenue_account_id' => ['required', 'exists:accounts,id'],
-            'deposit_account_id' => ['required', 'exists:accounts,id'],
+            'deposit_account_id' => ['required', 'exists:accounts,id', 'different:revenue_account_id'],
             'amount'             => ['required', 'numeric', 'gt:0'],
-            'currency'           => ['nullable', 'string', 'max:10'],
+            'currency'           => ['nullable', 'string', 'in:'.implode(',', self::CURRENCIES)],
             'payer_name'         => ['required', 'string', 'max:255'],
             'program_id'         => ['nullable', 'integer'],
             'program_name'       => ['nullable', 'string', 'max:255'],
@@ -140,6 +164,8 @@ class RevenueController extends Controller
             'status'             => ['nullable', 'in:posted,draft,cancelled'],
             'attachment'         => ['nullable', 'file', 'mimes:pdf,png,jpg,jpeg', 'max:10240'], // 10MB max
         ]);
+
+        $this->assertPostableAccounts($validated);
 
         $user = $request->user();
 
@@ -160,9 +186,7 @@ class RevenueController extends Controller
         $attachmentPath = null;
         $attachmentName = null;
         if ($request->hasFile('attachment')) {
-            $file = $request->file('attachment');
-            $attachmentName = $file->getClientOriginalName();
-            $attachmentPath = $file->store('receipt_vouchers', 'public');
+            [$attachmentPath, $attachmentName] = $this->attachments->store($request->file('attachment'), self::ATTACHMENT_DIR);
         }
 
         // Lookup program name if program_id provided
@@ -177,31 +201,36 @@ class RevenueController extends Controller
         $revenueStatus = $validated['status'] ?? 'posted';
         $currency = $validated['currency'] ?? 'USD';
 
-        $revenue = DB::transaction(function () use ($validated, $receiptNo, $attachmentPath, $attachmentName, $programName, $revenueStatus, $currency, $user) {
-            $manualRevenue = ManualRevenue::create([
-                'receipt_no'         => $receiptNo,
-                'date'               => $validated['date'],
-                'revenue_account_id' => $validated['revenue_account_id'],
-                'deposit_account_id' => $validated['deposit_account_id'],
-                'amount'             => $validated['amount'],
-                'currency'           => $currency,
-                'payer_name'         => $validated['payer_name'],
-                'program_id'         => $validated['program_id'] ?? null,
-                'program_name'       => $programName,
-                'description'        => $validated['description'],
-                'attachment_path'    => $attachmentPath,
-                'attachment_name'    => $attachmentName,
-                'status'             => $revenueStatus,
-                'created_by'         => $user?->id,
-            ]);
+        try {
+            $revenue = DB::transaction(function () use ($validated, $receiptNo, $attachmentPath, $attachmentName, $programName, $revenueStatus, $currency, $user) {
+                $manualRevenue = ManualRevenue::create([
+                    'receipt_no'         => $receiptNo,
+                    'date'               => $validated['date'],
+                    'revenue_account_id' => $validated['revenue_account_id'],
+                    'deposit_account_id' => $validated['deposit_account_id'],
+                    'amount'             => $validated['amount'],
+                    'currency'           => $currency,
+                    'payer_name'         => $validated['payer_name'],
+                    'program_id'         => $validated['program_id'] ?? null,
+                    'program_name'       => $programName,
+                    'description'        => $validated['description'],
+                    'attachment_path'    => $attachmentPath,
+                    'attachment_name'    => $attachmentName,
+                    'status'             => $revenueStatus,
+                    'created_by'         => $user?->id,
+                ]);
 
-            // If posted, generate the double-entry journal entries
-            if ($revenueStatus === 'posted') {
-                $this->createJournalEntries($manualRevenue);
-            }
+                // If posted, generate the double-entry journal entries
+                if ($revenueStatus === 'posted') {
+                    $this->createJournalEntries($manualRevenue);
+                }
 
-            return $manualRevenue;
-        });
+                return $manualRevenue;
+            });
+        } catch (\Throwable $e) {
+            $this->attachments->delete($attachmentPath, self::ATTACHMENT_DIR);
+            throw $e;
+        }
 
         $revenue->load(['revenueAccount', 'depositAccount', 'program', 'creator', 'journalEntries.account']);
 
@@ -228,6 +257,8 @@ class RevenueController extends Controller
             'journalEntries.account',
         ])->findOrFail($id);
 
+        $this->authorize('view', $revenue);
+
         return response()->json([
             'success' => true,
             'data'    => $revenue,
@@ -235,19 +266,23 @@ class RevenueController extends Controller
     }
 
     /**
-     * Update a receipt voucher.
+     * Update a draft receipt voucher. Posting a draft generates its journal
+     * entries; a posted voucher is immutable and is refused with a 422.
      */
     public function update(Request $request, int $id): JsonResponse
     {
         $revenue = ManualRevenue::findOrFail($id);
+        $this->authorize('update', $revenue);
+        $this->assertNotPosted($revenue);
+
         $oldData = $revenue->toArray();
 
         $validated = $request->validate([
             'date'               => ['required', 'date'],
             'revenue_account_id' => ['required', 'exists:accounts,id'],
-            'deposit_account_id' => ['required', 'exists:accounts,id'],
+            'deposit_account_id' => ['required', 'exists:accounts,id', 'different:revenue_account_id'],
             'amount'             => ['required', 'numeric', 'gt:0'],
-            'currency'           => ['nullable', 'string', 'max:10'],
+            'currency'           => ['nullable', 'string', 'in:'.implode(',', self::CURRENCIES)],
             'payer_name'         => ['required', 'string', 'max:255'],
             'program_id'         => ['nullable', 'integer'],
             'program_name'       => ['nullable', 'string', 'max:255'],
@@ -256,16 +291,17 @@ class RevenueController extends Controller
             'attachment'         => ['nullable', 'file', 'mimes:pdf,png,jpg,jpeg', 'max:10240'],
         ]);
 
+        $this->assertPostableAccounts($validated);
+
         $user = $request->user();
 
-        // Handle attachment file upload if new file provided
+        // Store a replacement attachment; the old file is removed only once the update commits.
+        $oldAttachment = null;
+        $newAttachment = null;
         if ($request->hasFile('attachment')) {
-            if ($revenue->attachment_path && Storage::disk('public')->exists($revenue->attachment_path)) {
-                Storage::disk('public')->delete($revenue->attachment_path);
-            }
-            $file = $request->file('attachment');
-            $revenue->attachment_name = $file->getClientOriginalName();
-            $revenue->attachment_path = $file->store('receipt_vouchers', 'public');
+            $oldAttachment = $revenue->attachment_path;
+            [$newAttachment, $revenue->attachment_name] = $this->attachments->store($request->file('attachment'), self::ATTACHMENT_DIR);
+            $revenue->attachment_path = $newAttachment;
         }
 
         // Lookup program name if program_id provided
@@ -277,27 +313,35 @@ class RevenueController extends Controller
             }
         }
 
-        DB::transaction(function () use ($revenue, $validated, $programName, $user) {
-            $revenue->update([
-                'date'               => $validated['date'],
-                'revenue_account_id' => $validated['revenue_account_id'],
-                'deposit_account_id' => $validated['deposit_account_id'],
-                'amount'             => $validated['amount'],
-                'currency'           => $validated['currency'] ?? 'USD',
-                'payer_name'         => $validated['payer_name'],
-                'program_id'         => $validated['program_id'] ?? null,
-                'program_name'       => $programName,
-                'description'        => $validated['description'],
-                'status'             => $validated['status'],
-                'updated_by'         => $user?->id,
-            ]);
+        try {
+            DB::transaction(function () use ($revenue, $validated, $programName, $user) {
+                $revenue->update([
+                    'date'               => $validated['date'],
+                    'revenue_account_id' => $validated['revenue_account_id'],
+                    'deposit_account_id' => $validated['deposit_account_id'],
+                    'amount'             => $validated['amount'],
+                    'currency'           => $validated['currency'] ?? $revenue->currency ?? 'USD',
+                    'payer_name'         => $validated['payer_name'],
+                    'program_id'         => $validated['program_id'] ?? null,
+                    'program_name'       => $programName,
+                    'description'        => $validated['description'],
+                    'status'             => $validated['status'],
+                    'updated_by'         => $user?->id,
+                ]);
 
-            // Re-sync journal entries
-            AccountJournalEntry::where('manual_revenue_id', $revenue->id)->delete();
-            if ($revenue->status === 'posted') {
-                $this->createJournalEntries($revenue);
-            }
-        });
+                // A draft has no journal entries; posting it creates them once.
+                if ($revenue->status === 'posted') {
+                    $this->createJournalEntries($revenue);
+                }
+            });
+        } catch (\Throwable $e) {
+            $this->attachments->delete($newAttachment, self::ATTACHMENT_DIR);
+            throw $e;
+        }
+
+        if ($oldAttachment) {
+            $this->attachments->delete($oldAttachment, self::ATTACHMENT_DIR);
+        }
 
         $revenue->load(['revenueAccount', 'depositAccount', 'program', 'creator', 'updater', 'journalEntries.account']);
 
@@ -305,35 +349,90 @@ class RevenueController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'تم تحديث سند القبض وإعادة ترحيل القيد المحاسبي',
+            'message' => $revenue->status === 'posted' ? 'تم تحديث سند القبض وترحيل القيد المحاسبي' : 'تم تحديث سند القبض',
             'data'    => $revenue,
         ]);
     }
 
     /**
-     * Delete/Cancel receipt voucher.
+     * Delete a draft or cancelled receipt voucher. Posted vouchers are never
+     * hard-deleted — their journal entries are part of the ledger.
      */
     public function destroy(int $id): JsonResponse
     {
         $revenue = ManualRevenue::findOrFail($id);
+        $this->authorize('delete', $revenue);
+        $this->assertNotPosted($revenue);
+
         $receiptNo = $revenue->receipt_no;
+        $attachmentPath = $revenue->attachment_path;
 
-        DB::transaction(function () use ($revenue) {
-            AccountJournalEntry::where('manual_revenue_id', $revenue->id)->delete();
+        $revenue->delete();
+        $this->attachments->delete($attachmentPath, self::ATTACHMENT_DIR);
 
-            if ($revenue->attachment_path && Storage::disk('public')->exists($revenue->attachment_path)) {
-                Storage::disk('public')->delete($revenue->attachment_path);
-            }
-
-            $revenue->delete();
-        });
-
-        AuditLogService::logDelete($revenue, "حذف سند القبض ({$receiptNo}) وإلغاء القيد المحاسبي المرتبط به");
+        AuditLogService::logDelete($revenue, "حذف مسودة سند القبض ({$receiptNo})");
 
         return response()->json([
             'success' => true,
-            'message' => 'تم حذف سند القبض وإلغاء القيد المحاسبي بنجاح',
+            'message' => 'تم حذف سند القبض بنجاح',
         ]);
+    }
+
+    /**
+     * Download the voucher's attachment from private storage (audited).
+     */
+    public function downloadAttachment(int $id): Response
+    {
+        return $this->attachmentResponse($id, false);
+    }
+
+    /**
+     * Inline preview of the voucher's attachment from private storage (audited).
+     */
+    public function previewAttachment(int $id): Response
+    {
+        return $this->attachmentResponse($id, true);
+    }
+
+    private function attachmentResponse(int $id, bool $inline): Response
+    {
+        $revenue = ManualRevenue::findOrFail($id);
+        $this->authorize('downloadAttachment', $revenue);
+
+        return $this->attachments->respond($revenue, self::ATTACHMENT_DIR, "سند القبض {$revenue->receipt_no}", $inline);
+    }
+
+    private function assertNotPosted(ManualRevenue $revenue): void
+    {
+        if ($revenue->isPosted()) {
+            throw ValidationException::withMessages([
+                'status' => 'سند القبض مُرحّل محاسبياً ولا يمكن تعديله أو حذفه. لتصحيحه سجّل سنداً عكسياً.',
+            ]);
+        }
+    }
+
+    /**
+     * Journal lines may only post to leaf (selectable) accounts, and the
+     * revenue side must be a credit-nature account.
+     */
+    private function assertPostableAccounts(array $validated): void
+    {
+        $accounts = Account::whereIn('id', [$validated['revenue_account_id'], $validated['deposit_account_id']])
+            ->get()->keyBy('id');
+        $revenueAccount = $accounts->get((int) $validated['revenue_account_id']);
+        $depositAccount = $accounts->get((int) $validated['deposit_account_id']);
+
+        $errors = [];
+        if (! $revenueAccount?->is_selectable || $revenueAccount->type !== 'credit') {
+            $errors['revenue_account_id'] = 'حساب الإيراد يجب أن يكون حساباً فرعياً قابلاً للترحيل ومن طبيعة دائنة.';
+        }
+        if (! $depositAccount?->is_selectable) {
+            $errors['deposit_account_id'] = 'حساب الإيداع يجب أن يكون حساباً فرعياً قابلاً للترحيل.';
+        }
+
+        if ($errors) {
+            throw ValidationException::withMessages($errors);
+        }
     }
 
     /**

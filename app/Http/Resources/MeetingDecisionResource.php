@@ -13,7 +13,6 @@ class MeetingDecisionResource extends JsonResource
             'id'          => $this->id,
             'meeting_id'  => $this->meeting_id,
             'title'       => $this->title,
-            'text'        => $this->title,
             'description' => $this->description,
             'decided_by'  => $this->whenLoaded('decidedBy', fn () => [
                 'id'   => $this->decidedBy->id,

@@ -8,18 +8,29 @@ use App\Models\AccountJournalEntry;
 use App\Models\Department;
 use App\Models\ManualExpense;
 use App\Services\AuditLogService;
+use App\Services\Finance\VoucherAttachmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\Response;
 
 class ExpenseController extends Controller
 {
+    private const ATTACHMENT_DIR = 'expense_vouchers';
+
+    /** Same set FinanceAccountController accepts. */
+    private const CURRENCIES = ['EUR', 'USD', 'YER', 'SAR', 'TRY', 'GBP'];
+
+    public function __construct(private readonly VoucherAttachmentService $attachments) {}
+
     /**
      * Get list of manual expenses with filtering and summary metrics.
      */
     public function index(Request $request): JsonResponse
     {
+        $this->authorize('viewAny', ManualExpense::class);
+
         $query = ManualExpense::with([
             'expenseAccount',
             'paymentAccount',
@@ -68,17 +79,26 @@ class ExpenseController extends Controller
 
         $query->orderBy('date', 'desc')->orderBy('id', 'desc');
 
-        $perPage = $request->input('per_page', 20);
+        $perPage = min(max((int) $request->input('per_page', 20), 1), 100);
         $expenses = $query->paginate($perPage);
 
         // Calculate summary statistics
         $totalAmount = (float) ManualExpense::where('status', 'posted')->sum('amount');
         $totalCount = ManualExpense::where('status', 'posted')->count();
-        
+
         $byCategory = ManualExpense::where('manual_expenses.status', 'posted')
             ->join('accounts', 'manual_expenses.expense_account_id', '=', 'accounts.id')
-            ->select('accounts.name_ar as category_name', 'accounts.code as category_code', DB::raw('SUM(manual_expenses.amount) as total'))
-            ->groupBy('accounts.name_ar', 'accounts.code')
+            ->select('accounts.name_ar as category_name', 'accounts.code as category_code', 'manual_expenses.currency', DB::raw('SUM(manual_expenses.amount) as total'))
+            ->groupBy('accounts.name_ar', 'accounts.code', 'manual_expenses.currency')
+            ->toBase()
+            ->get();
+
+        // Amounts in different currencies are never added together.
+        $byCurrency = ManualExpense::where('status', 'posted')
+            ->select('currency', DB::raw('SUM(amount) as total'), DB::raw('COUNT(*) as count'))
+            ->groupBy('currency')
+            ->orderBy('currency')
+            ->toBase()
             ->get();
 
         return response()->json([
@@ -88,6 +108,7 @@ class ExpenseController extends Controller
                 'total_amount' => $totalAmount,
                 'total_count'  => $totalCount,
                 'by_category'  => $byCategory,
+                'by_currency'  => $byCurrency,
             ],
         ]);
     }
@@ -97,6 +118,8 @@ class ExpenseController extends Controller
      */
     public function suggestVoucherNo(): JsonResponse
     {
+        $this->authorize('create', ManualExpense::class);
+
         $year = date('Y');
         $prefix = "PV-{$year}-";
 
@@ -124,19 +147,23 @@ class ExpenseController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        $this->authorize('create', ManualExpense::class);
+
         $validated = $request->validate([
             'voucher_no'         => ['nullable', 'string', 'max:50', 'unique:manual_expenses,voucher_no'],
             'date'               => ['required', 'date'],
             'expense_account_id' => ['required', 'exists:accounts,id'],
-            'payment_account_id' => ['required', 'exists:accounts,id'],
+            'payment_account_id' => ['required', 'exists:accounts,id', 'different:expense_account_id'],
             'amount'             => ['required', 'numeric', 'gt:0'],
-            'currency'           => ['nullable', 'string', 'max:10'],
+            'currency'           => ['nullable', 'string', 'in:'.implode(',', self::CURRENCIES)],
             'department_id'      => ['nullable', 'exists:departments,id'],
             'department_name'    => ['nullable', 'string', 'max:255'],
             'description'        => ['required', 'string'],
             'status'             => ['nullable', 'in:posted,draft,cancelled'],
             'attachment'         => ['nullable', 'file', 'mimes:pdf,png,jpg,jpeg', 'max:10240'], // 10MB max
         ]);
+
+        $this->assertPostableAccounts($validated);
 
         $user = $request->user();
 
@@ -157,9 +184,7 @@ class ExpenseController extends Controller
         $attachmentPath = null;
         $attachmentName = null;
         if ($request->hasFile('attachment')) {
-            $file = $request->file('attachment');
-            $attachmentName = $file->getClientOriginalName();
-            $attachmentPath = $file->store('expense_vouchers', 'public');
+            [$attachmentPath, $attachmentName] = $this->attachments->store($request->file('attachment'), self::ATTACHMENT_DIR);
         }
 
         // Lookup department name if department_id provided
@@ -174,30 +199,35 @@ class ExpenseController extends Controller
         $expenseStatus = $validated['status'] ?? 'posted';
         $currency = $validated['currency'] ?? 'USD';
 
-        $expense = DB::transaction(function () use ($validated, $voucherNo, $attachmentPath, $attachmentName, $departmentName, $expenseStatus, $currency, $user) {
-            $manualExpense = ManualExpense::create([
-                'voucher_no'         => $voucherNo,
-                'date'               => $validated['date'],
-                'expense_account_id' => $validated['expense_account_id'],
-                'payment_account_id' => $validated['payment_account_id'],
-                'amount'             => $validated['amount'],
-                'currency'           => $currency,
-                'department_id'      => $validated['department_id'] ?? null,
-                'department_name'    => $departmentName,
-                'description'        => $validated['description'],
-                'attachment_path'    => $attachmentPath,
-                'attachment_name'    => $attachmentName,
-                'status'             => $expenseStatus,
-                'created_by'         => $user?->id,
-            ]);
+        try {
+            $expense = DB::transaction(function () use ($validated, $voucherNo, $attachmentPath, $attachmentName, $departmentName, $expenseStatus, $currency, $user) {
+                $manualExpense = ManualExpense::create([
+                    'voucher_no'         => $voucherNo,
+                    'date'               => $validated['date'],
+                    'expense_account_id' => $validated['expense_account_id'],
+                    'payment_account_id' => $validated['payment_account_id'],
+                    'amount'             => $validated['amount'],
+                    'currency'           => $currency,
+                    'department_id'      => $validated['department_id'] ?? null,
+                    'department_name'    => $departmentName,
+                    'description'        => $validated['description'],
+                    'attachment_path'    => $attachmentPath,
+                    'attachment_name'    => $attachmentName,
+                    'status'             => $expenseStatus,
+                    'created_by'         => $user?->id,
+                ]);
 
-            // If posted, generate the double-entry journal entries
-            if ($expenseStatus === 'posted') {
-                $this->createJournalEntries($manualExpense);
-            }
+                // If posted, generate the double-entry journal entries
+                if ($expenseStatus === 'posted') {
+                    $this->createJournalEntries($manualExpense);
+                }
 
-            return $manualExpense;
-        });
+                return $manualExpense;
+            });
+        } catch (\Throwable $e) {
+            $this->attachments->delete($attachmentPath, self::ATTACHMENT_DIR);
+            throw $e;
+        }
 
         $expense->load(['expenseAccount', 'paymentAccount', 'department', 'creator', 'journalEntries.account']);
 
@@ -224,6 +254,8 @@ class ExpenseController extends Controller
             'journalEntries.account',
         ])->findOrFail($id);
 
+        $this->authorize('view', $expense);
+
         return response()->json([
             'success' => true,
             'data'    => $expense,
@@ -231,19 +263,23 @@ class ExpenseController extends Controller
     }
 
     /**
-     * Update an expense voucher.
+     * Update a draft expense voucher. Posting a draft generates its journal
+     * entries; a posted voucher is immutable and is refused with a 422.
      */
     public function update(Request $request, int $id): JsonResponse
     {
         $expense = ManualExpense::findOrFail($id);
+        $this->authorize('update', $expense);
+        $this->assertNotPosted($expense);
+
         $oldData = $expense->toArray();
 
         $validated = $request->validate([
             'date'               => ['required', 'date'],
             'expense_account_id' => ['required', 'exists:accounts,id'],
-            'payment_account_id' => ['required', 'exists:accounts,id'],
+            'payment_account_id' => ['required', 'exists:accounts,id', 'different:expense_account_id'],
             'amount'             => ['required', 'numeric', 'gt:0'],
-            'currency'           => ['nullable', 'string', 'max:10'],
+            'currency'           => ['nullable', 'string', 'in:'.implode(',', self::CURRENCIES)],
             'department_id'      => ['nullable', 'exists:departments,id'],
             'department_name'    => ['nullable', 'string', 'max:255'],
             'description'        => ['required', 'string'],
@@ -251,17 +287,17 @@ class ExpenseController extends Controller
             'attachment'         => ['nullable', 'file', 'mimes:pdf,png,jpg,jpeg', 'max:10240'],
         ]);
 
+        $this->assertPostableAccounts($validated);
+
         $user = $request->user();
 
-        // Handle attachment file upload if new file provided
+        // Store a replacement attachment; the old file is removed only once the update commits.
+        $oldAttachment = null;
+        $newAttachment = null;
         if ($request->hasFile('attachment')) {
-            // Remove old file if exists
-            if ($expense->attachment_path && Storage::disk('public')->exists($expense->attachment_path)) {
-                Storage::disk('public')->delete($expense->attachment_path);
-            }
-            $file = $request->file('attachment');
-            $expense->attachment_name = $file->getClientOriginalName();
-            $expense->attachment_path = $file->store('expense_vouchers', 'public');
+            $oldAttachment = $expense->attachment_path;
+            [$newAttachment, $expense->attachment_name] = $this->attachments->store($request->file('attachment'), self::ATTACHMENT_DIR);
+            $expense->attachment_path = $newAttachment;
         }
 
         // Lookup department name if department_id provided
@@ -273,26 +309,34 @@ class ExpenseController extends Controller
             }
         }
 
-        DB::transaction(function () use ($expense, $validated, $departmentName, $user) {
-            $expense->update([
-                'date'               => $validated['date'],
-                'expense_account_id' => $validated['expense_account_id'],
-                'payment_account_id' => $validated['payment_account_id'],
-                'amount'             => $validated['amount'],
-                'currency'           => $validated['currency'] ?? 'USD',
-                'department_id'      => $validated['department_id'] ?? null,
-                'department_name'    => $departmentName,
-                'description'        => $validated['description'],
-                'status'             => $validated['status'],
-                'updated_by'         => $user?->id,
-            ]);
+        try {
+            DB::transaction(function () use ($expense, $validated, $departmentName, $user) {
+                $expense->update([
+                    'date'               => $validated['date'],
+                    'expense_account_id' => $validated['expense_account_id'],
+                    'payment_account_id' => $validated['payment_account_id'],
+                    'amount'             => $validated['amount'],
+                    'currency'           => $validated['currency'] ?? $expense->currency ?? 'USD',
+                    'department_id'      => $validated['department_id'] ?? null,
+                    'department_name'    => $departmentName,
+                    'description'        => $validated['description'],
+                    'status'             => $validated['status'],
+                    'updated_by'         => $user?->id,
+                ]);
 
-            // Re-sync journal entries
-            AccountJournalEntry::where('manual_expense_id', $expense->id)->delete();
-            if ($expense->status === 'posted') {
-                $this->createJournalEntries($expense);
-            }
-        });
+                // A draft has no journal entries; posting it creates them once.
+                if ($expense->status === 'posted') {
+                    $this->createJournalEntries($expense);
+                }
+            });
+        } catch (\Throwable $e) {
+            $this->attachments->delete($newAttachment, self::ATTACHMENT_DIR);
+            throw $e;
+        }
+
+        if ($oldAttachment) {
+            $this->attachments->delete($oldAttachment, self::ATTACHMENT_DIR);
+        }
 
         $expense->load(['expenseAccount', 'paymentAccount', 'department', 'creator', 'updater', 'journalEntries.account']);
 
@@ -300,35 +344,90 @@ class ExpenseController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'تم تحديث سند الصرف وإعادة ترحيل القيد المحاسبي',
+            'message' => $expense->status === 'posted' ? 'تم تحديث سند الصرف وترحيل القيد المحاسبي' : 'تم تحديث سند الصرف',
             'data'    => $expense,
         ]);
     }
 
     /**
-     * Delete/Cancel expense voucher.
+     * Delete a draft or cancelled expense voucher. Posted vouchers are never
+     * hard-deleted — their journal entries are part of the ledger.
      */
     public function destroy(int $id): JsonResponse
     {
         $expense = ManualExpense::findOrFail($id);
+        $this->authorize('delete', $expense);
+        $this->assertNotPosted($expense);
+
         $voucherNo = $expense->voucher_no;
+        $attachmentPath = $expense->attachment_path;
 
-        DB::transaction(function () use ($expense) {
-            AccountJournalEntry::where('manual_expense_id', $expense->id)->delete();
-            
-            if ($expense->attachment_path && Storage::disk('public')->exists($expense->attachment_path)) {
-                Storage::disk('public')->delete($expense->attachment_path);
-            }
-            
-            $expense->delete();
-        });
+        $expense->delete();
+        $this->attachments->delete($attachmentPath, self::ATTACHMENT_DIR);
 
-        AuditLogService::logDelete($expense, "حذف سند الصرف ({$voucherNo}) وإلغاء القيد المحاسبي المرتبط به");
+        AuditLogService::logDelete($expense, "حذف مسودة سند الصرف ({$voucherNo})");
 
         return response()->json([
             'success' => true,
-            'message' => 'تم حذف سند الصرف وإلغاء القيد المحاسبي بنجاح',
+            'message' => 'تم حذف سند الصرف بنجاح',
         ]);
+    }
+
+    /**
+     * Download the voucher's attachment from private storage (audited).
+     */
+    public function downloadAttachment(int $id): Response
+    {
+        return $this->attachmentResponse($id, false);
+    }
+
+    /**
+     * Inline preview of the voucher's attachment from private storage (audited).
+     */
+    public function previewAttachment(int $id): Response
+    {
+        return $this->attachmentResponse($id, true);
+    }
+
+    private function attachmentResponse(int $id, bool $inline): Response
+    {
+        $expense = ManualExpense::findOrFail($id);
+        $this->authorize('downloadAttachment', $expense);
+
+        return $this->attachments->respond($expense, self::ATTACHMENT_DIR, "سند الصرف {$expense->voucher_no}", $inline);
+    }
+
+    private function assertNotPosted(ManualExpense $expense): void
+    {
+        if ($expense->isPosted()) {
+            throw ValidationException::withMessages([
+                'status' => 'سند الصرف مُرحّل محاسبياً ولا يمكن تعديله أو حذفه. لتصحيحه سجّل سنداً عكسياً.',
+            ]);
+        }
+    }
+
+    /**
+     * Journal lines may only post to leaf (selectable) accounts, and the
+     * expense side must be a debit-nature account.
+     */
+    private function assertPostableAccounts(array $validated): void
+    {
+        $accounts = Account::whereIn('id', [$validated['expense_account_id'], $validated['payment_account_id']])
+            ->get()->keyBy('id');
+        $expenseAccount = $accounts->get((int) $validated['expense_account_id']);
+        $paymentAccount = $accounts->get((int) $validated['payment_account_id']);
+
+        $errors = [];
+        if (! $expenseAccount?->is_selectable || $expenseAccount->type !== 'debit') {
+            $errors['expense_account_id'] = 'حساب المصروف يجب أن يكون حساباً فرعياً قابلاً للترحيل ومن طبيعة مدينة.';
+        }
+        if (! $paymentAccount?->is_selectable) {
+            $errors['payment_account_id'] = 'حساب الدفع يجب أن يكون حساباً فرعياً قابلاً للترحيل.';
+        }
+
+        if ($errors) {
+            throw ValidationException::withMessages($errors);
+        }
     }
 
     /**

@@ -31,10 +31,11 @@ use Tests\TestCase;
  * any persistent database. Everything happens in in-memory SQLite.
  *
  * STARTING STATE is the CURRENT effective state, not an empty one:
- *   - the 181 canonical Role Defaults (RoleDefaultMap: the 163 verified in
+ *   - the 185 canonical Role Defaults (RoleDefaultMap: the 163 verified in
  *     Phase 2G.4A §2 to match the live role_page_defaults table exactly — 163
  *     persisted, 0 missing, 0 unexpected — plus the 16 operations.impact_points
- *     role defaults and the 2 ai_expert_applications defaults added afterwards), and
+ *     role defaults, the 2 ai_expert_applications defaults and the 4
+ *     finance.expenses / finance.revenues defaults added afterwards), and
  *   - the 6 catalog-declared Authenticated Baseline capabilities, which are
  *     metadata and need no rows at all.
  *
@@ -126,7 +127,7 @@ class DepartmentDefaultSimulationTest extends TestCase
         return ['allowed' => $allowed, 'provenance' => $provenance];
     }
 
-    /** The CURRENT persisted state: the 181 canonical Role Defaults. */
+    /** The CURRENT persisted state: the 185 canonical Role Defaults. */
     private function applyRoleDefaults(User $actor): int
     {
         $svc = app(RolePageDefaultService::class);
@@ -220,8 +221,8 @@ class DepartmentDefaultSimulationTest extends TestCase
         $actor = $this->makeUser('super_admin');
 
         $roleRows = $this->applyRoleDefaults($actor);
-        $this->assertSame(181, $roleRows);
-        $this->assertSame(181, RolePageDefault::query()->count());
+        $this->assertSame(185, $roleRows);
+        $this->assertSame(185, RolePageDefault::query()->count());
 
         $deptRows = $this->applyDepartmentDefaults($actor);
         $this->assertSame(DepartmentDefaultMap::pairCount(), $deptRows);
@@ -295,7 +296,7 @@ class DepartmentDefaultSimulationTest extends TestCase
         $this->applyRoleDefaults($actor);
         $this->applyDepartmentDefaults($actor);
 
-        $this->assertSame(181, RolePageDefault::query()->count());
+        $this->assertSame(185, RolePageDefault::query()->count());
         $this->assertSame(28, DepartmentPageDefault::query()->count());
         $this->assertSame(0, DB::table('user_page_access_overrides')->count());
     }

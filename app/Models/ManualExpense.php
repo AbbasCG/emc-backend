@@ -33,21 +33,29 @@ class ManualExpense extends Model
         'amount' => 'decimal:2',
     ];
 
-    protected $appends = [
-        'attachment_url',
+    /**
+     * Attachments live on the private disk and are served only through the
+     * authorized download endpoint — the storage path is never sent to clients.
+     */
+    public const ATTACHMENT_DISK = 'private';
+
+    protected $hidden = [
+        'attachment_path',
     ];
 
-    public function getAttachmentUrlAttribute(): ?string
+    protected $appends = [
+        'has_attachment',
+    ];
+
+    public function getHasAttachmentAttribute(): bool
     {
-        if (!$this->attachment_path) {
-            return null;
-        }
+        return (bool) $this->attachment_path;
+    }
 
-        if (str_starts_with($this->attachment_path, 'http://') || str_starts_with($this->attachment_path, 'https://')) {
-            return $this->attachment_path;
-        }
-
-        return \Illuminate\Support\Facades\Storage::disk('public')->url($this->attachment_path);
+    /** Posted vouchers carry journal entries and are immutable. */
+    public function isPosted(): bool
+    {
+        return $this->status === 'posted';
     }
 
     public function expenseAccount(): BelongsTo

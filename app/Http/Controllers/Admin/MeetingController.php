@@ -26,7 +26,7 @@ class MeetingController extends Controller
     public function index(Request $request): \Illuminate\Http\JsonResponse
     {
         $user = $request->user();
-        $query = Meeting::with(['department', 'organizer', 'report']);
+        $query = Meeting::with(['department', 'organizer']);
 
         // Quality & Governance is a cross-department oversight function — same
         // carve-out already established for Weekly Reports. Everyone else
@@ -70,7 +70,7 @@ class MeetingController extends Controller
         $data = $request->validate([
             'title'         => 'required|string|max:255',
             'description'   => 'nullable|string',
-            'type'          => 'in:executive,department,programs,partnerships,quality,external_partner,general,exec,departments,external',
+            'type'          => 'in:executive,department,programs,partnerships,quality,external_partner,general',
             'department_id' => 'nullable|exists:departments,id',
             'meeting_date'  => 'required|date',
             'start_time'    => 'required|date_format:H:i',
@@ -84,22 +84,10 @@ class MeetingController extends Controller
             'recording_url' => 'nullable|url',
         ]);
 
-        $typeAliases = [
-            'exec'        => 'executive',
-            'departments' => 'department',
-            'external'    => 'external_partner',
-        ];
-        if (! empty($data['type']) && isset($typeAliases[$data['type']])) {
-            $data['type'] = $typeAliases[$data['type']];
-        }
-
         $data['organizer_id'] = $request->user()->id;
 
-        if (empty($data['department_id'])) {
-            $defaultDeptId = $this->departmentAccess->getAccessibleDepartmentIds($request->user())->first();
-            if ($defaultDeptId) {
-                $data['department_id'] = $defaultDeptId;
-            }
+        if (empty($data['department_id']) && $request->user()->department_id) {
+            $data['department_id'] = $request->user()->department_id;
         }
 
         $meeting = Meeting::create($data);
@@ -155,7 +143,7 @@ class MeetingController extends Controller
         $data = $request->validate([
             'title'         => 'string|max:255',
             'description'   => 'nullable|string',
-            'type'          => 'in:executive,department,programs,partnerships,quality,external_partner,general,exec,departments,external',
+            'type'          => 'in:executive,department,programs,partnerships,quality,external_partner,general',
             'department_id' => 'nullable|exists:departments,id',
             'meeting_date'  => 'date',
             'start_time'    => 'date_format:H:i',
@@ -168,15 +156,6 @@ class MeetingController extends Controller
             'files'         => 'nullable|array',
             'recording_url' => 'nullable|url',
         ]);
-
-        $typeAliases = [
-            'exec'        => 'executive',
-            'departments' => 'department',
-            'external'    => 'external_partner',
-        ];
-        if (! empty($data['type']) && isset($typeAliases[$data['type']])) {
-            $data['type'] = $typeAliases[$data['type']];
-        }
 
         $meeting->update($data);
 
@@ -335,18 +314,6 @@ class MeetingController extends Controller
             'executive_requests'      => 'nullable|string',
             'next_month_goals'        => 'nullable|string',
             'improvement_suggestions' => 'nullable|string',
-            // محضر الاجتماع (تُحفظ على الاجتماع نفسه)
-            'agenda'                  => 'nullable|array',
-            'agenda.*'                => 'nullable|string|max:500',
-            'attendees'               => 'nullable|array',
-            'attendees.*.name'        => 'nullable|string|max:255',
-            'attendees.*.role'        => 'nullable|string|max:255',
-            'minutes'                 => 'nullable|string',
-            'decisions'               => 'nullable|array',
-            'decisions.*.title'       => 'nullable|string|max:255',
-            'action_items'            => 'nullable|array',
-            'action_items.*.title'    => 'nullable|string|max:255',
-            'action_items.*.due_date' => 'nullable|date',
         ]);
 
         $notesParts = array_filter([
@@ -358,93 +325,19 @@ class MeetingController extends Controller
             $data['improvement_suggestions'] ?? null,
         ]);
 
-        $report = DB::transaction(function () use ($request, $meeting, $data, $notesParts) {
-        $report = \App\Models\MeetingReport::updateOrCreate(
-            ['meeting_id' => $meeting->id],
-            [
-                'department_id'            => $meeting->department_id,
-                'title'                    => 'تقرير دوري — ' . $meeting->title,
-                'meeting_date'             => $meeting->meeting_date ?? now()->toDateString(),
-                'achieved'                 => $data['completed_tasks_summary'] ?? null,
-                'planned'                  => $data['next_month_goals'] ?? null,
-                'needs'                    => $data['executive_requests'] ?? null,
-                'needs_reason'             => $data['challenges'] ?? null,
-                'notes'                    => $notesParts ? implode("\n", $notesParts) : null,
-                'absentees'                => $data['absentees'] ?? null,
-                'team_commitment_score'    => $data['team_commitment_score'] ?? null,
-                'team_commitment_notes'    => $data['team_commitment_notes'] ?? null,
-                'completed_tasks_summary'  => $data['completed_tasks_summary'] ?? null,
-                'kpi_percentage'           => $data['kpi_percentage'] ?? null,
-                'top_interactive_member'   => $data['top_interactive_member'] ?? null,
-                'challenges'               => $data['challenges'] ?? null,
-                'executive_requests'       => $data['executive_requests'] ?? null,
-                'next_month_goals'         => $data['next_month_goals'] ?? null,
-                'improvement_suggestions'  => $data['improvement_suggestions'] ?? null,
-                'created_by'               => $request->user()->id,
-            ]
-        );
+        $report = \App\Models\MeetingReport::create([
+            'department_id' => $meeting->department_id,
+            'meeting_id'    => $meeting->id,
+            'title'         => 'تقرير دوري — ' . $meeting->title,
+            'meeting_date'  => $meeting->meeting_date ?? now()->toDateString(),
+            'achieved'      => $data['completed_tasks_summary'] ?? null,
+            'planned'       => $data['next_month_goals'] ?? null,
+            'needs'         => $data['executive_requests'] ?? null,
+            'needs_reason'  => $data['challenges'] ?? null,
+            'notes'         => $notesParts ? implode("\n", $notesParts) : null,
+            'created_by'    => $request->user()->id,
+        ]);
 
-        $meetingUpdates = ['status' => 'completed'];
-
-        $agenda = collect($data['agenda'] ?? [])
-            ->map(fn ($v) => trim((string) $v))
-            ->filter()
-            ->values()
-            ->all();
-        if ($agenda) {
-            $meetingUpdates['agenda'] = $agenda;
-        }
-
-        $attendees = collect($data['attendees'] ?? [])
-            ->filter(fn ($a) => filled($a['name'] ?? null))
-            ->map(fn ($a) => ['name' => trim($a['name']), 'role' => trim($a['role'] ?? '')])
-            ->values()
-            ->all();
-        if ($attendees) {
-            $meetingUpdates['attendees'] = $attendees;
-        }
-
-        if (filled($data['minutes'] ?? null)) {
-            $meetingUpdates['minutes'] = trim($data['minutes']);
-        }
-
-        $meeting->update($meetingUpdates);
-
-        // القرارات وبنود العمل: لا نمسح الموجود إلا إذا وصلت قيم جديدة غير فارغة.
-        $decisions = collect($data['decisions'] ?? [])
-            ->map(fn ($d) => trim((string) ($d['title'] ?? '')))
-            ->filter()
-            ->values();
-        if ($decisions->isNotEmpty()) {
-            $meeting->decisions()->delete();
-            foreach ($decisions as $title) {
-                $meeting->decisions()->create([
-                    'title'      => $title,
-                    'decided_by' => $request->user()->id,
-                ]);
-            }
-        }
-
-        $actionItems = collect($data['action_items'] ?? [])
-            ->filter(fn ($i) => filled($i['title'] ?? null));
-        if ($actionItems->isNotEmpty()) {
-            // البنود التي حُوِّلت لمهام فعلية تبقى كما هي.
-            $meeting->actionItems()->whereNull('task_id')->delete();
-            foreach ($actionItems as $item) {
-                $meeting->actionItems()->create([
-                    'title'    => trim($item['title']),
-                    'due_date' => $item['due_date'] ?? null,
-                    'status'   => 'pending',
-                ]);
-            }
-        }
-
-        return $report;
-        });
-
-        return response()->json([
-            'success' => true,
-            'data'    => new MeetingReportResource($report),
-        ], 200);
+        return response()->json(['success' => true, 'data' => $report], 201);
     }
 }
