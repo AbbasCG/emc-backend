@@ -1092,6 +1092,13 @@ class TicketController extends Controller
             return response()->json(['success' => false, 'message' => 'المرفق غير موجود'], 404);
         }
 
+        // file_url is server-generated, but never let a corrupted or tampered
+        // row walk outside the private disk.
+        $path = (string) $attachment->file_url;
+        if ($path === '' || str_contains($path, '..') || str_starts_with($path, '/') || str_contains($path, "\0")) {
+            return response()->json(['success' => false, 'message' => 'الملف غير موجود على القرص'], 404);
+        }
+
         $disk = Storage::disk('private');
         if (! $disk->exists($attachment->file_url)) {
             return response()->json(['success' => false, 'message' => 'الملف غير موجود على القرص'], 404);
@@ -1099,9 +1106,20 @@ class TicketController extends Controller
 
         $safeName = preg_replace('/[^a-zA-Z0-9._\- ]/', '_', $attachment->file_name ?? 'attachment') ?: 'attachment';
 
+        // MIME comes from the bytes on disk, never from the client filename.
+        $mime = $disk->mimeType($attachment->file_url) ?: 'application/octet-stream';
+
+        // Only raster images and PDFs may render inline. Anything else (legacy
+        // rows, SVG, HTML) is forced to download so it can never execute in
+        // the app's origin.
+        $inline = $mime === 'application/pdf'
+            || (str_starts_with($mime, 'image/') && $mime !== 'image/svg+xml');
+
         return response($disk->get($attachment->file_url), 200, [
-            'Content-Type' => $disk->mimeType($attachment->file_url) ?: 'application/octet-stream',
-            'Content-Disposition' => 'inline; filename="' . $safeName . '"',
+            'Content-Type' => $mime,
+            'Content-Disposition' => ($inline ? 'inline' : 'attachment') . '; filename="' . $safeName . '"',
+            'X-Content-Type-Options' => 'nosniff',
+            'Cache-Control' => 'private, no-store',
         ]);
     }
 }
