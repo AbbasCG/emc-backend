@@ -23,7 +23,10 @@ class TeamController extends Controller
         // Only return departments that belong to the public team display:
         // they must have `is_active = true` AND `name_ar` set (our EMC V3 seeder
         // always populates name_ar, while old operational departments do not have it yet).
+        // active() excludes archived departments (merged-away duplicates). The
+        // is_active flag alone is not enough: a merge archives via `status`.
         $departments = Department::query()
+            ->active()
             ->where('is_active', true)
             ->whereNotNull('name_ar')
             ->whereNotNull('name_en')   // EMC V3 team depts always have a name_en

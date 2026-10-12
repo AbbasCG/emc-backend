@@ -10,6 +10,7 @@ use App\Models\Department;
 use App\Models\Task;
 use App\Models\TeamProfile;
 use App\Models\VolunteerHrProfile;
+use App\Services\DepartmentDuplicateDetector;
 use App\Services\DepartmentLeadershipService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -110,6 +111,8 @@ class DepartmentController extends Controller
     {
         $data = $request->validate([
             'name'        => 'required|string|max:255',
+            'name_ar'     => 'nullable|string|max:255',
+            'name_en'     => 'nullable|string|max:255',
             'slug'        => 'nullable|string|unique:departments,slug',
             'description' => 'nullable|string',
             'leader_id'   => 'nullable|exists:users,id',
@@ -119,6 +122,14 @@ class DepartmentController extends Controller
             'color'       => 'nullable|string|max:50',
             'sort_order'  => 'integer',
         ]);
+
+        // departments.name_ar is NOT NULL; without this the insert 500s.
+        $data['name_ar'] = $data['name_ar'] ?? $data['name'];
+
+        // `name` may be the English name, so it also stands in for name_en.
+        if ($conflict = $this->nameConflictResponse($data['name_ar'], $data['name_en'] ?? $data['name'])) {
+            return $conflict;
+        }
 
         $data['slug'] = $data['slug'] ?? Str::slug($data['name']);
 
@@ -319,6 +330,8 @@ class DepartmentController extends Controller
     {
         $data = $request->validate([
             'name'        => 'string|max:255',
+            'name_ar'     => 'string|max:255',
+            'name_en'     => 'nullable|string|max:255',
             'slug'        => 'string|unique:departments,slug,' . $department->id,
             'description' => 'nullable|string',
             'leader_id'   => 'nullable|exists:users,id',
@@ -328,6 +341,18 @@ class DepartmentController extends Controller
             'color'       => 'nullable|string|max:50',
             'sort_order'  => 'integer',
         ]);
+
+        // Renaming into, or re-activating into, an existing department's name
+        // would recreate the duplicate this guard exists to prevent.
+        $reactivating = ($data['status'] ?? null) === 'active' && $department->status !== 'active';
+        if (isset($data['name']) || isset($data['name_ar']) || array_key_exists('name_en', $data) || $reactivating) {
+            $nameAr = $data['name_ar'] ?? $data['name'] ?? ($department->name_ar ?: $department->name);
+            $nameEn = array_key_exists('name_en', $data) ? $data['name_en'] : ($data['name'] ?? $department->name_en);
+
+            if ($conflict = $this->nameConflictResponse($nameAr, $nameEn, $department->id)) {
+                return $conflict;
+            }
+        }
 
         $department->update($data);
 
@@ -339,6 +364,25 @@ class DepartmentController extends Controller
             'success' => true,
             'data'    => new DepartmentResource($department->load(['leader', 'sections'])),
         ]);
+    }
+
+    /**
+     * 422 when another non-archived department already has this name after
+     * normalization (spacing, tatweel, hamza/alef variants, punctuation).
+     */
+    private function nameConflictResponse(?string $nameAr, ?string $nameEn, ?int $ignoreId = null): ?\Illuminate\Http\JsonResponse
+    {
+        $existing = app(DepartmentDuplicateDetector::class)->findConflict($nameAr, $nameEn, $ignoreId);
+        if (! $existing) {
+            return null;
+        }
+
+        return response()->json([
+            'success' => false,
+            'message' => 'يوجد قسم بنفس الاسم بالفعل. استخدم القسم الموجود بدلاً من إنشاء نسخة مكررة.',
+            'errors'  => ['name' => ['A department with this name already exists.']],
+            'conflicting_department_id' => $existing->id,
+        ], 422);
     }
 
     public function destroy(Department $department): \Illuminate\Http\JsonResponse

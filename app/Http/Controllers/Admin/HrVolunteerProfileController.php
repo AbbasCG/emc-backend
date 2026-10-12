@@ -84,7 +84,7 @@ class HrVolunteerProfileController extends Controller
         return response()->json([
             'success' => true,
             'data' => [
-                'departments' => Department::where('is_active', true)->orderBy('sort_order')->get(['id', 'name_ar', 'name']),
+                'departments' => Department::active()->where('is_active', true)->orderBy('sort_order')->orderBy('id')->get(['id', 'name_ar', 'name']),
                 'statuses'    => VolunteerHrProfile::STATUSES,
             ],
         ]);

@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Department;
+use App\Services\DepartmentDuplicateDetector;
 use Database\Seeders\OfficialDepartmentsSeeder;
 use Illuminate\Console\Command;
 
@@ -41,10 +42,22 @@ class SyncOfficialDepartmentsCommand extends Command
 
         $missing = [];
         $ok = [];
+        $skipped = [];
 
         foreach (OfficialDepartmentsSeeder::DEPARTMENTS as $slug => [$nameAr, $nameEn, $color, $icon, $sort]) {
             if (in_array($slug, $existingSlugs, true)) {
                 $ok[] = ['slug' => $slug, 'name_ar' => Department::query()->where('slug', $slug)->value('name_ar')];
+
+                continue;
+            }
+
+            // Slug is only one way a department can already exist. The same
+            // name under a different slug is the same department; creating it
+            // is exactly how a duplicate (e.g. ai-digital-transformation next
+            // to ai-transformation) appears. Never create it — report it.
+            $sameName = app(DepartmentDuplicateDetector::class)->findConflict($nameAr, $nameEn);
+            if ($sameName) {
+                $skipped[] = ['slug' => $slug, 'name_ar' => $nameAr, 'status' => "SKIPPED — same name as #{$sameName->id} ({$sameName->slug})"];
 
                 continue;
             }
@@ -85,6 +98,13 @@ class SyncOfficialDepartmentsCommand extends Command
             $this->table(['slug', 'name_ar', 'status'], $missing);
         } else {
             $this->info('No missing canonical official departments — nothing to create.');
+        }
+
+        if ($skipped !== []) {
+            $this->line('');
+            $this->warn(count($skipped) . ' official department(s) NOT created because a department with the same name already exists under another slug:');
+            $this->table(['slug', 'name_ar', 'status'], $skipped);
+            $this->warn('Run departments:duplicates to review.');
         }
 
         $this->line('');

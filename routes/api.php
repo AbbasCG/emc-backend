@@ -1678,7 +1678,7 @@ Route::middleware(['auth:sanctum'])->get('job-titles', [\App\Http\Controllers\Jo
 Route::middleware(['auth:sanctum'])->get('departments/options', function () {
     return response()->json([
         'success' => true,
-        'data' => \App\Models\Department::where('is_active', true)->orderBy('sort_order')->get(['id', 'name_ar', 'name']),
+        'data' => \App\Models\Department::active()->where('is_active', true)->orderBy('sort_order')->orderBy('id')->get(['id', 'name_ar', 'name']),
     ]);
 });
 

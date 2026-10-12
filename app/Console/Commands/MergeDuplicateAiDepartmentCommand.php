@@ -146,6 +146,11 @@ class MergeDuplicateAiDepartmentCommand extends Command
         'class_groups'              => ClassGroup::class,
         'job_titles'                => JobTitle::class,
         'calendar_events'           => CalendarEvent::class,
+        // manual_expenses.department_id is FK onDelete('set null') and was
+        // added after this command was verified. Without it here, a department
+        // with expenses attributed to it would look reference-free and be
+        // hard-deleted, silently nulling those expenses' attribution.
+        'manual_expenses'           => \App\Models\ManualExpense::class,
     ];
 
     protected $signature = 'departments:merge-duplicate-ai {--apply : Actually perform the merge (default is dry-run, no writes)}';

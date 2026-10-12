@@ -173,7 +173,7 @@ class TicketController extends Controller
     {
         $user = $request->user();
 
-        $departments = Department::where('is_active', true)->get(['id', 'name', 'name_ar', 'slug']);
+        $departments = Department::active()->where('is_active', true)->get(['id', 'name', 'name_ar', 'slug']);
 
         $departmentId = $request->integer('department_id') ?: null;
         $unitId = $request->integer('unit_id') ?: null;

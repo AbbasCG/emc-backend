@@ -134,7 +134,7 @@ class FinancialRequestController extends Controller
         $leaderProfiles = $this->isSuperAdmin() ? $profiles : $profiles->where('is_leader', true);
 
         $departments = $this->isSuperAdmin()
-            ? Department::where('is_active', true)->get()->map(fn($d) => [
+            ? Department::active()->where('is_active', true)->get()->map(fn($d) => [
                 'id'        => $d->id,
                 'name'      => $d->name_ar ?? $d->name ?? $d->name_en ?? '',
                 'is_leader' => true,
