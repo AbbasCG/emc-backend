@@ -152,7 +152,7 @@ class TicketStatusNotificationsTest extends TestCase
         $n = $this->notificationsFor($this->submitter, 'ticket_resolved')->sole();
         $this->assertStringContainsString('تعطل بوابة الدفع الإلكتروني', $n->message);
         $this->assertStringContainsString('تم الحل', $n->message);
-        $this->assertStringContainsString('تمت معالجة البلاغ', $n->message);
+        $this->assertStringContainsString('تم حل بلاغك', $n->message);
         // The route the SPA actually serves (/dashboard/tickets/:id), not an invented path.
         $this->assertSame("/dashboard/tickets/{$ticket->id}", $n->action_url);
     }
@@ -185,7 +185,7 @@ class TicketStatusNotificationsTest extends TestCase
 
         $this->assertStringContainsString('تعطل بوابة الدفع الإلكتروني', $html);
         $this->assertStringContainsString('تم الحل', $html);
-        $this->assertStringContainsString('تمت معالجة البلاغ الخاص بك وحلّه بنجاح.', $html);
+        $this->assertStringContainsString('تم حل البلاغ الذي قدّمته', $html);
         $this->assertStringContainsString(rtrim((string) config('app.frontend_url'), '/')."/dashboard/tickets/{$ticket->id}", $html);
         $this->assertStringNotContainsString(self::SECRET_NOTE, $html);
         $this->assertStringNotContainsString(self::SECRET_SUMMARY, $html);
@@ -430,7 +430,7 @@ class TicketStatusNotificationsTest extends TestCase
         $this->assertSame('تم اعتماد المقترح', $n->title);
         $this->assertStringContainsString('إضافة وضع ليلي للمنصة', $n->message);
         $this->assertStringContainsString('معتمد', $n->message);
-        $this->assertStringContainsString('تم اعتماد المقترح', $n->message);
+        $this->assertStringContainsString('تم اعتماد مقترحك', $n->message);
         $this->assertSame("/dashboard/tickets/{$s->id}", $n->action_url);
         $this->assertSame($s->id, (int) $n->entity_id);
     }
@@ -444,7 +444,7 @@ class TicketStatusNotificationsTest extends TestCase
         $this->assertSame('submitter@example.com', $job->toEmail);
         $this->assertSame('suggestion_approved', $job->mailable->kind);
         $html = $job->mailable->render();
-        $this->assertStringContainsString('تم اعتماد مقترحك من قبل الإدارة.', $html);
+        $this->assertStringContainsString('تمت مراجعة مقترحك واعتماده', $html);
         $this->assertStringContainsString('إضافة وضع ليلي للمنصة', $html);
         $this->assertStringContainsString("/dashboard/tickets/{$s->id}", $html);
         $this->assertStringNotContainsString(self::SECRET_NOTE, $html);
@@ -457,15 +457,15 @@ class TicketStatusNotificationsTest extends TestCase
         $this->resolve($s)->assertOk();
 
         $n = $this->notificationsFor($this->submitter, 'suggestion_implemented')->sole();
-        $this->assertSame('تمت إضافة المقترح إلى النظام', $n->title);
+        $this->assertSame('تم تنفيذ المقترح', $n->title);
         $this->assertStringContainsString('إضافة وضع ليلي للمنصة', $n->message);
-        $this->assertStringContainsString('تمت الإضافة إلى النظام', $n->message);
+        $this->assertStringContainsString('تم تنفيذ مقترحك', $n->message);
         $this->assertStringContainsString('شكرًا لمساهمتك', $n->message);
         $this->assertSame("/dashboard/tickets/{$s->id}", $n->action_url);
         $this->assertCount(0, $this->notificationsFor($this->submitter, 'ticket_resolved'));
 
         $html = $this->emailJobs()[0]->mailable->render();
-        $this->assertStringContainsString('تمت إضافة مقترحك إلى النظام. شكرًا لمساهمتك في تطوير المنصة.', $html);
+        $this->assertStringContainsString('تم تنفيذ مقترحك وإضافته إلى النظام. شكرًا لمساهمتك في تطوير المنصة.', $html);
         $this->assertStringNotContainsString(self::SECRET_SUMMARY, $html);
     }
 
@@ -590,7 +590,7 @@ class TicketStatusNotificationsTest extends TestCase
         Sanctum::actingAs($this->user('student'));
         $res = $this->getJson('/api/notifications')->assertOk();
 
-        $this->assertStringNotContainsString('تعطل بوابة الدفع الإلكتروني', $res->getContent());
+        $this->assertStringNotContainsString('تعطل بوابة الدفع الإلكتروني', json_encode($res->json(), JSON_UNESCAPED_UNICODE));
     }
 
     public function test_marking_the_notification_read_works_as_for_any_other_type(): void

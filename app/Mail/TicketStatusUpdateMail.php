@@ -12,7 +12,7 @@ use Illuminate\Queue\SerializesModels;
  * changed in a way that matters to them (resolved / approved / implemented).
  *
  * Deliberately carries ONLY what the submitter may already see in the app: the
- * title, the new status and a link. Internal notes, resolution summaries and
+ * title, reference number, new status, latest update time and a link. Internal notes, resolution summaries and
  * the handler's identity are never passed in, so they cannot leak by email. The
  * link does not grant access — the details page still authorizes the viewer.
  */
@@ -28,6 +28,9 @@ class TicketStatusUpdateMail extends Mailable
         public readonly string $statusLabel,
         public readonly string $headline,
         public readonly string $detailsUrl,
+        public readonly ?string $ticketNumber = null,
+        /** Already formatted for display, in the app timezone. */
+        public readonly ?string $updatedAt = null,
     ) {}
 
     public function envelope(): Envelope

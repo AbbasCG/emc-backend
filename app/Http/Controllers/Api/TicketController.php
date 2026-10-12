@@ -10,6 +10,7 @@ use App\Models\TicketActivityLog;
 use App\Models\TicketAttachment;
 use App\Models\User;
 use App\Services\DepartmentAccessService;
+use App\Services\TicketReporterView;
 use Illuminate\Http\Request;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
@@ -74,6 +75,22 @@ class TicketController extends Controller
         }
 
         return $ticket->assigned_to_id !== null && $ticket->assigned_to_id === $user->id;
+    }
+
+    /**
+     * Is this viewer ONLY the person who submitted the ticket - not global, not a
+     * manager of its department and not its assignee? Those viewers get the
+     * read-only, public-safe projection (TicketReporterView) instead of the
+     * operational payload. Anyone with a staff role over the ticket keeps the
+     * full payload, even when they also happen to be the submitter.
+     */
+    private function isReporterOnly(User $user, Ticket $ticket): bool
+    {
+        return $ticket->created_by_id !== null
+            && $ticket->created_by_id === $user->id
+            && ! $this->departmentAccess->isGlobal($user)
+            && ! $this->canManage($user, (int) $ticket->department_id)
+            && $ticket->assigned_to_id !== $user->id;
     }
 
     /**
@@ -570,7 +587,15 @@ class TicketController extends Controller
             return $this->forbidden();
         }
 
+        if ($this->isReporterOnly($request->user(), $ticket)) {
+            return response()->json([
+                'success' => true,
+                'data' => app(TicketReporterView::class)->present($ticket, $request->user()),
+            ]);
+        }
+
         $data = $ticket->toArray();
+        $data['viewer_role'] = 'staff';
         $data['capabilities'] = $this->buildCapabilities($request->user(), $ticket);
 
         return response()->json([
@@ -968,6 +993,13 @@ class TicketController extends Controller
             'is_internal'  => 'nullable|boolean',
         ]);
 
+        // A submitter can follow up while the ticket is open; once it is closed
+        // out the page is read-only for them.
+        if ($this->isReporterOnly($user, $ticket)
+            && in_array($ticket->status, TicketReporterView::FINAL_STATUSES, true)) {
+            return $this->forbidden('هذه التذكرة مغلقة ولا تقبل تعقيبات جديدة.');
+        }
+
         // Internal notes are for department leadership / privileged staff only.
         if ($request->boolean('is_internal') && ! $this->canManage($user, (int) $ticket->department_id)) {
             return $this->forbidden('الملاحظات الداخلية متاحة فقط لقائد الإدارة المعنية.');
@@ -1089,6 +1121,13 @@ class TicketController extends Controller
             ->first();
 
         if (! $attachment) {
+            return response()->json(['success' => false, 'message' => 'المرفق غير موجود'], 404);
+        }
+
+        // A reporter-only viewer sees what they uploaded, not the assignee's
+        // resolution proof files. 404 (not 403) so the id reveals nothing.
+        if ($attachment->attachment_context !== 'INITIAL_SUBMISSION'
+            && $this->isReporterOnly($request->user(), $ticket)) {
             return response()->json(['success' => false, 'message' => 'المرفق غير موجود'], 404);
         }
 

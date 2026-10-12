@@ -1731,7 +1731,7 @@ class NotificationService
 
         self::send($submitterUserId, 'ticket_resolved',
             'تم حل البلاغ',
-            "تمت معالجة البلاغ \"{$title}\" وتغيير حالته إلى \"تم الحل\". يمكنك عرض التفاصيل من خلال الرابط.",
+            "تم حل بلاغك \"{$title}\" وأصبحت حالته: تم الحل. اضغط لعرض التفاصيل.",
             [
                 'entity_type'     => 'ticket',
                 'entity_id'       => $ticketId,
@@ -1753,7 +1753,7 @@ class NotificationService
 
         self::send($submitterUserId, 'suggestion_approved',
             'تم اعتماد المقترح',
-            "تم اعتماد المقترح \"{$title}\" من قبل الإدارة وتغيير حالته إلى \"معتمد\". يمكنك متابعة التفاصيل من خلال الرابط.",
+            "تم اعتماد مقترحك \"{$title}\" من قبل الإدارة وأصبحت حالته: معتمد. اضغط لعرض التفاصيل.",
             [
                 'entity_type'     => 'ticket',
                 'entity_id'       => $ticketId,
@@ -1774,8 +1774,8 @@ class NotificationService
         $title = self::shortTitle($ticketTitle);
 
         self::send($submitterUserId, 'suggestion_implemented',
-            'تمت إضافة المقترح إلى النظام',
-            "تمت إضافة المقترح \"{$title}\" إلى النظام وتغيير حالته إلى \"تمت الإضافة إلى النظام\". شكرًا لمساهمتك في تطوير المنصة. يمكنك عرض التفاصيل من خلال الرابط.",
+            'تم تنفيذ المقترح',
+            "تم تنفيذ مقترحك \"{$title}\" وإضافته إلى النظام. شكرًا لمساهمتك في تطوير المنصة. اضغط لعرض التفاصيل.",
             [
                 'entity_type'     => 'ticket',
                 'entity_id'       => $ticketId,
@@ -1787,7 +1787,7 @@ class NotificationService
             ]
         );
 
-        self::sendTicketStatusEmail('suggestion_implemented', $submitterUserId, $ticketId, $ticketTitle, 'تمت إضافة المقترح إلى النظام', 'تمت الإضافة إلى النظام');
+        self::sendTicketStatusEmail('suggestion_implemented', $submitterUserId, $ticketId, $ticketTitle, 'تم تنفيذ المقترح', 'تم التنفيذ');
     }
 
     private static function shortTitle(string $title): string
@@ -1830,12 +1830,19 @@ class NotificationService
         $title = self::shortTitle($ticketTitle);
         $url = rtrim((string) config('app.frontend_url', config('app.url')), '/')."/dashboard/tickets/{$ticketId}";
 
+        // Reference number + latest update time only; the email never carries the
+        // resolution summary, internal notes or who handled the ticket.
+        $ticket = \App\Models\Ticket::find($ticketId);
+        $ticketNumber = $ticket?->ticket_number;
+        $updatedAt = ($ticket?->updated_at ?? now())
+            ->copy()->timezone(config('app.timezone'))->locale('ar')->translatedFormat('j F Y، h:i A');
+
         EmailService::dispatch(
             $type,
             $user->email,
             $user->name,
             $userId,
-            new \App\Mail\TicketStatusUpdateMail($user->name, $type, $title, $statusLabel, $headline, $url),
+            new \App\Mail\TicketStatusUpdateMail($user->name, $type, $title, $statusLabel, $headline, $url, $ticketNumber, $updatedAt),
             "{$headline}: {$title}",
             ['ticket_id' => $ticketId, 'status' => $statusLabel],
         );
