@@ -79,6 +79,9 @@ class NotificationChannelPolicy
         'lesson_activated' => ['channels' => [self::CHANNEL_IN_APP], 'urgent' => false, 'email' => 'none', 'whatsapp' => 'none', 'rationale' => 'Routine content publication.'],
         'lesson_content_updated' => ['channels' => [self::CHANNEL_IN_APP], 'urgent' => false, 'email' => 'none', 'whatsapp' => 'none', 'rationale' => 'Routine content update, legitimately repeats (Class B).'],
         'material_visible' => ['channels' => [self::CHANNEL_IN_APP], 'urgent' => false, 'email' => 'none', 'whatsapp' => 'none', 'rationale' => 'Routine content publication.'],
+        'ticket_resolved' => ['channels' => [self::CHANNEL_IN_APP], 'urgent' => false, 'email' => 'existing_separate', 'whatsapp' => 'none', 'rationale' => 'Outcome of a report the user submitted; informational, so in-app plus the logged email sent separately by EmailService (TicketStatusUpdateMail). No push/SMS cost for a non-urgent outcome.'],
+        'suggestion_approved' => ['channels' => [self::CHANNEL_IN_APP], 'urgent' => false, 'email' => 'existing_separate', 'whatsapp' => 'none', 'rationale' => 'Positive progress on a suggestion the user submitted; in-app plus the logged email sent separately by EmailService.'],
+        'suggestion_implemented' => ['channels' => [self::CHANNEL_IN_APP], 'urgent' => false, 'email' => 'existing_separate', 'whatsapp' => 'none', 'rationale' => 'The suggestion was added to the platform; in-app plus the logged email sent separately by EmailService.'],
         'workshop_request_rejected' => ['channels' => [self::CHANNEL_IN_APP], 'urgent' => false, 'email' => 'none', 'whatsapp' => 'none', 'rationale' => 'Admin-facing outcome, reviewed asynchronously — kept in-app only rather than the recommended-default push, since no student/requester-facing urgency was verified for this admin queue event.'],
 
         // ── In-app + push — timely, actionable, user-relevant ──────────────────

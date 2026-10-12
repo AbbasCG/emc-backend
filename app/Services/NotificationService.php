@@ -1714,4 +1714,130 @@ class NotificationService
             ]
         );
     }
+
+    // ── Ticket status: the person who submitted it hears back ────────────────
+    //
+    // Reports and suggestions are one model (App\Models\Ticket,
+    // ticket_category OLD_ISSUE / NEW_SUGGESTION). TicketStatusObserver decides
+    // WHEN these fire (a real status transition, after commit); they only decide
+    // WHAT is said. The recipient is always the original submitter. Bodies carry
+    // the title and the new status only — never internal notes, resolution
+    // summaries or who handled it.
+
+    /** A report (OLD_ISSUE) became RESOLVED. */
+    public static function ticketResolved(int $submitterUserId, int $ticketId, string $ticketTitle): void
+    {
+        $title = self::shortTitle($ticketTitle);
+
+        self::send($submitterUserId, 'ticket_resolved',
+            'تم حل البلاغ',
+            "تمت معالجة البلاغ \"{$title}\" وتغيير حالته إلى \"تم الحل\". يمكنك عرض التفاصيل من خلال الرابط.",
+            [
+                'entity_type'     => 'ticket',
+                'entity_id'       => $ticketId,
+                // Class A — a ticket is resolved once; the key is stable per ticket.
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('ticket_resolved', $ticketId),
+                'action_url'      => "/dashboard/tickets/{$ticketId}",
+                'icon'            => 'check-circle',
+                'color'           => 'green',
+            ]
+        );
+
+        self::sendTicketStatusEmail('ticket_resolved', $submitterUserId, $ticketId, $ticketTitle, 'تم حل البلاغ', 'تم الحل');
+    }
+
+    /** A suggestion (NEW_SUGGESTION) was approved by management. */
+    public static function suggestionApproved(int $submitterUserId, int $ticketId, string $ticketTitle): void
+    {
+        $title = self::shortTitle($ticketTitle);
+
+        self::send($submitterUserId, 'suggestion_approved',
+            'تم اعتماد المقترح',
+            "تم اعتماد المقترح \"{$title}\" من قبل الإدارة وتغيير حالته إلى \"معتمد\". يمكنك متابعة التفاصيل من خلال الرابط.",
+            [
+                'entity_type'     => 'ticket',
+                'entity_id'       => $ticketId,
+                // Class A — a suggestion is approved once.
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('suggestion_approved', $ticketId),
+                'action_url'      => "/dashboard/tickets/{$ticketId}",
+                'icon'            => 'thumb-up',
+                'color'           => 'blue',
+            ]
+        );
+
+        self::sendTicketStatusEmail('suggestion_approved', $submitterUserId, $ticketId, $ticketTitle, 'تم اعتماد المقترح', 'معتمد');
+    }
+
+    /** A suggestion (NEW_SUGGESTION) was completed / added to the system. */
+    public static function suggestionImplemented(int $submitterUserId, int $ticketId, string $ticketTitle): void
+    {
+        $title = self::shortTitle($ticketTitle);
+
+        self::send($submitterUserId, 'suggestion_implemented',
+            'تمت إضافة المقترح إلى النظام',
+            "تمت إضافة المقترح \"{$title}\" إلى النظام وتغيير حالته إلى \"تمت الإضافة إلى النظام\". شكرًا لمساهمتك في تطوير المنصة. يمكنك عرض التفاصيل من خلال الرابط.",
+            [
+                'entity_type'     => 'ticket',
+                'entity_id'       => $ticketId,
+                // Class A — a suggestion is implemented once.
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('suggestion_implemented', $ticketId),
+                'action_url'      => "/dashboard/tickets/{$ticketId}",
+                'icon'            => 'sparkles',
+                'color'           => 'green',
+            ]
+        );
+
+        self::sendTicketStatusEmail('suggestion_implemented', $submitterUserId, $ticketId, $ticketTitle, 'تمت إضافة المقترح إلى النظام', 'تمت الإضافة إلى النظام');
+    }
+
+    private static function shortTitle(string $title): string
+    {
+        return mb_strimwidth(trim($title), 0, 120, '…');
+    }
+
+    /**
+     * The logged email that accompanies a ticket status notification.
+     *
+     * EmailService has no dedup of its own, so an email already logged for this
+     * ticket and type is never sent again (including one recorded as skipped
+     * because an admin turned the email setting off). Content is the title and
+     * the new status only; the payload kept in the email log is ids + status.
+     */
+    private static function sendTicketStatusEmail(
+        string $type,
+        int $userId,
+        int $ticketId,
+        string $ticketTitle,
+        string $headline,
+        string $statusLabel,
+    ): void {
+        $user = User::find($userId);
+        if (! $user?->email) {
+            return;
+        }
+
+        $alreadyEmailed = \App\Models\NotificationLog::query()
+            ->where('channel', 'email')
+            ->where('type', $type)
+            ->where('user_id', $userId)
+            ->where('payload->ticket_id', $ticketId)
+            ->exists();
+
+        if ($alreadyEmailed) {
+            return;
+        }
+
+        $title = self::shortTitle($ticketTitle);
+        $url = rtrim((string) config('app.frontend_url', config('app.url')), '/')."/dashboard/tickets/{$ticketId}";
+
+        EmailService::dispatch(
+            $type,
+            $user->email,
+            $user->name,
+            $userId,
+            new \App\Mail\TicketStatusUpdateMail($user->name, $type, $title, $statusLabel, $headline, $url),
+            "{$headline}: {$title}",
+            ['ticket_id' => $ticketId, 'status' => $statusLabel],
+        );
+    }
 }

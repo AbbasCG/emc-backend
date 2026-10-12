@@ -41,6 +41,9 @@ class EmailSettingsController extends Controller
         'contact_confirmation'               => ['label' => 'تأكيد استلام نموذج التواصل',     'description' => 'يُرسل لمرسل نموذج التواصل تأكيداً باستلام رسالته مع رقم التذكرة',          'category' => 'support'],
         'contact_admin_notification'         => ['label' => 'إشعار الإدارة برسالة تواصل جديدة','description' => 'يُرسل لفريق الدعم عند ورود رسالة جديدة من نموذج التواصل',                  'category' => 'support'],
         'support_ticket_reply'               => ['label' => 'إرسال رد تذكرة الدعم للعميل',    'description' => 'يُرسل للزائر عند رد فريق الدعم على تذكرته من لوحة التحكم',                 'category' => 'support'],
+        'ticket_resolved'                    => ['label' => 'حل بلاغ (لمقدّم البلاغ)',        'description' => 'يُرسل لمقدّم البلاغ عند تحويل بلاغه إلى «تم الحل»',                         'category' => 'support'],
+        'suggestion_approved'                => ['label' => 'اعتماد مقترح (لمقدّم المقترح)',  'description' => 'يُرسل لمقدّم المقترح عند اعتماده من قبل الإدارة',                           'category' => 'support'],
+        'suggestion_implemented'             => ['label' => 'إضافة مقترح إلى النظام',          'description' => 'يُرسل لمقدّم المقترح عند إضافة مقترحه إلى النظام',                          'category' => 'support'],
         // ── Applications ──────────────────────────────────────────────────────
         'volunteer_confirmation'             => ['label' => 'تأكيد طلب التطوع (للمتقدم)',     'description' => 'يُرسل لمقدم طلب التطوع تأكيداً باستلام طلبه',                             'category' => 'applications'],
         'volunteer_admin_notification'       => ['label' => 'طلب تطوع جديد (للإدارة)',        'description' => 'يُرسل للمشرفين وفريق الموارد البشرية عند ورود طلب تطوع جديد',              'category' => 'applications'],
