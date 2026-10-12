@@ -8,8 +8,10 @@ use App\Models\VolunteerPointAward;
 use App\Models\VolunteerPointRedemption;
 use App\Services\AuditLogService;
 use App\Services\ImpactPointsRecipients;
+use App\Support\ImpactLevels;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -19,30 +21,35 @@ use Illuminate\Support\Facades\DB;
  * Available = Lifetime - مجموع الاستبدالات.
  * 1,000 نقطة = €10 رصيد تعليمي داخلي غير نقدي.
  *
+ * السجل «دفتر» للإضافة فقط: لا تعديل ولا حذف لصفوفه. التصحيح صفٌّ جديد منسوب
+ * لصاحبه (فئة adjustment) — لا استبدال للمجموع أبدًا.
+ *
  * المستوى يُحتسب من شرطين معًا (المدة تعطي الأهلية، والنقاط تثبت الاستحقاق)؛
  * والاعتماد النوعي لمستوى «رائد أثر EMC» قرار إداري لا يُمنح آليًا — لذلك
  * تُعيد الواجهة البرمجية «المستوى المؤهَّل له» ويبقى الاعتماد النهائي للإدارة.
+ *
+ * الصلاحية التجارية (عرض القائمة/السجل، المنح، التصحيح) تُفحص هنا من خلال
+ * ImpactPointsRecipients — لا من الأدوار ولا من صلاحية فتح الصفحة.
  */
 class VolunteerPointsController extends Controller
 {
-    /** سلم المستويات: [الاسم، أشهر الحد الأدنى، نقاط الحد الأدنى، باقة سديم]. */
-    public const LEVELS = [
-        ['id' => 'volunteer',   'title' => 'متطوع EMC',     'months' => 0,  'points' => 0,      'sadeem' => 'Open Community'],
-        ['id' => 'contributor', 'title' => 'متطوع مشارك',   'months' => 3,  'points' => 1500,   'sadeem' => 'Standard'],
-        ['id' => 'active',      'title' => 'متطوع فاعل',    'months' => 6,  'points' => 3500,   'sadeem' => 'Premium'],
-        ['id' => 'advanced',    'title' => 'متطوع متقدم',   'months' => 9,  'points' => 6000,   'sadeem' => 'Premium'],
-        ['id' => 'senior',      'title' => 'متطوع أول',     'months' => 12, 'points' => 10000,  'sadeem' => 'VIP'],
-        ['id' => 'impact_leader', 'title' => 'رائد أثر EMC', 'months' => 24, 'points' => 22000, 'sadeem' => 'VIP+'],
-    ];
+    /** سلم المستويات — المصدر الوحيد في App\Support\ImpactLevels. */
+    public const LEVELS = ImpactLevels::LEVELS;
 
     /** €10 لكل 1,000 نقطة. */
     public const EURO_PER_1000 = 10;
 
     /**
      * السقف الشهري لنقاط المستلم الموجبة (كل المصادر) — يُعلَن في policy()
-     * ويُطبَّق على المنح اليدوية. الخصم (نقاط سالبة) لا يُحتسب ضمنه.
+     * ويُطبَّق على المنح اليدوية والتصحيحات الموجبة. الخصم (نقاط سالبة) لا
+     * يُحتسب ضمنه.
      */
     public const MONTHLY_CAP = 2500;
+
+    /** أقصى عدد صفوف للوحة الصدارة لغير المخوَّلين — لا قائمة كاملة بالأسماء. */
+    private const LEADERBOARD_MAX = 20;
+
+    private const MEMBERS_SORTS = ['points', 'recent', 'department', 'name'];
 
     public function __construct(private readonly ImpactPointsRecipients $recipients)
     {
@@ -54,20 +61,7 @@ class VolunteerPointsController extends Controller
         $redeemed = (int) VolunteerPointRedemption::where('user_id', $user->id)->sum('points');
         $months   = (int) $user->created_at->diffInMonths(now());
 
-        $eligible = self::LEVELS[0];
-        foreach (self::LEVELS as $level) {
-            if ($months >= $level['months'] && $lifetime >= $level['points']) {
-                $eligible = $level;
-            }
-        }
-
-        $next = null;
-        foreach (self::LEVELS as $level) {
-            if ($level['points'] > $eligible['points']) {
-                $next = $level;
-                break;
-            }
-        }
+        $eligible = ImpactLevels::eligible($lifetime, $months);
 
         return [
             'lifetime_points'  => $lifetime,
@@ -76,18 +70,22 @@ class VolunteerPointsController extends Controller
             'credit_eur'       => round(max(0, $lifetime - $redeemed) / 1000 * self::EURO_PER_1000, 2),
             'active_months'    => $months,
             'eligible_level'   => $eligible,
-            'next_level'       => $next,
+            'next_level'       => ImpactLevels::next($eligible),
         ];
     }
 
-    /** ملخصي: النقاط والمستوى المؤهَّل له وباقة سديم. */
+    /** ملخصي: النقاط والمستوى المؤهَّل له وباقة سديم + صلاحياتي المحسوبة من الخادم. */
     public function mySummary(Request $request): JsonResponse
     {
-        // can_award comes from the server so the page never guesses business
-        // authority from a role list; the award endpoint re-checks it anyway.
-        return response()->json(['success' => true, 'data' => $this->summarize($request->user()) + [
-            'can_award'   => $this->recipients->canAward($request->user()),
-            'monthly_cap' => self::MONTHLY_CAP,
+        $actor = $request->user();
+        $capabilities = $this->recipients->capabilities($actor);
+
+        // Capabilities come from the server so the page never guesses business
+        // authority from a role list; every endpoint re-checks them anyway.
+        return response()->json(['success' => true, 'data' => $this->summarize($actor) + [
+            'can_award'    => $capabilities['can_award'],
+            'capabilities' => $capabilities,
+            'monthly_cap'  => self::MONTHLY_CAP,
         ]]);
     }
 
@@ -101,9 +99,9 @@ class VolunteerPointsController extends Controller
         return response()->json(['success' => true, 'data' => $this->recipients->forActor($request->user())]);
     }
 
-    private function forbidden(): JsonResponse
+    private function forbidden(string $message = 'ليست لديك صلاحية منح نقاط الأثر.'): JsonResponse
     {
-        return response()->json(['success' => false, 'message' => 'ليست لديك صلاحية منح نقاط الأثر.'], 403);
+        return response()->json(['success' => false, 'message' => $message], 403);
     }
 
     private function rejected(string $message, string $code): JsonResponse
@@ -111,7 +109,48 @@ class VolunteerPointsController extends Controller
         return response()->json(['success' => false, 'message' => $message, 'code' => $code], 422);
     }
 
-    /** سجل منحي (أحدث أولًا). */
+    /**
+     * لا يجوز أن ينزل الرصيد التراكمي عن النقاط المستبدلة أصلًا: الرصيد التعليمي
+     * صُرف مقابلها، وخصمها بأثر رجعي يجعل المتاح صفرًا بلا مقابل.
+     */
+    private function balanceViolation(int $userId, int $signedPoints): ?JsonResponse
+    {
+        if ($signedPoints >= 0) {
+            return null;
+        }
+
+        $lifetime = (int) VolunteerPointAward::where('user_id', $userId)->sum('points');
+        $redeemed = (int) VolunteerPointRedemption::where('user_id', $userId)->sum('points');
+
+        if ($lifetime + $signedPoints < max(0, $redeemed)) {
+            $max = max(0, $lifetime - max(0, $redeemed));
+
+            return $this->rejected(
+                "لا يمكن خصم ".abs($signedPoints)." نقطة: الرصيد التراكمي {$lifetime} والمستبدل {$redeemed}. أقصى خصم ممكن {$max} نقطة.",
+                'NEGATIVE_BALANCE'
+            );
+        }
+
+        return null;
+    }
+
+    private function monthlyCapViolation(int $userId, int $signedPoints): ?JsonResponse
+    {
+        if ($signedPoints <= 0) {
+            return null;
+        }
+
+        $used = $this->recipients->monthPoints($userId);
+        if ($used + $signedPoints > self::MONTHLY_CAP) {
+            $left = max(0, self::MONTHLY_CAP - $used);
+
+            return $this->rejected("يتجاوز السقف الشهري (".self::MONTHLY_CAP." نقطة) — المتبقي لهذا العضو هذا الشهر {$left} نقطة.", 'MONTHLY_CAP_EXCEEDED');
+        }
+
+        return null;
+    }
+
+    /** سجل منحي (أحدث أولًا). الملاحظة الداخلية لا تظهر هنا أبدًا. */
     public function myAwards(Request $request): JsonResponse
     {
         $awards = VolunteerPointAward::query()
@@ -121,6 +160,141 @@ class VolunteerPointsController extends Controller
             ->paginate((int) ($request->per_page ?? 20));
 
         return response()->json(['success' => true, 'data' => $awards]);
+    }
+
+    /**
+     * قائمة كل من لديهم نقاط ضمن نطاق المستخدم — للمخوَّلين فقط.
+     *
+     * الصفوف هي المستحقون الفعليون (عضو فريق EMC نشط)، فلا يظهر طالب LMS ولا
+     * مدرّس دورات. الفلاتر والفرز والترقيم هنا؛ مؤشرات KPI تُحسب على كامل
+     * النطاق لا على الصفحة الحالية.
+     */
+    public function members(Request $request): JsonResponse
+    {
+        $actor = $request->user();
+
+        if (! $this->recipients->canViewAll($actor)) {
+            return $this->forbidden('ليست لديك صلاحية عرض قائمة المستفيدين من نقاط الأثر.');
+        }
+
+        $params = $request->validate([
+            'search'           => 'nullable|string|max:100',
+            'department_id'    => 'nullable|integer',
+            'level'            => 'nullable|string|max:40',
+            'sort'             => 'nullable|in:'.implode(',', self::MEMBERS_SORTS),
+            'direction'        => 'nullable|in:asc,desc',
+            'page'             => 'nullable|integer|min:1',
+            'per_page'         => 'nullable|integer|min:1|max:100',
+            'only_with_points' => 'nullable|boolean',
+        ]);
+
+        /** @var Collection<int, array<string, mixed>> $scope */
+        $scope = $this->recipients->forActor($actor, includeSelf: true)
+            ->map(fn (array $r) => $r + ['is_self' => $r['user_id'] === $actor->id]);
+
+        $withPoints = $scope->filter(fn ($r) => $r['awards_count'] > 0);
+        $top = $scope->filter(fn ($r) => $r['month_points'] > 0)->sortByDesc('month_points')->first();
+
+        $kpis = [
+            'total_points'        => (int) $withPoints->sum('lifetime_points'),
+            'members_with_points' => $withPoints->count(),
+            'scope_members'       => $scope->count(),
+            'month_points_total'  => (int) $scope->sum('month_points'),
+            'top_contributor_month' => $top ? [
+                'user_id'    => $top['user_id'],
+                'name'       => $top['name'],
+                'department' => $top['department'],
+                'points'     => $top['month_points'],
+            ] : null,
+        ];
+
+        $filterOptions = [
+            'departments' => $scope->unique('department_id')->map(fn ($r) => ['id' => $r['department_id'], 'name' => $r['department']])
+                ->sortBy('name')->values()->all(),
+            'levels' => collect(ImpactLevels::LEVELS)->map(fn ($l) => ['id' => $l['id'], 'title' => $l['title']])->all(),
+        ];
+
+        $rows = ($request->boolean('only_with_points', true) ? $withPoints : $scope);
+
+        if (filled($params['search'] ?? null)) {
+            $needle = mb_strtolower(trim($params['search']));
+            $rows = $rows->filter(fn ($r) => str_contains(mb_strtolower($r['name'].' '.($r['department'] ?? '').' '.($r['role_title'] ?? '')), $needle));
+        }
+        if (filled($params['department_id'] ?? null)) {
+            $rows = $rows->where('department_id', (int) $params['department_id']);
+        }
+        if (filled($params['level'] ?? null)) {
+            $rows = $rows->filter(fn ($r) => $r['level']['id'] === $params['level']);
+        }
+
+        $sort = $params['sort'] ?? 'points';
+        $desc = ($params['direction'] ?? ($sort === 'name' || $sort === 'department' ? 'asc' : 'desc')) === 'desc';
+
+        $rows = match ($sort) {
+            'recent'     => $rows->sortBy(fn ($r) => $r['last_activity_at'] ?? '', SORT_REGULAR, $desc),
+            'department' => $rows->sortBy(fn ($r) => [$r['department'] ?? '', -$r['lifetime_points']], SORT_REGULAR, $desc),
+            'name'       => $rows->sortBy('name', SORT_REGULAR, $desc),
+            default      => $rows->sortBy('lifetime_points', SORT_REGULAR, $desc),
+        };
+
+        $perPage = (int) ($params['per_page'] ?? 20);
+        $page = max(1, (int) ($params['page'] ?? 1));
+        $total = $rows->count();
+
+        return response()->json([
+            'success' => true,
+            'data'    => $rows->forPage($page, $perPage)->values(),
+            'meta'    => [
+                'total'        => $total,
+                'per_page'     => $perPage,
+                'current_page' => $page,
+                'last_page'    => max(1, (int) ceil($total / $perPage)),
+                'kpis'         => $kpis,
+                'filters'      => $filterOptions,
+            ],
+            'capabilities' => $this->recipients->capabilities($actor),
+        ]);
+    }
+
+    /**
+     * سجل نقاط عضو: صاحبه دائمًا، وغيره للمخوَّلين ضمن نطاقهم فقط. الملاحظة
+     * الداخلية لا تظهر إلا للمخوَّل وهو يقرأ سجل غيره.
+     */
+    public function history(Request $request, User $user): JsonResponse
+    {
+        $actor = $request->user();
+        $own = $actor->id === $user->id;
+
+        if (! $own && ! $this->recipients->canViewHistoryOf($actor, $user->id)) {
+            return $this->forbidden('ليست لديك صلاحية عرض سجل نقاط هذا العضو.');
+        }
+
+        $perPage = max(1, min(100, (int) ($request->per_page ?? 20)));
+
+        $entries = VolunteerPointAward::query()
+            ->where('user_id', $user->id)
+            ->with('awarder:id,name')
+            ->orderByDesc('awarded_at')
+            ->orderByDesc('id')
+            ->paginate($perPage);
+
+        if (! $own) {
+            $entries->getCollection()->each->makeVisible('note');
+        }
+
+        $profile = $this->recipients->describe($user->id);
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'user'    => ['id' => $user->id, 'name' => $user->name] + [
+                    'department' => $profile['department'] ?? null,
+                    'role_title' => $profile['role_title'] ?? null,
+                ],
+                'summary' => $this->summarize($user),
+                'entries' => $entries,
+            ],
+        ]);
     }
 
     /** منح نقاط — لحاملي صلاحية التكريم، لأعضاء الفريق ضمن نطاقهم فقط. */
@@ -149,13 +323,8 @@ class VolunteerPointsController extends Controller
             return $this->rejected('هذا المستخدم ليس عضوًا فعّالًا في فريق EMC ضمن نطاق صلاحيتك.', 'RECIPIENT_NOT_ELIGIBLE');
         }
 
-        if ($data['points'] > 0) {
-            $used = $this->recipients->monthPoints($recipientId);
-            if ($used + $data['points'] > self::MONTHLY_CAP) {
-                $left = max(0, self::MONTHLY_CAP - $used);
-
-                return $this->rejected("يتجاوز السقف الشهري (".self::MONTHLY_CAP." نقطة) — المتبقي لهذا العضو هذا الشهر {$left} نقطة.", 'MONTHLY_CAP_EXCEEDED');
-            }
+        if ($violation = $this->monthlyCapViolation($recipientId, $data['points']) ?? $this->balanceViolation($recipientId, $data['points'])) {
+            return $violation;
         }
 
         $award = VolunteerPointAward::create([
@@ -174,9 +343,107 @@ class VolunteerPointsController extends Controller
         ], 201);
     }
 
-    /** لوحة صدارة الأثر — تُغذي Hall of Impact واختيار أفضل متطوع. */
+    /**
+     * تصحيح نقاط عضو (إضافة أو خصم) — صفٌّ جديد في الدفتر، لا استبدال للمجموع.
+     *
+     * السبب إلزامي ويظهر للعضو في سجله؛ الملاحظة اختيارية وداخلية للمخوَّلين.
+     */
+    public function adjust(Request $request, User $user): JsonResponse
+    {
+        $actor = $request->user();
+
+        if (! $this->recipients->canAdjust($actor)) {
+            return $this->forbidden('ليست لديك صلاحية تصحيح نقاط الأثر.');
+        }
+
+        $data = $request->validate([
+            'direction' => 'required|in:add,subtract',
+            'points'    => 'required|integer|min:1|max:5000',
+            'reason'    => 'required|string|min:3|max:500',
+            'note'      => 'nullable|string|max:1000',
+        ]);
+
+        if ($user->id === $actor->id) {
+            return $this->rejected('لا يمكنك تصحيح نقاط نفسك.', 'SELF_ADJUSTMENT');
+        }
+
+        if (! $this->recipients->isAwardableBy($actor, $user->id)) {
+            return $this->rejected('هذا المستخدم ليس عضوًا فعّالًا في فريق EMC ضمن نطاق صلاحيتك.', 'RECIPIENT_NOT_ELIGIBLE');
+        }
+
+        $signed = $data['direction'] === 'add' ? (int) $data['points'] : -(int) $data['points'];
+
+        // Lock the member's row so two simultaneous adjustments cannot both pass
+        // the cap/balance check against the same old total.
+        $result = DB::transaction(function () use ($user, $actor, $signed, $data) {
+            User::query()->whereKey($user->id)->lockForUpdate()->first();
+
+            if ($violation = $this->monthlyCapViolation($user->id, $signed) ?? $this->balanceViolation($user->id, $signed)) {
+                return $violation;
+            }
+
+            $before = (int) VolunteerPointAward::where('user_id', $user->id)->sum('points');
+
+            $entry = VolunteerPointAward::create([
+                'user_id'    => $user->id,
+                'category'   => VolunteerPointAward::CATEGORY_ADJUSTMENT,
+                'points'     => $signed,
+                'reason'     => trim($data['reason']),
+                'note'       => filled($data['note'] ?? null) ? trim($data['note']) : null,
+                'awarded_by' => $actor->id,
+                'awarded_at' => now(),
+            ]);
+
+            // Before/after totals are the audit trail's point: who moved whose
+            // balance from what to what, and why. The internal note's TEXT stays
+            // in the ledger row only; the log records that one exists.
+            AuditLogService::log(
+                action:      'IMPACT_POINTS_ADJUSTED',
+                entityType:  'VolunteerPointAward',
+                entityId:    $entry->id,
+                entityName:  $user->name,
+                oldValues:   ['total_points' => $before],
+                newValues:   ['total_points' => $before + $signed],
+                extra:       [
+                    'user_id'   => $user->id,
+                    'points'    => $signed,
+                    'direction' => $data['direction'],
+                    'reason'    => $entry->reason,
+                    'has_note'  => $entry->note !== null,
+                ],
+                description: "تصحيح نقاط أثر {$user->name}: ".($signed > 0 ? '+' : '').$signed,
+            );
+
+            return ['entry' => $entry, 'before' => $before, 'after' => $before + $signed];
+        });
+
+        if ($result instanceof JsonResponse) {
+            return $result;
+        }
+
+        $result['entry']->makeVisible('note')->load('awarder:id,name');
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'entry'        => $result['entry'],
+                'total_before' => $result['before'],
+                'total_after'  => $result['after'],
+            ],
+        ], 201);
+    }
+
+    /**
+     * لوحة صدارة الأثر — تُغذي Hall of Impact واختيار أفضل متطوع.
+     *
+     * فقط أعضاء EMC الفعليون (لا طلاب LMS ولا مدرّسو دورات). وللمطّلع العادي
+     * سقفٌ على عدد الصفوف: القائمة الكاملة بالأسماء حقٌّ للمخوَّلين عبر members().
+     */
     public function leaderboard(Request $request): JsonResponse
     {
+        $max = $this->recipients->canViewAll($request->user()) ? 100 : self::LEADERBOARD_MAX;
+        $limit = max(1, min($max, (int) ($request->limit ?? self::LEADERBOARD_MAX)));
+
         // whereHas('user'): awards survive a user's SOFT delete (the FK only
         // cascades on a hard delete), and the eager load below would then yield
         // `user: null` — a row the client cannot render. Such rows are dropped
@@ -184,11 +451,12 @@ class VolunteerPointsController extends Controller
         $rows = VolunteerPointAward::query()
             ->select('user_id', DB::raw('SUM(points) as lifetime_points'))
             ->whereHas('user')
+            ->whereIn('user_id', $this->recipients->validRecipientIds())
             ->when($request->since, fn ($q) => $q->where('awarded_at', '>=', $request->since))
             ->groupBy('user_id')
             ->orderByDesc('lifetime_points')
             ->with('user:id,name,role')
-            ->limit((int) ($request->limit ?? 20))
+            ->limit($limit)
             ->get()
             ->map(fn ($row) => [
                 'user'            => $row->user,

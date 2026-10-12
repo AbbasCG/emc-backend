@@ -823,6 +823,11 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
     // منح/استبدال نقاط الأثر وقائمة المستحقين: الصلاحية التجارية تُفحص داخل
     // المتحكم (members.recognize / members.manage + نطاق الإدارة) — لا قائمة أدوار.
     Route::get('volunteer-points/recipients',        [VolunteerPointsController::class, 'recipients']);
+    // قائمة المستفيدين وسجل عضو وتصحيح نقاطه: الصلاحية والنطاق في المتحكم أيضًا
+    // (history: صاحب السجل دائمًا، وغيره للمخوَّل ضمن نطاقه). لا تعديل ولا حذف.
+    Route::get('volunteer-points/members',                  [VolunteerPointsController::class, 'members']);
+    Route::get('volunteer-points/users/{user}/history',     [VolunteerPointsController::class, 'history']);
+    Route::post('volunteer-points/users/{user}/adjust',     [VolunteerPointsController::class, 'adjust']);
     Route::post('volunteer-points/awards',           [VolunteerPointsController::class, 'award']);
     Route::post('volunteer-points/redemptions',      [VolunteerPointsController::class, 'redeem']);
 

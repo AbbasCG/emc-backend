@@ -386,8 +386,9 @@ class ImpactPointsAccessTest extends TestCase
 
     public function test_leaderboard_never_returns_a_null_user_for_a_soft_deleted_account(): void
     {
-        $gone = $this->user('volunteer');
-        $here = $this->user('volunteer');
+        $dept = $this->department();
+        $gone = $this->teamMember($dept);
+        $here = $this->teamMember($dept);
         $this->seedPoints($gone, 500);
         $this->seedPoints($here, 500);
         $gone->delete();
@@ -395,5 +396,34 @@ class ImpactPointsAccessTest extends TestCase
         $rows = $this->actingAs($here)->getJson('/api/operations/volunteer-points/leaderboard')->assertOk()->json('data');
         $this->assertCount(1, $rows);
         $this->assertSame($here->id, $rows[0]['user']['id']);
+    }
+
+    public function test_leaderboard_lists_only_real_team_members_never_lms_only_accounts(): void
+    {
+        $dept = $this->department();
+        $member = $this->teamMember($dept);
+        $instructor = $this->user('instructor');
+        $this->seedPoints($member, 100);
+        $this->seedPoints($instructor, 9000);
+
+        $ids = collect($this->actingAs($member)->getJson('/api/operations/volunteer-points/leaderboard')->assertOk()->json('data'))
+            ->pluck('user.id')->all();
+
+        $this->assertSame([$member->id], $ids);
+    }
+
+    public function test_leaderboard_row_limit_is_capped_for_ordinary_readers(): void
+    {
+        $dept = $this->department();
+        foreach (range(1, 25) as $i) {
+            $this->seedPoints($this->teamMember($dept), $i);
+        }
+        $reader = $this->teamMember($dept);
+
+        $rows = $this->actingAs($reader)->getJson('/api/operations/volunteer-points/leaderboard?limit=1000')->assertOk()->json('data');
+        $this->assertCount(20, $rows, 'an ordinary member cannot widen the board into a full people list');
+
+        $managerRows = $this->actingAs($this->user('hr_manager'))->getJson('/api/operations/volunteer-points/leaderboard?limit=1000')->json('data');
+        $this->assertCount(25, $managerRows);
     }
 }
