@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Operations;
 
 use App\Http\Controllers\Controller;
+use App\Http\Resources\OperationsMeetingReportResource;
 use App\Models\MeetingReport;
+use App\Models\MeetingReportRating;
 use App\Services\DepartmentAccessService;
 use App\Services\ImpactPoints;
 use Illuminate\Http\JsonResponse;
@@ -19,17 +21,88 @@ class MeetingReportController extends Controller
     {
     }
 
+    /**
+     * Max rows per page. The page never needs more, and an unbounded per_page
+     * lets one request pull the whole archive.
+     */
+    private const MAX_PER_PAGE = 50;
+
     public function index(Request $request): JsonResponse
     {
-        $reports = $this->departmentAccess
-            ->scopeQuery(MeetingReport::query(), $request->user())
-            ->with(['department:id,name', 'author:id,name'])
-            ->withCount('ratings')
-            ->when($request->department_id, fn ($q) => $q->where('department_id', $request->department_id))
-            ->orderByDesc('meeting_date')
-            ->paginate((int) ($request->per_page ?? 15));
+        $user = $request->user();
 
-        return response()->json(['success' => true, 'data' => $reports]);
+        $request->validate([
+            'department_id' => 'nullable|integer',
+            'q'             => 'nullable|string|max:100',
+            'date_from'     => 'nullable|date',
+            'date_to'       => 'nullable|date',
+            'per_page'      => 'nullable|integer|min:1',
+        ]);
+
+        // Everything below starts from the user's department scope: a filter can
+        // only narrow what they may already read, never widen it.
+        $scoped = fn () => $this->departmentAccess->scopeQuery(MeetingReport::query(), $user);
+
+        $search = trim((string) $request->query('q', ''));
+
+        $reports = $scoped()
+            ->with(['department:id,name,name_ar', 'author:id,name', 'meeting:id,title,meeting_date,department_id'])
+            ->withCount([
+                'ratings',
+                'ratings as attended_count' => fn ($q) => $q->where('attended', true),
+            ])
+            ->when($request->filled('department_id'), fn ($q) => $q->where('department_id', (int) $request->query('department_id')))
+            ->when($search !== '', function ($q) use ($search) {
+                // A literal % or _ only widens the match inside the user's own
+                // department scope, so it is left as a wildcard.
+                $like = '%'.$search.'%';
+                $q->where(fn ($w) => $w->where('title', 'like', $like)
+                    ->orWhereHas('meeting', fn ($m) => $m->where('title', 'like', $like)));
+            })
+            ->when($request->filled('date_from'), fn ($q) => $q->whereDate('meeting_date', '>=', $request->query('date_from')))
+            ->when($request->filled('date_to'), fn ($q) => $q->whereDate('meeting_date', '<=', $request->query('date_to')))
+            ->orderByRaw('meeting_date is null')
+            ->orderByDesc('meeting_date')
+            ->orderByDesc('id')
+            ->paginate(min(max((int) $request->query('per_page', 15), 1), self::MAX_PER_PAGE))
+            ->through(fn (MeetingReport $r) => (new OperationsMeetingReportResource($r))->resolve());
+
+        return response()->json([
+            'success' => true,
+            'data'    => $reports,
+            'stats'   => $this->stats($scoped),
+        ]);
+    }
+
+    /**
+     * Headline numbers for the page, over the reports this user may read
+     * (not over the current search/filter, so the cards stay stable while
+     * filtering). Only figures the data genuinely supports.
+     *
+     * @param  \Closure(): \Illuminate\Database\Eloquent\Builder<MeetingReport>  $scoped
+     * @return array{total: int, this_month: int, latest_at: string|null, attendance_rate: int|null}
+     */
+    private function stats(\Closure $scoped): array
+    {
+        $monthStart = now()->startOfMonth();
+        $monthEnd = now()->endOfMonth();
+
+        $ratings = MeetingReportRating::query()
+            ->whereIn('meeting_report_id', $scoped()->select('meeting_reports.id'));
+        $totalRatings = (clone $ratings)->count();
+        $attended = (clone $ratings)->where('attended', true)->count();
+        $latest = $scoped()->max('created_at');
+
+        return [
+            'total'      => $scoped()->count(),
+            // A row without a meeting date counts in the month it was filed.
+            'this_month' => $scoped()->where(function ($q) use ($monthStart, $monthEnd) {
+                $q->whereBetween('meeting_date', [$monthStart->toDateString(), $monthEnd->toDateString()])
+                    ->orWhere(fn ($n) => $n->whereNull('meeting_date')->whereBetween('created_at', [$monthStart, $monthEnd]));
+            })->count(),
+            'latest_at'  => $latest ? \Illuminate\Support\Carbon::parse($latest)->toIso8601String() : null,
+            'attendance_rate' => $totalRatings > 0 ? (int) round($attended / $totalRatings * 100) : null,
+        ];
     }
 
     public function store(Request $request): JsonResponse
@@ -113,13 +186,12 @@ class MeetingReportController extends Controller
             return response()->json(['success' => false, 'message' => 'ليست لديك صلاحية عرض هذا التقرير.'], 403);
         }
 
+        $meetingReport->load(['department:id,name,name_ar', 'author:id,name', 'meeting:id,title,meeting_date,department_id', 'ratings.user:id,name'])
+            ->loadCount(['ratings', 'ratings as attended_count' => fn ($q) => $q->where('attended', true)]);
+
         return response()->json([
             'success' => true,
-            'data'    => $meetingReport->load([
-                'department:id,name',
-                'author:id,name',
-                'ratings.user:id,name',
-            ]),
+            'data'    => (new OperationsMeetingReportResource($meetingReport))->detailed()->resolve(),
         ]);
     }
 }

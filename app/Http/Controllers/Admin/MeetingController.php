@@ -221,10 +221,20 @@ class MeetingController extends Controller
             'improvement_suggestions' => 'nullable|string',
         ]);
 
-        $report = $meeting->report()->updateOrCreate(
-            ['meeting_id' => $meeting->id],
-            $data
-        );
+        // A new row is filed under the meeting's own title/date/department so it
+        // appears correctly in the shared "تقارير الاجتماعات" archive. An existing
+        // report keeps whatever it already has; only the quick-report fields update.
+        $report = $meeting->report()->first();
+        if ($report) {
+            $report->update($data);
+        } else {
+            $report = $meeting->report()->create($data + [
+                'department_id' => $meeting->department_id,
+                'title'         => 'تقرير دوري — ' . $meeting->title,
+                'meeting_date'  => $meeting->meeting_date ?? now()->toDateString(),
+                'created_by'    => $request->user()->id,
+            ]);
+        }
 
         ActivityLogger::log('meeting.report_submitted', $meeting, [], $request);
 
