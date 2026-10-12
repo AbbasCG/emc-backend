@@ -1343,15 +1343,23 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
 });
 
 // ─── Department meeting lounge (the frontend's /department/meetings surface) ─
-// كانت الواجهة تنادي هذه المسارات وهي غير موجودة إطلاقًا — 404 على كل صالة
-// الاجتماعات. تُدار بنفس متحكم الاجتماعات، والتقرير الدوري يُخزَّن في نظام
-// «تقارير الاجتماعات» الجديد فيصل الأرشيف نفسه.
-Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,programs_manager,instructor,hr_manager,finance_manager,marketing,marketing_manager,quality,quality_manager,support_agent,operations_manager,partnerships_manager,community_manager,department_manager'])->prefix('department')->group(function () {
+// One route group, authenticated only. Reading is department-scoped inside
+// MeetingController, and EVERY write (schedule, edit, action items, the single
+// official report) is authorized there through MeetingAccessService.
+//
+// History: this surface used to be registered twice - a role-gated group and,
+// further down, an `auth:sanctum`-only group with the same URIs. Laravel keeps
+// the LAST registration for a method+URI, so the role gate was dead code and any
+// signed-in user could create or edit meetings and file reports. The role list
+// is gone with the duplicate; the controller checks are the real authorization.
+Route::middleware(['auth:sanctum'])->prefix('department')->group(function () {
     Route::get('meetings',                                        [MeetingController::class, 'index']);
     Route::post('meetings',                                       [MeetingController::class, 'store']);
     Route::get('meetings/{meeting}',                              [MeetingController::class, 'show']);
+    Route::put('meetings/{meeting}',                              [MeetingController::class, 'update']);
     Route::patch('meetings/{meeting}/action-items/{actionItem}',  [MeetingController::class, 'updateActionItem']);
-    Route::post('meetings/{meeting}/report',                      [MeetingController::class, 'report']);
+    Route::post('meetings/{meeting}/action-items',                [MeetingController::class, 'storeActionItem']);
+    Route::post('meetings/{meeting}/report',                      [MeetingController::class, 'storeReport']);
 });
 
 // ─── Operations: Partnerships (accessible to partnerships_manager as well) ─
@@ -1452,16 +1460,6 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_ma
 // finance_manager, quality_manager, and programs_manager have VIEW_KPI permission
 Route::get('kpi', [KpiController::class, 'unified'])
     ->middleware(['auth:sanctum', 'role:admin,finance_manager,quality_manager,programs_manager']);
-
-// ─── Department Meeting Lounge ────────────────────────────────────────────────
-Route::middleware(['auth:sanctum'])->prefix('department')->group(function () {
-    Route::get('meetings', [App\Http\Controllers\Admin\MeetingController::class, 'index']);
-    Route::post('meetings', [App\Http\Controllers\Admin\MeetingController::class, 'store']);
-    Route::get('meetings/{meeting}', [App\Http\Controllers\Admin\MeetingController::class, 'show']);
-    Route::put('meetings/{meeting}', [App\Http\Controllers\Admin\MeetingController::class, 'update']);
-    Route::post('meetings/{meeting}/report', [App\Http\Controllers\Admin\MeetingController::class, 'storeReport']);
-    Route::post('meetings/{meeting}/action-items', [App\Http\Controllers\Admin\MeetingController::class, 'storeActionItem']);
-});
 
 // ─── Quality Management System ────────────────────────────────────────────────
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,quality_manager'])->prefix('quality')->group(function () {

@@ -167,7 +167,7 @@ class MeetingReportsPageApiTest extends TestCase
         $row = $this->list($this->user('super_admin'))->assertOk()->json('data.data.0');
 
         $this->assertEqualsCanonicalizing(
-            ['id', 'title', 'meeting_date', 'department', 'author', 'ratings_count', 'attended_count', 'created_at'],
+            ['id', 'title', 'meeting_date', 'department', 'author', 'meeting', 'ratings_count', 'attended_count', 'created_at'],
             array_keys($row),
         );
         $this->assertArrayNotHasKey('created_by', $row);
@@ -374,7 +374,7 @@ class MeetingReportsPageApiTest extends TestCase
         ]);
         Sanctum::actingAs($organizer);
 
-        $this->postJson("/api/department/meetings/{$meeting->id}/report", ['challenges' => 'تحدٍّ'])->assertOk();
+        $this->postJson("/api/department/meetings/{$meeting->id}/report", ['challenges' => 'تحدٍّ'])->assertCreated();
 
         $row = MeetingReport::where('meeting_id', $meeting->id)->sole();
         $this->assertSame('تقرير دوري — اجتماع الإنجاز', $row->title);
@@ -383,7 +383,7 @@ class MeetingReportsPageApiTest extends TestCase
         $this->assertSame($organizer->id, (int) $row->created_by);
     }
 
-    public function test_resubmitting_a_quick_report_updates_it_instead_of_duplicating_or_retitling(): void
+    public function test_resubmitting_a_quick_report_is_refused_and_leaves_the_first_untouched(): void
     {
         $organizer = $this->user('super_admin');
         $meeting = Meeting::create([
@@ -392,13 +392,12 @@ class MeetingReportsPageApiTest extends TestCase
         ]);
         Sanctum::actingAs($organizer);
 
-        $this->postJson("/api/department/meetings/{$meeting->id}/report", ['challenges' => 'الأول'])->assertOk();
-        MeetingReport::where('meeting_id', $meeting->id)->update(['title' => 'عنوان معدَّل']);
-        $this->postJson("/api/department/meetings/{$meeting->id}/report", ['challenges' => 'الثاني'])->assertOk();
+        $this->postJson("/api/department/meetings/{$meeting->id}/report", ['challenges' => 'الأول'])->assertCreated();
+        $this->postJson("/api/department/meetings/{$meeting->id}/report", ['challenges' => 'الثاني'])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'تم رفع تقرير لهذا الاجتماع مسبقًا.');
 
         $this->assertSame(1, MeetingReport::where('meeting_id', $meeting->id)->count());
-        $row = MeetingReport::where('meeting_id', $meeting->id)->sole();
-        $this->assertSame('الثاني', $row->challenges);
-        $this->assertSame('عنوان معدَّل', $row->title);
+        $this->assertSame('الأول', MeetingReport::where('meeting_id', $meeting->id)->sole()->challenges);
     }
 }

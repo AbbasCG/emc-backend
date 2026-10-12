@@ -58,6 +58,8 @@ class OperationsMeetingReportResource extends JsonResource
             'meeting_date'  => $date?->toDateString(),
             'department'    => $department ? ['id' => $department->id, 'name' => $department->name_ar ?: $department->name] : null,
             'author'        => $this->author ? ['id' => $this->author->id, 'name' => $this->author->name] : null,
+            // The source meeting, when this report was filed from the lounge for a scheduled meeting.
+            'meeting'       => $meeting ? ['id' => $meeting->id, 'title' => $meeting->title, 'type' => $meeting->type] : null,
             'ratings_count' => (int) ($this->ratings_count ?? 0),
             'attended_count' => (int) ($this->attended_count ?? 0),
             'created_at'    => $this->created_at?->toIso8601String(),

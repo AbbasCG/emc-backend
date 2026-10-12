@@ -46,7 +46,7 @@ class MeetingReportController extends Controller
         $search = trim((string) $request->query('q', ''));
 
         $reports = $scoped()
-            ->with(['department:id,name,name_ar', 'author:id,name', 'meeting:id,title,meeting_date,department_id'])
+            ->with(['department:id,name,name_ar', 'author:id,name', 'meeting:id,title,type,meeting_date,department_id'])
             ->withCount([
                 'ratings',
                 'ratings as attended_count' => fn ($q) => $q->where('attended', true),
@@ -186,7 +186,7 @@ class MeetingReportController extends Controller
             return response()->json(['success' => false, 'message' => 'ليست لديك صلاحية عرض هذا التقرير.'], 403);
         }
 
-        $meetingReport->load(['department:id,name,name_ar', 'author:id,name', 'meeting:id,title,meeting_date,department_id', 'ratings.user:id,name'])
+        $meetingReport->load(['department:id,name,name_ar', 'author:id,name', 'meeting:id,title,type,meeting_date,department_id', 'ratings.user:id,name'])
             ->loadCount(['ratings', 'ratings as attended_count' => fn ($q) => $q->where('attended', true)]);
 
         return response()->json([
