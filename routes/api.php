@@ -146,6 +146,12 @@ use Illuminate\Support\Facades\Route;
 // ─── Health (no throttle — used by uptime monitors) ──────────────────────────
 Route::get('/health', \App\Http\Controllers\HealthController::class);
 
+// ─── Email verification link (public, but only honoured with a valid, unexpired signature) ───
+Route::get('/email/verify/{id}/{hash}', [\App\Http\Controllers\Auth\EmailVerificationController::class, 'verify'])
+    ->whereNumber('id')
+    ->middleware('throttle:30,1')
+    ->name('email.verify');
+
 // ─── Auth (throttle:auth — 5 req/min per IP, see AppServiceProvider::boot) ───
 Route::prefix('auth')->middleware('throttle:auth')->group(function () {
     Route::post('/register',       [AuthController::class, 'register']);
@@ -159,6 +165,8 @@ Route::prefix('auth')->middleware('throttle:auth')->group(function () {
 // they live under the standard API limiter — the 5/min brute-force limiter
 // above logged users out whenever /auth/me was refreshed a few times a minute.
 Route::prefix('auth')->middleware(['auth:sanctum', 'throttle:api'])->group(function () {
+    // A signed-in, still-unverified user asks for a fresh verification link for THEMSELF.
+    Route::post('email/resend', [\App\Http\Controllers\Auth\EmailVerificationController::class, 'resendMine']);
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me',      [AuthController::class, 'me']);
     Route::get('/me/access-manifest', \App\Http\Controllers\AccessManifestController::class);
@@ -1817,6 +1825,8 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::get('users/{user}',    [AdminUserController::class, 'show']);
     Route::put('users/{user}',    [AdminUserController::class, 'update']);
     Route::patch('users/{user}',  [AdminUserController::class, 'update']);
+    Route::post('users/{user}/resend-verification', [\App\Http\Controllers\Admin\UserEmailVerificationController::class, 'resend'])
+        ->middleware('throttle:admin_write');
 
     // ── Student courses + bulk repair ─────────────────────────────────────
     Route::get('students/{user}/courses',      [\App\Http\Controllers\AdminController::class, 'studentCourses']);

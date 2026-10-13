@@ -91,6 +91,7 @@ class AdminInstructorController extends Controller
         ]);
 
         $profile = self::ensureProfile($user);
+        app(\App\Services\EmailVerificationService::class)->sendInitial($user, $request->user());
 
         if (! empty($data['title'])) {
             $profile->update(['title' => $data['title']]);

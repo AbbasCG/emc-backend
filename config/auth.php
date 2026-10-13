@@ -114,4 +114,19 @@ return [
 
     'password_timeout' => env('AUTH_PASSWORD_TIMEOUT', 10800),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Email verification link lifetime
+    |--------------------------------------------------------------------------
+    |
+    | Minutes a verification link stays valid. 24 hours by default: long enough
+    | for someone who opens the email the next morning, short enough that a stale
+    | link does not live for weeks; an admin can always send a fresh one.
+    |
+    */
+
+    'verification' => [
+        'expire' => (int) env('EMAIL_VERIFICATION_EXPIRE_MINUTES', 1440),
+    ],
+
 ];

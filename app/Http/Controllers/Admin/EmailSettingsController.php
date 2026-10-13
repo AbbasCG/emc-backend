@@ -24,6 +24,7 @@ class EmailSettingsController extends Controller
         'welcome'                            => ['label' => 'بريد الترحيب (تسجيل ذاتي)',      'description' => 'يُرسل للمستخدم عند إنشاء حسابه بنفسه لأول مرة',                          'category' => 'users'],
         'account_created'                    => ['label' => 'حساب جديد (إنشاء إداري)',        'description' => 'يُرسل للمستخدم عند إنشاء حسابه من قِبل مشرف مع كلمة مرور مؤقتة',           'category' => 'users'],
         'temporary_password'                 => ['label' => 'كلمة المرور المؤقتة',            'description' => 'يُرسل عند إرسال كلمة مرور مؤقتة للمستخدم',                                'category' => 'users'],
+        'email_verification'                 => ['label' => 'توثيق البريد الإلكتروني',        'description' => 'يُرسل للمستخدم بعد إنشاء حسابه (ومن الإدارة عند إعادة الإرسال) ليوثّق بريده الإلكتروني',  'category' => 'users'],
         'password_reset'                     => ['label' => 'إعادة تعيين كلمة المرور',        'description' => 'يُرسل للمستخدم عند طلب إعادة تعيين كلمة المرور',                          'category' => 'users'],
         // ── Courses ───────────────────────────────────────────────────────────
         'course_enrollment'                  => ['label' => 'تسجيل في دورة',                  'description' => 'يُرسل للطالب عند تسجيله في دورة تدريبية',                                'category' => 'courses'],

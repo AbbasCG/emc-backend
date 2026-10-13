@@ -453,6 +453,7 @@ class AdminController extends Controller
         ]);
 
         $registration->update(['user_id' => $user->id]);
+        app(\App\Services\EmailVerificationService::class)->sendInitial($user, $request->user());
         // Create student_progress for all active registrations of this new user
         $this->syncProgressForUser($user->id);
         $registration->load(['course.track', 'course.instructor', 'user', 'payments']);

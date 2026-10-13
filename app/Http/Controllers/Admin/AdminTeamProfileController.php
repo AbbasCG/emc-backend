@@ -328,6 +328,7 @@ class AdminTeamProfileController extends Controller
 
         $teamProfile->update(['user_id' => $user->id]);
         $teamProfile->setRelation('user', $user);
+        app(\App\Services\EmailVerificationService::class)->sendInitial($user, request()->user());
 
         return response()->json([
             'success' => true,

@@ -75,8 +75,16 @@ class ProfileController extends Controller
             'country' => $user->country,
         ];
 
-        $user->update($data);
+        // email_verified_at is deliberately not mass-assignable, so the reset is applied explicitly.
+        $user->fill(collect($data)->except('email_verified_at')->all());
+        if ($emailChanged) {
+            $user->forceFill(['email_verified_at' => null]);
+        }
+        $user->save();
         $fresh = $user->fresh();
+        if ($emailChanged) {
+            app(\App\Services\EmailVerificationService::class)->sendInitial($fresh);
+        }
         if ($fresh->isTeacher()) {
             $fresh->loadMissing('instructorProfile');
         }

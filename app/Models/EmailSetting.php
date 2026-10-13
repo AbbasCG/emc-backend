@@ -41,7 +41,7 @@ class EmailSetting extends Model
         // EmailSettingsController::LABELS lists all known keys.
         $keys = [
             // Account
-            'welcome', 'account_created', 'temporary_password', 'password_reset',
+            'welcome', 'account_created', 'temporary_password', 'password_reset', 'email_verification',
             // Learning
             'course_enrollment', 'learning_path_enrollment',
             'course_completion', 'learning_path_completion',

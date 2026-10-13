@@ -43,6 +43,7 @@ class UserResource extends JsonResource
                 fn () => $this->relationLoaded('instructorProfile') ? $this->instructorProfile?->bio : null,
             ),
             'email_verified_at'          => $this->email_verified_at,
+            'email_verified'             => $this->email_verified_at !== null,
             'last_login_at'              => $this->last_login_at,
             'created_at'                 => $this->created_at,
             'updated_at'                 => $this->updated_at,

@@ -11,14 +11,25 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Notifications\ResetPasswordNotification;
+use Illuminate\Auth\MustVerifyEmail as MustVerifyEmailTrait;
+use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 
-class User extends Authenticatable
+class User extends Authenticatable implements MustVerifyEmail
 {
     /** @use HasFactory<UserFactory> */
-    use HasApiTokens, Auditable, HasFactory, Notifiable, SoftDeletes;
+    use HasApiTokens, Auditable, HasFactory, MustVerifyEmailTrait, Notifiable, SoftDeletes;
+
+    /**
+     * The platform's own verification mail (Arabic, logged, queued) replaces Laravel's
+     * default notification, so anything that asks the model to send one gets the same email.
+     */
+    public function sendEmailVerificationNotification(): void
+    {
+        app(\App\Services\EmailVerificationService::class)->sendInitial($this);
+    }
 
     protected $fillable = [
         'name', 'email', 'password', 'must_change_password', 'role',

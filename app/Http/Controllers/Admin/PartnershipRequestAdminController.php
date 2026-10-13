@@ -56,6 +56,11 @@ class PartnershipRequestAdminController extends Controller
                 ], 422);
             }
 
+            // A brand-new partner account proves its email once; an existing account is left alone.
+            if ($result['account_created']) {
+                app(\App\Services\EmailVerificationService::class)->sendInitial($result['user'], $request->user());
+            }
+
             AuditLogService::log('partnership_approved', 'PartnershipRequest', $partnershipRequest->id, null, null, [
                 'partner_id' => $result['partner']->id,
                 'user_id' => $result['user']->id,

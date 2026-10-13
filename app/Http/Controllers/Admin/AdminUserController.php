@@ -157,6 +157,7 @@ class AdminUserController extends Controller
             $user->name,
             $usedTemporaryPassword ? $temporaryPassword : null
         );
+        app(\App\Services\EmailVerificationService::class)->sendInitial($user, $request->user());
 
         AuditLogService::logModel('created', $user, null, [
             'name'  => $user->name,
@@ -252,7 +253,16 @@ class AdminUserController extends Controller
 
         unset($data['remove_avatar']);
 
+        $emailChanged = isset($data['email']) && strtolower((string) $data['email']) !== strtolower((string) $user->email);
+        if ($emailChanged) {
+            // The old verification proves nothing about the new address.
+        }
+
         $user->update($data);
+        if ($emailChanged) {
+            $user->forceFill(['email_verified_at' => null])->save();
+            app(\App\Services\EmailVerificationService::class)->sendInitial($user->fresh(), $request->user());
+        }
 
         if (array_key_exists('department', $data)) {
             if (is_numeric($data['department'])) {
@@ -446,6 +456,9 @@ class AdminUserController extends Controller
             'how_did_you_hear_about_us'  => $user->how_did_you_hear_about_us,
             'avatar_url'                 => $user->avatar_url,
             'email_verified_at'          => $user->email_verified_at,
+            'email_verified'             => $user->email_verified_at !== null,
+            // Offered only where a resend would actually be accepted (the route's role gate already limits who sees this module).
+            'can_resend_verification'    => $user->email_verified_at === null && ($user->is_active ?? true) && $user->deleted_at === null,
             'last_login_at'              => $user->last_login_at,
             'deleted_at'                 => $user->deleted_at,
             'created_at'                 => $user->created_at,

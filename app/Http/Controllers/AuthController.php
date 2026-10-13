@@ -34,6 +34,7 @@ class AuthController extends Controller
         $token = $this->establishAuthentication($request, $user);
 
         NotificationService::accountCreated($user->id, $user->name);
+        app(\App\Services\EmailVerificationService::class)->sendInitial($user);
 
         return response()->json([
             'success' => true,
