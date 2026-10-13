@@ -175,16 +175,19 @@ class SmartOperationalRulesService
     {
         $tz = (string) config('app.booking_timezone', 'Europe/Amsterdam');
         $from = $this->now->subDays((int) $r['lookback_days'])->toDateString();
-        $rows = Meeting::query()->whereIn('status', ['scheduled', 'completed'])->whereBetween('meeting_date', [$from, $this->now->toDateString()])
+        $rows = Meeting::query()->whereIn('status', ['scheduled', 'completed'])->whereDate('meeting_date', '>=', $from)->whereDate('meeting_date', '<=', $this->now->addDay()->toDateString())
             ->whereNotExists(fn ($q) => $q->select(DB::raw(1))->from('meeting_reports')->whereColumn('meeting_reports.meeting_id', 'meetings.id'))
             ->orderByDesc('meeting_date')->limit(self::CANDIDATES)->get(['id', 'title', 'meeting_date', 'start_time', 'end_time']);
 
         $out = [];
         foreach ($rows as $m) {
             $day = $m->meeting_date->format('Y-m-d');
-            $end = $m->end_time
-                ? CarbonImmutable::parse($day.' '.substr((string) $m->end_time, 0, 8), $tz)
-                : CarbonImmutable::parse($day.' '.substr((string) $m->start_time, 0, 8), $tz)->addHour();
+            $start = CarbonImmutable::parse($day.' '.substr((string) $m->start_time, 0, 8), $tz);
+            $end = $m->end_time ? CarbonImmutable::parse($day.' '.substr((string) $m->end_time, 0, 8), $tz) : $start->addHour();
+            // A meeting that runs past midnight stores an end time earlier than its start: it ends the next day.
+            if ($end->lte($start)) {
+                $end = $end->addDay();
+            }
             $end = $end->utc();
             $hours = (int) $end->diffInHours($this->now, false);
             if ($hours < (int) $r['threshold_hours']) {
@@ -207,7 +210,7 @@ class SmartOperationalRulesService
         $tz = (string) config('app.booking_timezone', 'Europe/Amsterdam');
         $limitAt = $this->now->addHours((int) $r['window_hours']);
         $rows = Meeting::query()->where('status', 'scheduled')->whereNull('department_id')
-            ->whereBetween('meeting_date', [$this->now->subDay()->toDateString(), $limitAt->addDay()->toDateString()])
+            ->whereDate('meeting_date', '>=', $this->now->subDay()->toDateString())->whereDate('meeting_date', '<=', $limitAt->addDay()->toDateString())
             ->whereNotExists(fn ($q) => $q->select(DB::raw(1))->from('meeting_participants')->whereColumn('meeting_participants.meeting_id', 'meetings.id'))
             ->orderBy('meeting_date')->orderBy('start_time')->limit(self::CANDIDATES)->get(['id', 'title', 'meeting_date', 'start_time']);
 
@@ -305,7 +308,7 @@ class SmartOperationalRulesService
         $tz = (string) config('app.booking_timezone', 'Europe/Amsterdam');
         $end = $this->now->addDays((int) $r['window_days']);
         $rows = LmsSession::query()->where('status', LmsSession::STATUS_SCHEDULED)->whereNull('instructor_id')
-            ->whereBetween('session_date', [$this->now->toDateString(), $end->toDateString()])
+            ->whereDate('session_date', '>=', $this->now->toDateString())->whereDate('session_date', '<=', $end->toDateString())
             ->orderBy('session_date')->orderBy('start_time')->limit(self::CANDIDATES)->get(['id', 'title', 'session_date', 'start_time']);
 
         $out = [];

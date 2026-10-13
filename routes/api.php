@@ -319,6 +319,13 @@ Route::middleware('auth:sanctum')->prefix('admin')->group(function () {
     Route::get('/hr-requests/my',                      [\App\Http\Controllers\Hr\HrRequestController::class, 'myRequests']);
     Route::get('/hr-requests/incoming',                [\App\Http\Controllers\Hr\HrRequestController::class, 'incomingRequests']);
     Route::patch('/hr-requests/{hrRequest}/status',    [\App\Http\Controllers\Hr\HrRequestController::class, 'updateStatus']);
+    // Details, smart volunteer matching and draft opportunities. Authorization is enforced inside the
+    // controllers by HrRequestAccessService (manage_team / view_volunteers / department leadership).
+    Route::get('/hr-requests/{hrRequest}',                                   [\App\Http\Controllers\Hr\HrRequestController::class, 'show'])->whereNumber('hrRequest');
+    Route::get('/hr-requests/{hrRequest}/volunteer-matches',                 [\App\Http\Controllers\Hr\HrRequestMatchingController::class, 'matches'])->whereNumber('hrRequest');
+    Route::get('/hr-requests/{hrRequest}/opportunity-draft/suggestion',      [\App\Http\Controllers\Hr\HrRequestMatchingController::class, 'suggestion'])->whereNumber('hrRequest');
+    Route::post('/hr-requests/{hrRequest}/opportunity-draft',                [\App\Http\Controllers\Hr\HrRequestMatchingController::class, 'store'])->whereNumber('hrRequest')->middleware('throttle:20,1');
+    Route::put('/hr-requests/{hrRequest}/opportunity-draft',                 [\App\Http\Controllers\Hr\HrRequestMatchingController::class, 'update'])->whereNumber('hrRequest')->middleware('throttle:20,1');
 });
 
 // ─── Instructor submission file (inline preview or attachment, JSON errors) ────

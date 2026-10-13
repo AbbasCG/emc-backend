@@ -4,13 +4,18 @@ namespace App\Http\Controllers\Hr;
 
 use App\Http\Controllers\Controller;
 use App\Models\Department;
+use App\Http\Resources\HrIncomingRequestResource;
 use App\Models\HrRequest;
+use App\Services\HrRequestAccessService;
+use Illuminate\Support\Facades\DB;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class HrRequestController extends Controller
 {
+    public function __construct(private readonly HrRequestAccessService $access) {}
+
     /**
      * Submit a new staffing/HR request from any department.
      */
@@ -112,40 +117,113 @@ class HrRequestController extends Controller
     }
 
     /**
-     * Get incoming requests for HR or Top Management view.
+     * Incoming staffing requests for the HR workspace.
+     *
+     * Authorized by HrRequestAccessService: manage_team holders and platform-wide roles see
+     * every department; a department leader sees only the departments they lead; everyone
+     * else gets 403. (This endpoint used to be open to any signed-in user.)
      */
     public function incomingRequests(Request $request): JsonResponse
     {
         $user = $request->user();
-        $query = HrRequest::with(['department', 'creator']);
-
-        $audienceFilter = $request->query('target_audience');
-        if ($audienceFilter) {
-            $query->where('target_audience', $audienceFilter);
+        if (! $this->access->canView($user)) {
+            return $this->forbidden();
         }
 
-        if ($request->filled('status')) {
-            $query->where('status', $request->query('status'));
-        }
+        $request->validate([
+            'status' => ['sometimes', 'nullable', 'in:pending,approved,rejected,in_progress'],
+            'department_id' => ['sometimes', 'nullable', 'integer'],
+            'target_audience' => ['sometimes', 'nullable', 'in:hr,top_management'],
+            'has_draft' => ['sometimes', 'nullable', 'in:yes,no'],
+            'q' => ['sometimes', 'nullable', 'string', 'max:100'],
+            'date_from' => ['sometimes', 'nullable', 'date'],
+            'date_to' => ['sometimes', 'nullable', 'date'],
+            'per_page' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:100'],
+        ]);
 
-        $requests = $query->orderBy('created_at', 'desc')->get();
+        $scoped = $this->access->scope(HrRequest::query(), $user);
+
+        // Filters shared by the list and the statistics (the statistics ignore the status filter,
+        // so the cards keep showing every status while one is selected).
+        $base = (clone $scoped)
+            ->when($request->filled('department_id'), fn ($q) => $q->where('department_id', (int) $request->query('department_id')))
+            ->when($request->filled('target_audience'), fn ($q) => $q->where('target_audience', $request->query('target_audience')))
+            ->when($request->query('has_draft') === 'yes', fn ($q) => $q->whereHas('opportunityDraft'))
+            ->when($request->query('has_draft') === 'no', fn ($q) => $q->whereDoesntHave('opportunityDraft'))
+            ->when($request->filled('date_from'), fn ($q) => $q->whereDate('created_at', '>=', $request->query('date_from')))
+            ->when($request->filled('date_to'), fn ($q) => $q->whereDate('created_at', '<=', $request->query('date_to')))
+            ->when($request->filled('q'), function ($q) use ($request) {
+                $term = trim((string) $request->query('q'));
+                $q->where(function ($w) use ($term) {
+                    $w->where('request_type', 'like', "%{$term}%")
+                        ->orWhere('skills_and_specs', 'like', "%{$term}%")
+                        ->orWhere('notes', 'like', "%{$term}%")
+                        ->orWhereHas('department', fn ($d) => $d->where('name', 'like', "%{$term}%")->orWhere('name_ar', 'like', "%{$term}%"))
+                        ->orWhereHas('creator', fn ($c) => $c->where('name', 'like', "%{$term}%"));
+                });
+            });
+
+        $counts = (clone $base)->select('status', DB::raw('COUNT(*) as c'))->groupBy('status')->pluck('c', 'status');
+        $withDrafts = (clone $base)->whereHas('opportunityDraft')->count();
+
+        $page = (clone $base)
+            ->when($request->filled('status'), fn ($q) => $q->where('status', $request->query('status')))
+            ->with(['department:id,name,name_ar', 'creator:id,name', 'opportunityDraft:id,incoming_request_id,title,status'])
+            ->orderByDesc('created_at')->orderByDesc('id')
+            ->paginate((int) $request->query('per_page', 25));
 
         return response()->json([
             'success' => true,
-            'data'    => $requests,
+            'data' => HrIncomingRequestResource::collection($page->getCollection())->resolve(),
+            'meta' => ['current_page' => $page->currentPage(), 'last_page' => $page->lastPage(), 'per_page' => $page->perPage(), 'total' => $page->total()],
+            'stats' => [
+                'total' => (int) $counts->sum(),
+                'pending' => (int) ($counts['pending'] ?? 0),
+                'in_progress' => (int) ($counts['in_progress'] ?? 0),
+                'approved' => (int) ($counts['approved'] ?? 0),
+                'rejected' => (int) ($counts['rejected'] ?? 0),
+                'with_drafts' => $withDrafts,
+            ],
+            'filters' => [
+                'departments' => Department::query()->whereIn('id', (clone $scoped)->whereNotNull('department_id')->distinct()->pluck('department_id'))
+                    ->orderBy('name_ar')->get(['id', 'name', 'name_ar'])->map(fn ($d) => ['id' => $d->id, 'name' => $d->name_ar ?: $d->name])->values(),
+            ],
+            'capabilities' => $this->access->capabilities($user),
+        ]);
+    }
+
+    /** One request with its draft, for the details drawer. */
+    public function show(Request $request, HrRequest $hrRequest): JsonResponse
+    {
+        $user = $request->user();
+        if (! $this->access->canSee($user, $hrRequest)) {
+            return $this->forbidden();
+        }
+
+        $hrRequest->load(['department:id,name,name_ar', 'creator:id,name', 'opportunityDraft']);
+
+        return response()->json([
+            'success' => true,
+            'data' => (new HrIncomingRequestResource($hrRequest))->resolve(),
+            'capabilities' => $this->access->capabilities($user),
         ]);
     }
 
     /**
-     * Update HR request status and feedback notes.
+     * Update HR request status and feedback notes. Requires manage_team.
      */
-    public function updateStatus(Request $request, int $id): JsonResponse
+    public function updateStatus(Request $request, HrRequest $hrRequest): JsonResponse
     {
-        $hrRequest = HrRequest::findOrFail($id);
+        if (! $this->access->canManage($request->user())) {
+            return $this->forbidden();
+        }
 
         $validated = $request->validate([
             'status'      => ['required', 'in:pending,approved,rejected,in_progress'],
-            'hr_feedback' => ['nullable', 'string'],
+            'hr_feedback' => ['nullable', 'string', 'max:2000'],
+        ], [
+            'status.required' => 'حالة الطلب مطلوبة.',
+            'status.in' => 'حالة الطلب غير صالحة.',
         ]);
 
         $hrRequest->update([
@@ -156,7 +234,12 @@ class HrRequestController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'تم تحديث حالة الطلب بنجاح',
-            'data'    => $hrRequest->load(['department', 'creator']),
+            'data'    => (new HrIncomingRequestResource($hrRequest->load(['department:id,name,name_ar', 'creator:id,name', 'opportunityDraft'])))->resolve(),
         ]);
+    }
+
+    private function forbidden(): JsonResponse
+    {
+        return response()->json(['success' => false, 'message' => 'ليس لديك صلاحية للوصول إلى الطلبات الواردة.'], 403);
     }
 }

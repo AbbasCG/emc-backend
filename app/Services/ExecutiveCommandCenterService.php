@@ -367,7 +367,7 @@ class ExecutiveCommandCenterService
         $today = $this->now->toDateString();
 
         // Upcoming (within the horizon), earliest first.
-        $upcoming = Meeting::query()->where('status', 'scheduled')->whereBetween('meeting_date', [$today, $horizonDate])
+        $upcoming = Meeting::query()->where('status', 'scheduled')->whereDate('meeting_date', '>=', $today)->whereDate('meeting_date', '<=', $horizonDate)
             ->orderBy('meeting_date')->orderBy('start_time')->limit(self::PER_COLLECTOR_ROWS)->with('department:id,name,name_ar')->get(['id', 'title', 'meeting_date', 'start_time', 'department_id', 'organizer_id']);
         foreach ($upcoming as $m) {
             $start = $this->meetingStart($m);
@@ -379,7 +379,7 @@ class ExecutiveCommandCenterService
         }
 
         // Past meetings with no report filed yet.
-        $missing = Meeting::query()->whereIn('status', ['scheduled', 'completed'])->whereBetween('meeting_date', [$this->since->toDateString(), $today])
+        $missing = Meeting::query()->whereIn('status', ['scheduled', 'completed'])->whereDate('meeting_date', '>=', $this->since->toDateString())->whereDate('meeting_date', '<=', $this->now->addDay()->toDateString())
             ->whereNotExists(fn ($q) => $q->select(DB::raw(1))->from('meeting_reports')->whereColumn('meeting_reports.meeting_id', 'meetings.id'))
             ->orderByDesc('meeting_date')->limit(self::PER_COLLECTOR_ROWS)->get(['id', 'title', 'meeting_date', 'start_time']);
         foreach ($missing as $m) {
@@ -401,7 +401,7 @@ class ExecutiveCommandCenterService
 
     private function collectSessions(): void
     {
-        $sessions = LmsSession::query()->where('status', LmsSession::STATUS_SCHEDULED)->whereBetween('session_date', [$this->now->toDateString(), $this->until->toDateString()])
+        $sessions = LmsSession::query()->where('status', LmsSession::STATUS_SCHEDULED)->whereDate('session_date', '>=', $this->now->toDateString())->whereDate('session_date', '<=', $this->until->toDateString())
             ->orderBy('session_date')->orderBy('start_time')->limit(self::PER_COLLECTOR_ROWS)->get(['id', 'title', 'session_date', 'start_time', 'instructor_id']);
         $tz = (string) config('app.booking_timezone', 'Europe/Amsterdam');
         foreach ($sessions as $s) {

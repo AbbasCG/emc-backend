@@ -174,7 +174,7 @@ class TechDepartmentDashboardService
         $upcomingMeetings = Meeting::query()
             ->where('department_id', $d->id)
             ->where('status', 'scheduled')
-            ->whereBetween('meeting_date', [today()->toDateString(), today()->addDays(7)->toDateString()])
+            ->whereDate('meeting_date', '>=', today()->toDateString())->whereDate('meeting_date', '<=', today()->addDays(7)->toDateString())
             ->count();
 
         return [

@@ -60,6 +60,8 @@ final class DepartmentMergeService
         'meeting_reports' => 'department_id',
         'weekly_department_reports' => 'department_id',
         'hr_requests' => 'department_id',
+        // Draft opportunities are generated from an hr_request and keep that request's department, like it does.
+        'volunteer_opportunities' => 'department_id',
         'hr_applications' => 'department_id',
         'financial_requests' => 'department_id',
         'documents' => 'department_id',
