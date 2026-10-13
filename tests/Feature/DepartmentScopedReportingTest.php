@@ -377,6 +377,8 @@ class DepartmentScopedReportingTest extends TestCase
         $dept = $this->makeDepartment();
         $otherDept = $this->makeDepartment();
         $member = $this->makeMemberUser('programs_manager', $dept);
+        // Official reports are read by whoever MANAGES the department (its leader), not by every member.
+        $dept->update(['leader_id' => $member->id]);
         $admin = User::factory()->create(['role' => 'super_admin', 'is_active' => true]);
 
         $this->actingAs($admin)->postJson('/api/operations/meeting-reports', [

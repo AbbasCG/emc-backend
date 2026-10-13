@@ -213,20 +213,12 @@ class CalendarController extends Controller
                 ));
             }
             if ($wants('meeting')) {
-                $events = $events
-                    ->merge($this->normalizeMeetings(
-                        Meeting::with(['department:id,name,name_ar', 'organizer:id,name'])
-                            ->whereBetween('meeting_date', [$start->toDateString(), $end->toDateString()])
-                            ->when($deptId, fn ($q) => $q->where('department_id', $deptId))
-                            ->get(),
-                        $user, true,
-                    ))
-                    ->merge($this->normalizeCalendarEventList(
-                        CalendarEvent::with('user:id,name')
-                            ->whereBetween('start_at', [$start, $end])
-                            ->get(),
-                        $user,
-                    ));
+                $events = $events->merge($this->normalizeCalendarEventList(
+                    CalendarEvent::with('user:id,name')
+                        ->whereBetween('start_at', [$start, $end])
+                        ->get(),
+                    $user,
+                ));
             }
             if ($wants('task')) {
                 $events = $events->merge($this->normalizeTasks(
@@ -389,19 +381,7 @@ class CalendarController extends Controller
 
         // ── Department member / Leader / Operations staff / Default ──────────
         else {
-            $deptIds   = $this->getUserDepartmentIds($user);
-            $isDeptLdr = $deptIds->isNotEmpty();
-
             if ($wants('meeting')) {
-                if ($deptIds->isNotEmpty()) {
-                    $events = $events->merge($this->normalizeMeetings(
-                        Meeting::with(['department:id,name,name_ar', 'organizer:id,name'])
-                            ->whereIn('department_id', $deptIds)
-                            ->whereBetween('meeting_date', [$start->toDateString(), $end->toDateString()])
-                            ->get(),
-                        $user, $isDeptLdr,
-                    ));
-                }
                 // All-visibility calendar events
                 $events = $events->merge($this->normalizeCalendarEventList(
                     CalendarEvent::with('user:id,name')
@@ -442,7 +422,32 @@ class CalendarController extends Controller
             }
         }
 
+        // ── Meetings: the same rule for every role ───────────────────────────────
+        // A meeting shows only for people it concerns: global admins (all), the
+        // organizer, invited participants, and members/leaders of its department
+        // when nobody was invited by name. Students and instructors included.
+        if ($wants('meeting')) {
+            $access = \App\Services\MeetingAccessService::for($request);
+            $query = $this->departmentAccessIsGlobal($user)
+                ? Meeting::query()
+                : $access->assignedQuery($user);
+
+            $events = $events->merge($this->normalizeMeetings(
+                $query->with(['department:id,name,name_ar', 'organizer:id,name', 'participants'])
+                    ->whereBetween('meeting_date', [$start->toDateString(), $end->toDateString()])
+                    ->when($deptId, fn ($q) => $q->where('department_id', $deptId))
+                    ->get(),
+                $user,
+                $access,
+            ));
+        }
+
         return $events->filter(fn ($e) => ! empty($e['start_at']))->sortBy('start_at')->values();
+    }
+
+    private function departmentAccessIsGlobal($user): bool
+    {
+        return app(\App\Services\DepartmentAccessService::class)->isGlobal($user);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -748,9 +753,10 @@ class CalendarController extends Controller
         ]);
     }
 
-    private function normalizeMeetings(Collection $meetings, $user, bool $canEdit): Collection
+    private function normalizeMeetings(Collection $meetings, $user, \App\Services\MeetingAccessService $access): Collection
     {
-        return $meetings->map(function ($m) use ($user, $canEdit) {
+        return $meetings->map(function ($m) use ($user, $access) {
+            $canJoin = $access->canJoin($user, $m);
             $dateStr = $m->meeting_date instanceof Carbon
                 ? $m->meeting_date->toDateString()
                 : (string) ($m->meeting_date ?? '');
@@ -771,7 +777,9 @@ class CalendarController extends Controller
                 'end_at'       => $endAt?->toIso8601String(),
                 'status'       => $m->status ?? 'scheduled',
                 'location'     => null,
-                'meeting_link' => $m->meeting_url,
+                'meeting_type' => $m->type,
+                'details_url'  => '/dashboard/department/meeting-lounge/'.$m->id,
+                'meeting_link' => $canJoin ? $m->meeting_url : null,
                 'course'       => null,
                 'workshop'     => null,
                 'department'   => $m->department
@@ -780,9 +788,9 @@ class CalendarController extends Controller
                 'owner'        => $m->organizer
                     ? ['id' => $m->organizer->id, 'name' => $m->organizer->name]
                     : null,
-                'visibility'   => 'department',
-                'can_edit'     => $canEdit || $m->organizer_id === $user->id,
-                'can_join'     => (bool) $m->meeting_url,
+                'visibility'   => $m->hasExplicitAudience() ? 'participants' : ($m->department_id ? 'department' : 'private'),
+                'can_edit'     => $access->canManage($user, $m),
+                'can_join'     => $canJoin && (bool) $m->meeting_url,
             ];
         });
     }

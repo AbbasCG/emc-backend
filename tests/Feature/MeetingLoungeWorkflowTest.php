@@ -95,6 +95,25 @@ class MeetingLoungeWorkflowTest extends TestCase
         ], $over);
     }
 
+    /** Attendance for every person the server allows at this meeting, all present. */
+    private function attendanceFor(Meeting $m, ?User $as = null): array
+    {
+        $pool = app(\App\Services\MeetingParticipantService::class)->poolForMeeting($m->fresh(['department']), $as ?? $this->admin);
+
+        return $pool->map(fn ($p) => ['user_id' => $p['id'], 'attended' => true])->values()->all();
+    }
+
+    /** POST the report as the currently acting user, with real attendance unless overridden. */
+    private function postReport(Meeting $m, array $over = [], ?User $pool = null)
+    {
+        $payload = $this->report($over);
+        if (! array_key_exists('attendance', $payload)) {
+            $payload['attendance'] = $this->attendanceFor($m, $pool);
+        }
+
+        return $this->postJson("/api/department/meetings/{$m->id}/report", $payload);
+    }
+
     private function newPayload(array $over = []): array
     {
         return array_merge([
@@ -255,7 +274,7 @@ class MeetingLoungeWorkflowTest extends TestCase
         $this->getJson('/api/department/meetings')->assertUnauthorized();
         $this->postJson('/api/department/meetings', $this->newPayload())->assertUnauthorized();
         $this->putJson("/api/department/meetings/{$m->id}", ['title' => 'x'])->assertUnauthorized();
-        $this->postJson("/api/department/meetings/{$m->id}/report", $this->report())->assertUnauthorized();
+        $this->postReport($m)->assertUnauthorized();
     }
 
     // ═══ Editing ═════════════════════════════════════════════════════════════
@@ -327,7 +346,7 @@ class MeetingLoungeWorkflowTest extends TestCase
     {
         $a = $this->meeting($this->deptA, ['title' => 'خطة التسويق', 'type' => 'programs', 'meeting_date' => '2026-03-10', 'status' => 'completed']);
         $b = $this->meeting($this->deptB, ['title' => 'مراجعة الجودة', 'type' => 'quality', 'meeting_date' => '2026-05-10']);
-        $this->as($this->admin)->postJson("/api/department/meetings/{$a->id}/report", $this->report())->assertCreated();
+        $this->as($this->admin)->postReport($a)->assertCreated();
 
         $q = fn (string $query) => $this->ids($this->getJson('/api/department/meetings'.$query));
 
@@ -355,7 +374,7 @@ class MeetingLoungeWorkflowTest extends TestCase
         $done = $this->meeting($this->deptA, ['meeting_date' => now()->toDateString(), 'status' => 'completed']);
         $this->meeting($this->deptA, ['meeting_date' => now()->addDays(40)->toDateString()]);                    // future, not late
         $this->meeting($this->deptA, ['meeting_date' => now()->subDays(40)->toDateString(), 'status' => 'cancelled']);
-        $this->as($this->admin)->postJson("/api/department/meetings/{$done->id}/report", $this->report())->assertCreated();
+        $this->as($this->admin)->postReport($done)->assertCreated();
 
         $stats = $this->getJson('/api/department/meetings')->json('stats');
 
@@ -383,7 +402,7 @@ class MeetingLoungeWorkflowTest extends TestCase
         $m = $this->meeting($this->deptA);
         $other = $this->meeting($this->deptA, ['title' => 'اجتماع آخر']);
 
-        $res = $this->as($this->leaderA)->postJson("/api/department/meetings/{$m->id}/report", $this->report())->assertCreated();
+        $res = $this->as($this->leaderA)->postReport($m)->assertCreated();
 
         $row = MeetingReport::where('meeting_id', $m->id)->sole();
         $this->assertSame($this->leaderA->id, (int) $row->created_by);
@@ -399,9 +418,9 @@ class MeetingLoungeWorkflowTest extends TestCase
     public function test_a_second_report_for_the_same_meeting_is_refused_in_arabic(): void
     {
         $m = $this->meeting($this->deptA);
-        $this->as($this->leaderA)->postJson("/api/department/meetings/{$m->id}/report", $this->report())->assertCreated();
+        $this->as($this->leaderA)->postReport($m)->assertCreated();
 
-        $res = $this->postJson("/api/department/meetings/{$m->id}/report", $this->report(['challenges' => 'محاولة ثانية']))->assertStatus(422);
+        $res = $this->postReport($m, ['challenges' => 'محاولة ثانية'])->assertStatus(422);
 
         $this->assertSame('تم رفع تقرير لهذا الاجتماع مسبقًا.', $res->json('message'));
         $this->assertSame('تم رفع تقرير لهذا الاجتماع مسبقًا.', $res->json('errors.meeting.0'));
@@ -412,10 +431,10 @@ class MeetingLoungeWorkflowTest extends TestCase
     public function test_a_different_authorized_user_cannot_file_a_second_report_either(): void
     {
         $m = $this->meeting($this->deptA);
-        $this->as($this->leaderA)->postJson("/api/department/meetings/{$m->id}/report", $this->report())->assertCreated();
+        $this->as($this->leaderA)->postReport($m)->assertCreated();
 
-        $this->as($this->admin)->postJson("/api/department/meetings/{$m->id}/report", $this->report())->assertStatus(422);
-        $this->as($this->managerA)->postJson("/api/department/meetings/{$m->id}/report", $this->report())->assertStatus(422);
+        $this->as($this->admin)->postReport($m)->assertStatus(422);
+        $this->as($this->managerA)->postReport($m)->assertStatus(422);
     }
 
     public function test_the_database_itself_refuses_a_second_report_row_for_a_meeting(): void
@@ -438,7 +457,7 @@ class MeetingLoungeWorkflowTest extends TestCase
     public function test_after_the_report_the_lounge_flags_it_and_the_upload_capability_turns_off(): void
     {
         $m = $this->meeting($this->deptA);
-        $this->as($this->leaderA)->postJson("/api/department/meetings/{$m->id}/report", $this->report())->assertCreated();
+        $this->as($this->leaderA)->postReport($m)->assertCreated();
 
         $row = collect($this->getJson('/api/department/meetings')->json('data.data'))->firstWhere('id', $m->id);
 
@@ -447,20 +466,28 @@ class MeetingLoungeWorkflowTest extends TestCase
         $this->assertSame('report_submitted', $row['display_status']);
         $this->assertFalse($row['capabilities']['can_upload_report']);
         $this->assertTrue($row['capabilities']['can_view_report']);
-        $this->assertNull($row['report'], 'the list carries no report body');
+        $this->assertArrayNotHasKey('report', $row, 'the list carries no report body');
     }
 
-    public function test_the_detail_view_carries_the_report_body_for_someone_allowed_to_read_it(): void
+    public function test_the_detail_view_carries_the_report_body_only_for_someone_allowed_to_read_it(): void
     {
         $m = $this->meeting($this->deptA);
-        $this->as($this->leaderA)->postJson("/api/department/meetings/{$m->id}/report", $this->report())->assertCreated();
+        $this->as($this->leaderA)->postReport($m)->assertCreated();
 
-        $d = $this->as($this->memberA)->getJson("/api/department/meetings/{$m->id}")->assertOk()->json('data');
-
+        $d = $this->as($this->leaderA)->getJson("/api/department/meetings/{$m->id}")->assertOk()->json('data');
         $this->assertSame('أُنجزت خطة الربع', $d['report']['completed_tasks_summary']);
         $this->assertSame(['أحمد'], $d['report']['absentees']);
         $this->assertSame($this->leaderA->id, $d['report']['uploaded_by']['id']);
         $this->assertNotNull($d['report']['uploaded_at']);
+
+        // A plain assigned member learns that a report exists - never what it says.
+        $m2 = $this->as($this->memberA)->getJson("/api/department/meetings/{$m->id}")->assertOk()->json('data');
+        $this->assertTrue($m2['has_report']);
+        $this->assertNull($m2['report']);
+        $this->assertNull($m2['report_id']);
+        $this->assertFalse($m2['capabilities']['can_view_report']);
+        $this->assertSame([], $m2['decisions']);
+        $this->assertSame([], $m2['action_items']);
     }
 
     // ═══ Who may file the report ═════════════════════════════════════════════
@@ -469,7 +496,7 @@ class MeetingLoungeWorkflowTest extends TestCase
     {
         $m = $this->meeting($this->deptA);
 
-        $this->as($this->memberA)->postJson("/api/department/meetings/{$m->id}/report", $this->report())->assertForbidden();
+        $this->as($this->memberA)->postReport($m)->assertForbidden();
 
         $this->assertSame(0, MeetingReport::where('meeting_id', $m->id)->count());
     }
@@ -491,7 +518,7 @@ class MeetingLoungeWorkflowTest extends TestCase
         $this->deptB->update(['leader_id' => $leaderB->id]);
 
         foreach ([$this->user('student'), $leaderB] as $who) {
-            $this->as($who)->postJson("/api/department/meetings/{$m->id}/report", $this->report())->assertForbidden();
+            $this->as($who)->postReport($m)->assertForbidden();
             $this->getJson("/api/department/meetings/{$m->id}")->assertForbidden();
         }
         $this->assertSame(0, MeetingReport::count());
@@ -501,14 +528,14 @@ class MeetingLoungeWorkflowTest extends TestCase
     {
         $m = $this->as($this->managerA)->postJson('/api/department/meetings', $this->newPayload())->json('data.id');
 
-        $this->postJson("/api/department/meetings/{$m}/report", $this->report())->assertCreated();
+        $this->postReport(Meeting::findOrFail($m))->assertCreated();
     }
 
     public function test_a_cancelled_meeting_takes_no_report(): void
     {
         $m = $this->meeting($this->deptA, ['status' => 'cancelled']);
 
-        $res = $this->as($this->leaderA)->postJson("/api/department/meetings/{$m->id}/report", $this->report())->assertStatus(422);
+        $res = $this->as($this->leaderA)->postReport($m)->assertStatus(422);
 
         $this->assertSame('لا يمكن رفع تقرير لاجتماع ملغى.', $res->json('message'));
     }
@@ -527,7 +554,7 @@ class MeetingLoungeWorkflowTest extends TestCase
     {
         $m = $this->meeting($this->deptA);
 
-        $res = $this->as($this->leaderA)->postJson("/api/department/meetings/{$m->id}/report", $this->report(['team_commitment_score' => 9, 'kpi_percentage' => 400]))->assertStatus(422);
+        $res = $this->as($this->leaderA)->postReport($m, ['team_commitment_score' => 9, 'kpi_percentage' => 400])->assertStatus(422);
 
         $this->assertSame('مقياس التزام الفريق من 1 إلى 5.', $res->json('errors.team_commitment_score.0'));
         $this->assertSame('نسبة تحقيق الأهداف بين 0 و100.', $res->json('errors.kpi_percentage.0'));
@@ -540,7 +567,7 @@ class MeetingLoungeWorkflowTest extends TestCase
         $m = $this->meeting($this->deptB, ['title' => 'اجتماع الشراكات', 'type' => 'partnerships']);
         $leaderB = $this->user('programs_manager');
         $this->deptB->update(['leader_id' => $leaderB->id]);
-        $this->as($leaderB)->postJson("/api/department/meetings/{$m->id}/report", $this->report())->assertCreated();
+        $this->as($leaderB)->postReport($m)->assertCreated();
 
         // The lounge: quality is outside department B yet reads its meeting and report.
         $lounge = $this->as($this->quality)->getJson('/api/department/meetings')->assertOk();
@@ -564,7 +591,7 @@ class MeetingLoungeWorkflowTest extends TestCase
     public function test_quality_reads_the_report_detail_with_the_filed_text(): void
     {
         $m = $this->meeting($this->deptB);
-        $this->as($this->admin)->postJson("/api/department/meetings/{$m->id}/report", $this->report())->assertCreated();
+        $this->as($this->admin)->postReport($m)->assertCreated();
         $reportId = MeetingReport::where('meeting_id', $m->id)->value('id');
 
         $d = $this->as($this->quality)->getJson("/api/operations/meeting-reports/{$reportId}")->assertOk()->json('data');
@@ -578,14 +605,14 @@ class MeetingLoungeWorkflowTest extends TestCase
     {
         $m = $this->meeting($this->deptA);
 
-        $this->as($this->quality)->postJson("/api/department/meetings/{$m->id}/report", $this->report())->assertForbidden();
+        $this->as($this->quality)->postReport($m)->assertForbidden();
         $this->postJson('/api/department/meetings', $this->newPayload())->assertForbidden();
     }
 
     public function test_people_outside_quality_and_the_department_do_not_see_the_report(): void
     {
         $m = $this->meeting($this->deptB);
-        $this->as($this->admin)->postJson("/api/department/meetings/{$m->id}/report", $this->report())->assertCreated();
+        $this->as($this->admin)->postReport($m)->assertCreated();
         $reportId = MeetingReport::where('meeting_id', $m->id)->value('id');
 
         // Department A member: not in B, so neither the meeting nor its report.
@@ -601,7 +628,7 @@ class MeetingLoungeWorkflowTest extends TestCase
     public function test_a_report_is_hidden_from_a_member_when_they_cannot_view_the_meeting(): void
     {
         $m = $this->meeting($this->deptB);
-        $this->as($this->admin)->postJson("/api/department/meetings/{$m->id}/report", $this->report())->assertCreated();
+        $this->as($this->admin)->postReport($m)->assertCreated();
 
         $this->as($this->memberA)->getJson("/api/department/meetings/{$m->id}")->assertForbidden();
     }
@@ -644,7 +671,7 @@ class MeetingLoungeWorkflowTest extends TestCase
         $m = $this->meeting($this->deptA);
         MeetingReport::create(['meeting_id' => $m->id, 'challenges' => 'قديم']);
 
-        $this->as($this->leaderA)->postJson("/api/department/meetings/{$m->id}/report", $this->report())->assertStatus(422);
+        $this->as($this->leaderA)->postReport($m)->assertStatus(422);
     }
 
     // ═══ Duplicate finder command ════════════════════════════════════════════

@@ -1360,6 +1360,10 @@ Route::middleware(['auth:sanctum'])->prefix('department')->group(function () {
     Route::patch('meetings/{meeting}/action-items/{actionItem}',  [MeetingController::class, 'updateActionItem']);
     Route::post('meetings/{meeting}/action-items',                [MeetingController::class, 'storeActionItem']);
     Route::post('meetings/{meeting}/report',                      [MeetingController::class, 'storeReport']);
+    Route::get('meeting-participants',                            [MeetingController::class, 'candidates']);
+    Route::get('meetings/{meeting}/participants',                 [MeetingController::class, 'participantPool']);
+    Route::post('meetings/{meeting}/join',                        [MeetingController::class, 'join']);
+    Route::post('meetings/{meeting}/confirm-attendance',          [MeetingController::class, 'confirmAttendance']);
 });
 
 // ─── Operations: Partnerships (accessible to partnerships_manager as well) ─

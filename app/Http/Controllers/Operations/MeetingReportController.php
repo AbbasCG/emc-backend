@@ -8,6 +8,9 @@ use App\Models\MeetingReport;
 use App\Models\MeetingReportRating;
 use App\Services\DepartmentAccessService;
 use App\Services\ImpactPoints;
+use App\Services\MeetingAccessService;
+use App\Services\MeetingParticipantService;
+use App\Models\MeetingParticipant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -39,9 +42,13 @@ class MeetingReportController extends Controller
             'per_page'      => 'nullable|integer|min:1',
         ]);
 
-        // Everything below starts from the user's department scope: a filter can
-        // only narrow what they may already read, never widen it.
-        $scoped = fn () => $this->departmentAccess->scopeQuery(MeetingReport::query(), $user);
+        // Official reports are for oversight (global, quality) and for whoever manages
+        // the report's department. A plain department member does not read them, and a
+        // filter can only narrow this scope, never widen it.
+        $readable = MeetingAccessService::for($request)->readableReportDepartmentIds($user);
+        $scoped = fn () => $readable === null
+            ? MeetingReport::query()
+            : MeetingReport::query()->whereIn('department_id', $readable);
 
         $search = trim((string) $request->query('q', ''));
 
@@ -64,8 +71,15 @@ class MeetingReportController extends Controller
             ->orderByRaw('meeting_date is null')
             ->orderByDesc('meeting_date')
             ->orderByDesc('id')
-            ->paginate(min(max((int) $request->query('per_page', 15), 1), self::MAX_PER_PAGE))
-            ->through(fn (MeetingReport $r) => (new OperationsMeetingReportResource($r))->resolve());
+            ->paginate(min(max((int) $request->query('per_page', 15), 1), self::MAX_PER_PAGE));
+
+        // Attendance for the whole page in one query.
+        $summaries = app(MeetingParticipantService::class)->summariesFor(
+            $reports->getCollection()->pluck('meeting_id')->filter()->map(fn ($i) => (int) $i)->unique()->values()->all()
+        );
+        $reports = $reports->through(fn (MeetingReport $r) => (new OperationsMeetingReportResource($r))
+            ->attendance($this->attendanceFor($r, $summaries[$r->meeting_id] ?? null))
+            ->resolve());
 
         return response()->json([
             'success' => true,
@@ -182,16 +196,55 @@ class MeetingReportController extends Controller
 
     public function show(Request $request, MeetingReport $meetingReport): JsonResponse
     {
-        if (! $this->departmentAccess->canAccessDepartment($request->user(), (int) $meetingReport->department_id)) {
+        if (! MeetingAccessService::for($request)->canViewReportsOf($request->user(), $meetingReport->department_id !== null ? (int) $meetingReport->department_id : null)) {
             return response()->json(['success' => false, 'message' => 'ليست لديك صلاحية عرض هذا التقرير.'], 403);
         }
 
         $meetingReport->load(['department:id,name,name_ar', 'author:id,name', 'meeting:id,title,type,meeting_date,department_id', 'ratings.user:id,name'])
             ->loadCount(['ratings', 'ratings as attended_count' => fn ($q) => $q->where('attended', true)]);
 
+        $summary = $meetingReport->meeting_id
+            ? (app(MeetingParticipantService::class)->summariesFor([(int) $meetingReport->meeting_id])[$meetingReport->meeting_id] ?? null)
+            : null;
+        $attendance = $this->attendanceFor($meetingReport, $summary);
+
+        // Who attended / who did not, by name (this endpoint is already limited to oversight and managers).
+        if ($attendance !== null && $meetingReport->meeting_id && $summary !== null) {
+            $people = MeetingParticipant::query()->where('meeting_id', $meetingReport->meeting_id)->with('user:id,name')->get();
+            $present = [MeetingParticipant::STATUS_ATTENDED, MeetingParticipant::STATUS_JOINED];
+            $attendance['attendees'] = $people->filter(fn ($p) => in_array($p->status, $present, true))->map(fn ($p) => $p->user?->name)->filter()->values()->all();
+            $attendance['absent'] = $people->where('status', MeetingParticipant::STATUS_ABSENT)->map(fn ($p) => $p->user?->name)->filter()->values()->all();
+        } elseif ($attendance !== null) {
+            $attendance['attendees'] = $meetingReport->ratings->where('attended', true)->map(fn ($r) => $r->user?->name)->filter()->values()->all();
+            $attendance['absent'] = $meetingReport->ratings->where('attended', false)->map(fn ($r) => $r->user?->name)->filter()->values()->all();
+        }
+
         return response()->json([
             'success' => true,
-            'data'    => (new OperationsMeetingReportResource($meetingReport))->detailed()->resolve(),
+            'data'    => (new OperationsMeetingReportResource($meetingReport))->attendance($attendance)->detailed()->resolve(),
         ]);
+    }
+
+    /**
+     * Attendance summary of one report: from the meeting's participants when it has
+     * any, else from the per-member ratings of a department report, else null.
+     *
+     * @param  array{invited: int, attended: int, absent: int}|null  $fromParticipants
+     * @return array{invited: int, attended: int, absent: int}|null
+     */
+    private function attendanceFor(MeetingReport $report, ?array $fromParticipants): ?array
+    {
+        if ($fromParticipants !== null) {
+            return $fromParticipants;
+        }
+
+        $total = (int) ($report->ratings_count ?? 0);
+        if ($total === 0) {
+            return null;
+        }
+
+        $attended = (int) ($report->attended_count ?? 0);
+
+        return ['invited' => $total, 'attended' => $attended, 'absent' => max(0, $total - $attended)];
     }
 }

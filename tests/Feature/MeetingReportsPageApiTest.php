@@ -167,7 +167,7 @@ class MeetingReportsPageApiTest extends TestCase
         $row = $this->list($this->user('super_admin'))->assertOk()->json('data.data.0');
 
         $this->assertEqualsCanonicalizing(
-            ['id', 'title', 'meeting_date', 'department', 'author', 'meeting', 'ratings_count', 'attended_count', 'created_at'],
+            ['id', 'title', 'meeting_date', 'department', 'author', 'meeting', 'attendance', 'ratings_count', 'attended_count', 'created_at'],
             array_keys($row),
         );
         $this->assertArrayNotHasKey('created_by', $row);
@@ -260,40 +260,52 @@ class MeetingReportsPageApiTest extends TestCase
         $this->list($this->user('student'))->assertForbidden();
     }
 
-    public function test_a_member_sees_only_their_own_departments_reports(): void
+    public function test_a_leader_sees_only_their_own_departments_reports(): void
     {
         $this->report($this->deptA, ['title' => 'تقرير إدارتي']);
         $this->report($this->deptB, ['title' => 'تقرير إدارة أخرى']);
         $this->legacyQuickReport();
 
-        $res = $this->list($this->memberA)->assertOk();
+        $res = $this->list($this->leaderA)->assertOk();
 
         $this->assertSame(['تقرير إدارتي'], array_column($res->json('data.data'), 'title'));
         $this->assertSame(1, $res->json('stats.total'), 'stats are scoped like the list');
         $this->assertStringNotContainsString('تقرير إدارة أخرى', $this->text($res));
     }
 
-    public function test_a_department_filter_can_never_widen_a_members_scope(): void
+    public function test_a_plain_member_does_not_read_official_reports_at_all(): void
+    {
+        $r = $this->report($this->deptA, ['title' => 'تقرير إدارتي']);
+
+        $res = $this->list($this->memberA)->assertOk();
+
+        $this->assertSame([], $res->json('data.data'));
+        $this->assertSame(0, $res->json('stats.total'));
+        Sanctum::actingAs($this->memberA);
+        $this->getJson("/api/operations/meeting-reports/{$r->id}")->assertForbidden();
+    }
+
+    public function test_a_department_filter_can_never_widen_a_leaders_scope(): void
     {
         $this->report($this->deptB, ['title' => 'تقرير إدارة أخرى']);
 
-        $res = $this->list($this->memberA, "?department_id={$this->deptB->id}")->assertOk();
+        $res = $this->list($this->leaderA, "?department_id={$this->deptB->id}")->assertOk();
 
         $this->assertSame([], $res->json('data.data'));
     }
 
-    public function test_a_member_cannot_open_another_departments_report(): void
+    public function test_a_leader_cannot_open_another_departments_report(): void
     {
         $other = $this->report($this->deptB);
-        Sanctum::actingAs($this->memberA);
+        Sanctum::actingAs($this->leaderA);
 
         $this->getJson("/api/operations/meeting-reports/{$other->id}")->assertForbidden();
     }
 
-    public function test_a_member_can_open_their_own_departments_report(): void
+    public function test_a_leader_can_open_their_own_departments_report(): void
     {
         $mine = $this->report($this->deptA);
-        Sanctum::actingAs($this->memberA);
+        Sanctum::actingAs($this->leaderA);
 
         $this->getJson("/api/operations/meeting-reports/{$mine->id}")->assertOk()->assertJsonPath('data.id', $mine->id);
     }
@@ -374,7 +386,7 @@ class MeetingReportsPageApiTest extends TestCase
         ]);
         Sanctum::actingAs($organizer);
 
-        $this->postJson("/api/department/meetings/{$meeting->id}/report", ['challenges' => 'تحدٍّ'])->assertCreated();
+        $this->postJson("/api/department/meetings/{$meeting->id}/report", ['challenges' => 'تحدٍّ', 'attendance' => [['user_id' => $this->leaderA->id, 'attended' => true]]])->assertCreated();
 
         $row = MeetingReport::where('meeting_id', $meeting->id)->sole();
         $this->assertSame('تقرير دوري — اجتماع الإنجاز', $row->title);
@@ -392,7 +404,7 @@ class MeetingReportsPageApiTest extends TestCase
         ]);
         Sanctum::actingAs($organizer);
 
-        $this->postJson("/api/department/meetings/{$meeting->id}/report", ['challenges' => 'الأول'])->assertCreated();
+        $this->postJson("/api/department/meetings/{$meeting->id}/report", ['challenges' => 'الأول', 'attendance' => [['user_id' => $this->leaderA->id, 'attended' => true]]])->assertCreated();
         $this->postJson("/api/department/meetings/{$meeting->id}/report", ['challenges' => 'الثاني'])
             ->assertStatus(422)
             ->assertJsonPath('message', 'تم رفع تقرير لهذا الاجتماع مسبقًا.');

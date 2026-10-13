@@ -13,6 +13,10 @@ use App\Models\Task;
 use App\Services\ActivityLogger;
 use App\Services\DepartmentAccessService;
 use App\Services\MeetingAccessService;
+use App\Services\MeetingParticipantService;
+use App\Models\MeetingActionItem as ActionItemModel;
+use App\Models\MeetingDecision;
+use App\Models\MeetingParticipant;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Exceptions\HttpResponseException;
@@ -45,8 +49,14 @@ class MeetingController extends Controller
 
     public function __construct(
         private readonly DepartmentAccessService $departmentAccess,
-        private readonly MeetingAccessService $access,
+        private readonly MeetingParticipantService $participants,
     ) {
+    }
+
+    /** One MeetingAccessService per request, shared with the resources (memoized lookups). */
+    private function acc(): MeetingAccessService
+    {
+        return MeetingAccessService::for(request());
     }
 
     private function forbidden(string $message): JsonResponse
@@ -76,21 +86,39 @@ class MeetingController extends Controller
         }
     }
 
-    /** Meetings this user may read, before any filter. */
+    /**
+     * Meetings this user may read, before any filter. Mirrors
+     * MeetingAccessService::canView so a list never shows what the detail refuses:
+     * oversight sees all; everyone else sees what they organize, what they are
+     * invited to, what their department leads or manages, and department-wide
+     * meetings (nobody invited by name) of departments they belong to.
+     */
     private function visibleQuery(Request $request): Builder
     {
         $user = $request->user();
-        $query = Meeting::query();
 
-        if (! $this->access->hasOversight($user)) {
-            $accessibleDeptIds = $this->departmentAccess->getAccessibleDepartmentIds($user);
-            $query->where(function ($q) use ($accessibleDeptIds, $user) {
-                $q->whereIn('department_id', $accessibleDeptIds)
-                    ->orWhere('organizer_id', $user->id);
-            });
-        }
+        return $this->acc()->hasOversight($user) ? Meeting::query() : $this->acc()->assignedQuery($user);
+    }
 
-        return $query;
+    /** Narrow a query to upcoming / live / past by the meeting's own wall-clock time (Europe/Amsterdam). */
+    private function applyWhen(Builder $query, string $when): void
+    {
+        $now = now('Europe/Amsterdam');
+        $today = $now->toDateString();
+        $time = $now->format('H:i:s');
+
+        $ended = fn ($q) => $q->whereDate('meeting_date', '<', $today)
+            ->orWhere(fn ($t) => $t->whereDate('meeting_date', $today)->whereNotNull('end_time')->where('end_time', '<', $time));
+        $live = fn ($q) => $q->whereDate('meeting_date', $today)->where('start_time', '<=', $time)
+            ->where(fn ($e) => $e->whereNull('end_time')->orWhere('end_time', '>=', $time));
+
+        match ($when) {
+            'past'     => $query->where($ended),
+            'live'     => $query->where($live),
+            'upcoming' => $query->whereDate('meeting_date', '>=', $today)->where(fn ($q) => $q->whereDate('meeting_date', '>', $today)
+                ->orWhere('start_time', '>', $time)),
+            default    => null,
+        };
     }
 
     public function index(Request $request): JsonResponse
@@ -106,10 +134,14 @@ class MeetingController extends Controller
             'department_id' => 'nullable|integer',
             'date_from'     => 'nullable|date',
             'date_to'       => 'nullable|date',
+            'when'          => 'nullable|in:upcoming,live,past',
             'per_page'      => 'nullable|integer|min:1',
         ]);
 
-        $query = $this->visibleQuery($request)->with(['department:id,name,name_ar', 'organizer:id,name', 'report']);
+        $query = $this->visibleQuery($request)->with(['department:id,name,name_ar', 'organizer:id,name', 'report', 'participants']);
+        if ($request->filled('when')) {
+            $this->applyWhen($query, (string) $request->query('when'));
+        }
 
         // A department filter can only narrow the user's own scope.
         if ($request->filled('department_id')) {
@@ -137,7 +169,10 @@ class MeetingController extends Controller
         }
 
         $perPage = min(max((int) $request->query('per_page', 50), 1), self::MAX_PER_PAGE);
-        $meetings = $query->orderByDesc('meeting_date')->orderByDesc('start_time')->orderByDesc('id')->paginate($perPage);
+        $upcoming = $request->query('when') === 'upcoming' || $request->query('when') === 'live';
+        $meetings = ($upcoming
+            ? $query->orderBy('meeting_date')->orderBy('start_time')->orderBy('id')
+            : $query->orderByDesc('meeting_date')->orderByDesc('start_time')->orderByDesc('id'))->paginate($perPage);
 
         return response()->json([
             'success' => true,
@@ -179,16 +214,58 @@ class MeetingController extends Controller
      */
     private function creationAccess($user): array
     {
-        $ids = $this->access->creatableDepartmentIds($user);
+        $ids = $this->acc()->creatableDepartmentIds($user);
         $departments = $ids === null
             ? null
             : \App\Models\Department::query()->whereIn('id', $ids)->active()->orderBy('name')->get(['id', 'name', 'name_ar'])
                 ->map(fn ($d) => ['id' => $d->id, 'name' => $d->name_ar ?: $d->name])->values()->all();
 
         return [
-            'can_create'            => $this->access->canCreateAny($user),
+            'can_create'            => $this->acc()->canCreateAny($user),
             'creatable_departments' => $departments,
         ];
+    }
+
+    /** Validate and normalize `participant_ids` against the pool the server allows for this department. */
+    private function validatedParticipantIds(Request $request, ?int $departmentId): ?array
+    {
+        if (! $request->has('participant_ids')) {
+            return null;
+        }
+
+        $ids = array_values(array_unique(array_map('intval', (array) $request->input('participant_ids', []))));
+        $allowed = $this->participants->candidatesForScheduling($request->user(), $departmentId)->pluck('id')->all();
+
+        if (array_diff($ids, $allowed) !== []) {
+            throw $this->refuse('participant_ids', 'بعض المدعوّين ليسوا من أعضاء الإدارة أو نطاقك المسموح.');
+        }
+
+        return $ids;
+    }
+
+    /**
+     * Every meeting must say who it is for: a department (everyone in it) or named
+     * invitees. A meeting with neither would be visible to its organizer and oversight
+     * only, which is never what "a department meeting" means.
+     */
+    private function requireAnAudience(?int $departmentId, int $inviteeCount): void
+    {
+        if ($departmentId === null && $inviteeCount === 0) {
+            throw $this->refuse('department_id', 'اختر الإدارة لجعل الاجتماع لكل أعضائها، أو اختر مدعوّين بأسمائهم.');
+        }
+    }
+
+    /** `agenda` arrives as lines of text; store trimmed non-empty strings. */
+    private function normalizedAgenda(Request $request): ?array
+    {
+        if (! $request->has('agenda')) {
+            return null;
+        }
+
+        $raw = $request->input('agenda');
+        $lines = is_string($raw) ? preg_split('/\r?\n/', $raw) : (array) $raw;
+
+        return array_values(array_filter(array_map(fn ($l) => is_string($l) ? trim($l) : '', $lines), fn ($l) => $l !== ''));
     }
 
     public function store(Request $request): JsonResponse
@@ -205,9 +282,10 @@ class MeetingController extends Controller
             'end_time'      => 'nullable|date_format:H:i|after:start_time',
             'meeting_url'   => 'nullable|url',
             'status'        => 'nullable|in:scheduled,in_progress,completed,cancelled',
-            'agenda'        => 'nullable|array',
+            'agenda'        => 'nullable',
+            'participant_ids'   => 'nullable|array|max:300',
+            'participant_ids.*' => 'integer',
             'minutes'       => 'nullable|string',
-            'attendees'     => 'nullable|array',
             'files'         => 'nullable|array',
             'recording_url' => 'nullable|url',
         ], [
@@ -226,7 +304,7 @@ class MeetingController extends Controller
         // A non-global user who named no department is filed under the one
         // department they can schedule for; with several, they must choose.
         if ($departmentId === null && ! $this->departmentAccess->isGlobal($user)) {
-            $allowed = $this->access->creatableDepartmentIds($user) ?? [];
+            $allowed = $this->acc()->creatableDepartmentIds($user) ?? [];
             if (count($allowed) === 1) {
                 $departmentId = (int) $allowed[0];
             } elseif (count($allowed) > 1) {
@@ -234,42 +312,61 @@ class MeetingController extends Controller
             }
         }
 
-        if (! $this->access->canCreate($user, $departmentId)) {
+        if (! $this->acc()->canCreate($user, $departmentId)) {
             return $this->forbidden('ليست لديك صلاحية جدولة اجتماعات لهذه الإدارة.');
         }
 
+        $participantIds = $this->validatedParticipantIds($request, $departmentId);
+        $this->requireAnAudience($departmentId, count($participantIds ?? []));
+        $agenda = $this->normalizedAgenda($request);
+
+        unset($data['participant_ids']);
         $data['department_id'] = $departmentId;
         $data['organizer_id'] = $user->id;
         $data['type'] = $data['type'] ?? 'general';
+        $data['agenda'] = $agenda;
 
-        $meeting = Meeting::create($data);
+        $meeting = DB::transaction(function () use ($data, $participantIds) {
+            $meeting = Meeting::create($data);
+            if ($participantIds) {
+                $this->participants->syncInvited($meeting, $participantIds);
+            }
+
+            return $meeting;
+        });
 
         ActivityLogger::log('meeting.created', $meeting, [], $request);
 
         return response()->json([
             'success' => true,
             'message' => 'تمت جدولة الاجتماع.',
-            'data'    => (new MeetingResource($meeting->load(['department:id,name,name_ar', 'organizer:id,name', 'report'])))->resolve($request),
+            'data'    => (new MeetingResource($meeting->load(['department:id,name,name_ar', 'organizer:id,name', 'report', 'participants'])))->resolve($request),
         ], 201);
+    }
+
+    /** Everything the details page shows, loaded once. */
+    private function loadDetail(Meeting $meeting): Meeting
+    {
+        return $meeting->load([
+            'department:id,name,name_ar', 'organizer:id,name', 'decisions.decidedBy', 'actionItems.assignedTo', 'report.author', 'participants',
+        ]);
     }
 
     public function show(Request $request, Meeting $meeting): JsonResponse
     {
-        if (! $this->access->canView($request->user(), $meeting)) {
+        if (! $this->acc()->canView($request->user(), $meeting)) {
             return $this->forbidden('غير مصرح لك باستعراض اجتماع خاص بإدارة أخرى');
         }
 
         return response()->json([
             'success' => true,
-            'data'    => (new MeetingResource(
-                $meeting->load(['department:id,name,name_ar', 'organizer:id,name', 'decisions.decidedBy', 'actionItems.assignedTo', 'report.author'])
-            ))->resolve($request),
+            'data'    => (new MeetingResource($this->loadDetail($meeting)))->detailed()->resolve($request),
         ]);
     }
 
     public function update(Request $request, Meeting $meeting): JsonResponse
     {
-        if (! $this->access->canManage($request->user(), $meeting)) {
+        if (! $this->acc()->canManage($request->user(), $meeting)) {
             return $this->forbidden('ليست لديك صلاحية تعديل هذا الاجتماع.');
         }
         $this->normalizeType($request);
@@ -284,9 +381,10 @@ class MeetingController extends Controller
             'end_time'      => 'nullable|date_format:H:i',
             'meeting_url'   => 'nullable|url',
             'status'        => 'in:scheduled,in_progress,completed,cancelled',
-            'agenda'        => 'nullable|array',
+            'agenda'        => 'nullable',
+            'participant_ids'   => 'nullable|array|max:300',
+            'participant_ids.*' => 'integer',
             'minutes'       => 'nullable|string',
-            'attendees'     => 'nullable|array',
             'files'         => 'nullable|array',
             'recording_url' => 'nullable|url',
         ]);
@@ -294,21 +392,127 @@ class MeetingController extends Controller
         // Moving a meeting to another department needs the right to schedule there.
         if (array_key_exists('department_id', $data)
             && (int) $data['department_id'] !== (int) $meeting->department_id
-            && ! $this->access->canCreate($request->user(), $data['department_id'] !== null ? (int) $data['department_id'] : null)) {
+            && ! $this->acc()->canCreate($request->user(), $data['department_id'] !== null ? (int) $data['department_id'] : null)) {
             return $this->forbidden('ليست لديك صلاحية نقل الاجتماع إلى هذه الإدارة.');
         }
 
-        $meeting->update($data);
+        $departmentId = array_key_exists('department_id', $data)
+            ? ($data['department_id'] !== null ? (int) $data['department_id'] : null)
+            : ($meeting->department_id !== null ? (int) $meeting->department_id : null);
+        $participantIds = $this->validatedParticipantIds($request, $departmentId);
+
+        // Re-check the audience only when this edit touches it, so a legacy meeting can still be retitled.
+        if (array_key_exists('department_id', $data) || $participantIds !== null) {
+            $this->requireAnAudience($departmentId, $participantIds !== null
+                ? count($participantIds)
+                : $meeting->participants()->where('source', MeetingParticipant::SOURCE_INVITED)->count());
+        }
+
+        unset($data['participant_ids']);
+        if ($request->has('agenda')) {
+            $data['agenda'] = $this->normalizedAgenda($request);
+        }
+
+        DB::transaction(function () use ($meeting, $data, $participantIds) {
+            $meeting->update($data);
+            if ($participantIds !== null) {
+                $this->participants->syncInvited($meeting, $participantIds);
+            }
+        });
 
         return response()->json([
             'success' => true,
-            'data'    => (new MeetingResource($meeting->load(['department:id,name,name_ar', 'organizer:id,name', 'report'])))->resolve($request),
+            'data'    => (new MeetingResource($meeting->load(['department:id,name,name_ar', 'organizer:id,name', 'report', 'participants'])))->resolve($request),
         ]);
+    }
+
+    // ── Participants & attendance ────────────────────────────────────────────
+
+    /**
+     * People who can be invited to a meeting for a department (or, with none,
+     * within the viewer's scope). Decided on the server; the client never filters.
+     */
+    public function candidates(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $request->validate(['department_id' => 'nullable|integer|exists:departments,id']);
+        $departmentId = $request->filled('department_id') ? (int) $request->query('department_id') : null;
+
+        if (! $this->acc()->canCreateAny($user) || ($departmentId !== null && ! $this->acc()->canCreate($user, $departmentId))) {
+            return $this->forbidden('ليست لديك صلاحية اختيار مشاركين لهذه الإدارة.');
+        }
+
+        return response()->json([
+            'success' => true,
+            'data'    => $this->participants->candidatesForScheduling($user, $departmentId)->all(),
+        ]);
+    }
+
+    /**
+     * The attendance roster for a meeting's report: the people who can be marked, each
+     * with what is already recorded (joined/confirmed) so the form can pre-check them.
+     */
+    public function participantPool(Request $request, Meeting $meeting): JsonResponse
+    {
+        $user = $request->user();
+        if (! $this->acc()->canManage($user, $meeting)) {
+            return $this->forbidden('ليست لديك صلاحية تسجيل حضور هذا الاجتماع.');
+        }
+
+        $meeting->load(['department:id,name,name_ar', 'participants']);
+        $rows = $meeting->participants->keyBy('user_id');
+
+        $pool = $this->participants->poolForMeeting($meeting, $user)->map(function (array $m) use ($rows) {
+            $row = $rows->get($m['id']);
+
+            return $m + [
+                'status'       => $row?->status ?? MeetingParticipant::STATUS_INVITED,
+                'joined_at'    => $row?->joined_at?->toIso8601String(),
+                'confirmed_at' => $row?->confirmed_at?->toIso8601String(),
+            ];
+        })->all();
+
+        return response()->json([
+            'success'  => true,
+            'data'     => $pool,
+            'audience' => $meeting->hasExplicitAudience() ? 'explicit' : ($meeting->department_id !== null ? 'department' : 'general'),
+        ]);
+    }
+
+    private function recordAttendance(Request $request, Meeting $meeting, string $kind): JsonResponse
+    {
+        $user = $request->user();
+        if (! $this->acc()->canView($user, $meeting)) {
+            return $this->forbidden('غير مصرح لك باستعراض اجتماع خاص بإدارة أخرى');
+        }
+        if (! $this->acc()->canJoin($user, $meeting)) {
+            return $this->forbidden($meeting->status === 'cancelled' ? 'هذا الاجتماع ملغى.' : 'هذا الاجتماع غير مخصص لك.');
+        }
+
+        $this->participants->record($meeting, $user, $kind);
+
+        return response()->json([
+            'success' => true,
+            'message' => $kind === 'confirm' ? 'تم تأكيد حضورك.' : 'تم تسجيل انضمامك.',
+            'data'    => (new MeetingResource($this->loadDetail($meeting->refresh())))->detailed()->resolve($request),
+        ]);
+    }
+
+    /** "انضمام": the person opened the meeting. The join link is part of the details payload. */
+    public function join(Request $request, Meeting $meeting): JsonResponse
+    {
+        return $this->recordAttendance($request, $meeting, 'join');
+    }
+
+    /** "تأكيد الحضور": for in-person meetings or when there is no link. */
+    public function confirmAttendance(Request $request, Meeting $meeting): JsonResponse
+    {
+        return $this->recordAttendance($request, $meeting, 'confirm');
     }
 
     public function destroy(Meeting $meeting, Request $request): JsonResponse
     {
-        if (! $this->access->canManage($request->user(), $meeting)) {
+        if (! $this->acc()->canManage($request->user(), $meeting)) {
             return $this->forbidden('ليست لديك صلاحية حذف هذا الاجتماع.');
         }
 
@@ -320,7 +524,7 @@ class MeetingController extends Controller
 
     public function storeDecision(Request $request, Meeting $meeting): JsonResponse
     {
-        if (! $this->access->canManage($request->user(), $meeting)) {
+        if (! $this->acc()->canManage($request->user(), $meeting)) {
             return $this->forbidden('ليست لديك صلاحية إضافة قرار لهذا الاجتماع.');
         }
 
@@ -340,7 +544,7 @@ class MeetingController extends Controller
 
     public function storeActionItem(Request $request, Meeting $meeting): JsonResponse
     {
-        if (! $this->access->canManage($request->user(), $meeting)) {
+        if (! $this->acc()->canManage($request->user(), $meeting)) {
             return $this->forbidden('ليست لديك صلاحية إضافة بند عمل لهذا الاجتماع.');
         }
 
@@ -364,16 +568,25 @@ class MeetingController extends Controller
      * with a clear Arabic message - by this check, by a row lock against two
      * simultaneous submits, and by a unique index on meeting_id where the table
      * has no historical duplicates.
+     *
+     * The report carries the meeting's attendance (who the server allows as a
+     * participant, marked present or absent), its decisions and its action items.
+     * Everything the client names is checked against the participant pool the
+     * server computes; the client's own filtering is never trusted.
      */
     public function storeReport(Request $request, Meeting $meeting): JsonResponse
     {
         $user = $request->user();
 
-        if (! $this->access->canView($user, $meeting)) {
+        if (! $this->acc()->canView($user, $meeting)) {
             return $this->forbidden('غير مصرح لك باستعراض اجتماع خاص بإدارة أخرى');
         }
-        if (! $this->access->canManage($user, $meeting)) {
+        if (! $this->acc()->canManage($user, $meeting)) {
             return $this->forbidden('ليست لديك صلاحية رفع تقرير لهذا الاجتماع.');
+        }
+        // Say so before anything else: a second report is never welcome, whatever it contains.
+        if ($meeting->report()->exists()) {
+            throw $this->refuse('meeting', self::DUPLICATE_REPORT_MESSAGE);
         }
 
         $data = $request->validate([
@@ -388,26 +601,59 @@ class MeetingController extends Controller
             'executive_requests'      => 'nullable|string|max:5000',
             'next_month_goals'        => 'nullable|string|max:5000',
             'improvement_suggestions' => 'nullable|string|max:5000',
+            'notes'                   => 'nullable|string|max:5000',
+            'attendance'              => 'nullable|array|max:300',
+            'attendance.*.user_id'    => 'required|integer',
+            'attendance.*.attended'   => 'required|boolean',
+            'decisions'               => 'nullable|array|max:50',
+            'decisions.*.title'       => 'required|string|max:255',
+            'decisions.*.description' => 'nullable|string|max:2000',
+            'action_items'            => 'nullable|array|max:50',
+            'action_items.*.title'    => 'required|string|max:255',
+            'action_items.*.assigned_to' => 'nullable|integer',
+            'action_items.*.due_date' => 'nullable|date',
         ], [
             'team_commitment_score.min' => 'مقياس التزام الفريق من 1 إلى 5.',
             'team_commitment_score.max' => 'مقياس التزام الفريق من 1 إلى 5.',
             'kpi_percentage.max'        => 'نسبة تحقيق الأهداف بين 0 و100.',
+            'decisions.*.title.required' => 'اكتب نص القرار أو احذف السطر الفارغ.',
+            'action_items.*.title.required' => 'اكتب وصف بند العمل أو احذف السطر الفارغ.',
         ]);
 
         // An official report is filed once and cannot be replaced, so an empty one
         // would lock the meeting out of a real report.
         $narrative = array_filter(
-            array_intersect_key($data, array_flip(['completed_tasks_summary', 'challenges', 'executive_requests', 'next_month_goals', 'improvement_suggestions', 'team_commitment_notes'])),
+            array_intersect_key($data, array_flip(['completed_tasks_summary', 'challenges', 'executive_requests', 'next_month_goals', 'improvement_suggestions', 'team_commitment_notes', 'notes'])),
             fn ($v) => is_string($v) && trim($v) !== ''
         );
         if ($narrative === []) {
             throw $this->refuse('report', 'أضف محتوى للتقرير قبل رفعه (إنجازات، تحديات، طلبات أو أهداف).');
         }
 
+        // Attendance and responsible people must come from the server's pool for this meeting.
+        $pool = $this->participants->poolForMeeting($meeting->loadMissing('department'), $user)->keyBy('id');
+        $attendance = collect($data['attendance'] ?? [])->unique('user_id')->values();
+
+        if ($attendance->contains(fn ($a) => ! $pool->has((int) $a['user_id']))) {
+            throw $this->refuse('attendance', 'لا يمكن تسجيل حضور مستخدم ليس من المشاركين في هذا الاجتماع.');
+        }
+        if ($pool->isNotEmpty() && $attendance->isEmpty()) {
+            throw $this->refuse('attendance', 'سجّل حضور المشاركين قبل رفع التقرير.');
+        }
+        foreach ($data['action_items'] ?? [] as $item) {
+            if (! empty($item['assigned_to']) && ! $pool->has((int) $item['assigned_to'])) {
+                throw $this->refuse('action_items', 'المسؤول عن بند العمل يجب أن يكون من المشاركين في الاجتماع.');
+            }
+        }
+
+        $absentNames = $attendance->filter(fn ($a) => ! $a['attended'])
+            ->map(fn ($a) => $pool[(int) $a['user_id']]['name'])->values()->all();
+        $absentees = array_values(array_unique(array_merge($data['absentees'] ?? [], $absentNames)));
+
         $duplicate = $this->refuse('meeting', self::DUPLICATE_REPORT_MESSAGE);
 
         try {
-            $report = DB::transaction(function () use ($meeting, $data, $user, $duplicate) {
+            DB::transaction(function () use ($meeting, $data, $user, $duplicate, $attendance, $absentees) {
                 // Serialize concurrent submits for this meeting.
                 $locked = Meeting::query()->whereKey($meeting->id)->lockForUpdate()->firstOrFail();
 
@@ -419,29 +665,48 @@ class MeetingController extends Controller
                 }
 
                 $notesParts = array_filter([
+                    ! empty($data['notes']) ? $data['notes'] : null,
                     ! empty($data['team_commitment_notes']) ? $data['team_commitment_notes'] : null,
                     ! empty($data['improvement_suggestions']) ? $data['improvement_suggestions'] : null,
                 ]);
 
-                $report = $locked->report()->create($data + [
-                    'department_id' => $locked->department_id,
-                    'title'         => 'تقرير دوري — '.$locked->title,
-                    'meeting_date'  => $locked->meeting_date ?? now()->toDateString(),
-                    'created_by'    => $user->id,
-                    // Mirrors the structured-minutes columns so the operations list shows the same text.
-                    'achieved'      => $data['completed_tasks_summary'] ?? null,
-                    'planned'       => $data['next_month_goals'] ?? null,
-                    'needs'         => $data['executive_requests'] ?? null,
-                    'needs_reason'  => $data['challenges'] ?? null,
-                    'notes'         => $notesParts ? implode("\n", $notesParts) : null,
-                ]);
+                $locked->report()->create(array_merge(
+                    collect($data)->except(['attendance', 'decisions', 'action_items', 'notes'])->all(),
+                    [
+                        'absentees'     => $absentees,
+                        'department_id' => $locked->department_id,
+                        'title'         => 'تقرير دوري — '.$locked->title,
+                        'meeting_date'  => $locked->meeting_date ?? now()->toDateString(),
+                        'created_by'    => $user->id,
+                        // Mirrors the structured-minutes columns so the operations list shows the same text.
+                        'achieved'      => $data['completed_tasks_summary'] ?? null,
+                        'planned'       => $data['next_month_goals'] ?? null,
+                        'needs'         => $data['executive_requests'] ?? null,
+                        'needs_reason'  => $data['challenges'] ?? null,
+                        'notes'         => $notesParts ? implode("\n", $notesParts) : null,
+                    ],
+                ));
+
+                $this->participants->markAttendance($locked, $attendance->map(fn ($a) => [
+                    'user_id' => (int) $a['user_id'], 'attended' => (bool) $a['attended'],
+                ])->all(), $user);
+
+                foreach ($data['decisions'] ?? [] as $d) {
+                    MeetingDecision::create([
+                        'meeting_id' => $locked->id, 'title' => $d['title'], 'description' => $d['description'] ?? null, 'decided_by' => $user->id,
+                    ]);
+                }
+                foreach ($data['action_items'] ?? [] as $i) {
+                    ActionItemModel::create([
+                        'meeting_id' => $locked->id, 'title' => $i['title'], 'assigned_to' => $i['assigned_to'] ?? null,
+                        'due_date' => $i['due_date'] ?? null, 'status' => 'pending',
+                    ]);
+                }
 
                 // A report means the meeting was held.
                 if (in_array($locked->status, ['scheduled', 'in_progress'], true)) {
                     $locked->update(['status' => 'completed']);
                 }
-
-                return $report;
             });
         } catch (UniqueConstraintViolationException) {
             throw $duplicate; // two submits raced past the check; the unique index caught the second
@@ -449,12 +714,10 @@ class MeetingController extends Controller
 
         ActivityLogger::log('meeting.report_submitted', $meeting, [], $request);
 
-        $meeting->refresh()->load(['department:id,name,name_ar', 'organizer:id,name', 'report.author']);
-
         return response()->json([
             'success' => true,
             'message' => 'تم رفع تقرير الاجتماع.',
-            'data'    => (new MeetingResource($meeting))->resolve($request),
+            'data'    => (new MeetingResource($this->loadDetail($meeting->refresh())))->detailed()->resolve($request),
         ], 201);
     }
 
@@ -468,7 +731,7 @@ class MeetingController extends Controller
     {
         abort_if($actionItem->meeting_id !== $meeting->id, 404);
 
-        if (! $this->access->canManage($request->user(), $meeting)) {
+        if (! $this->acc()->canManage($request->user(), $meeting)) {
             return $this->forbidden('ليست لديك صلاحية تحويل بنود هذا الاجتماع إلى مهام.');
         }
 
@@ -509,7 +772,7 @@ class MeetingController extends Controller
 
         $user = $request->user();
         $isAssignee = $actionItem->assigned_to !== null && (int) $actionItem->assigned_to === $user->id;
-        if (! $isAssignee && ! $this->access->canManage($user, $meeting)) {
+        if (! $isAssignee && ! $this->acc()->canManage($user, $meeting)) {
             return $this->forbidden('ليست لديك صلاحية تحديث بنود هذا الاجتماع.');
         }
 

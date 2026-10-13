@@ -39,6 +39,16 @@ class OperationsMeetingReportResource extends JsonResource
         return $this;
     }
 
+    /** @var array<string, mixed>|null Attendance summary computed by the controller. */
+    public ?array $attendance = null;
+
+    public function attendance(?array $attendance): static
+    {
+        $this->attendance = $attendance;
+
+        return $this;
+    }
+
     public function toArray(Request $request): array
     {
         $meeting = $this->relationLoaded('meeting') ? $this->meeting : null;
@@ -60,6 +70,7 @@ class OperationsMeetingReportResource extends JsonResource
             'author'        => $this->author ? ['id' => $this->author->id, 'name' => $this->author->name] : null,
             // The source meeting, when this report was filed from the lounge for a scheduled meeting.
             'meeting'       => $meeting ? ['id' => $meeting->id, 'title' => $meeting->title, 'type' => $meeting->type] : null,
+            'attendance'    => $this->attendance,
             'ratings_count' => (int) ($this->ratings_count ?? 0),
             'attended_count' => (int) ($this->attended_count ?? 0),
             'created_at'    => $this->created_at?->toIso8601String(),

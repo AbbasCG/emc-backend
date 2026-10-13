@@ -45,4 +45,19 @@ class Meeting extends Model
     {
         return $this->hasOne(MeetingReport::class);
     }
+
+    public function participants(): HasMany
+    {
+        return $this->hasMany(MeetingParticipant::class);
+    }
+
+    /** Did the organizer pick people explicitly (as opposed to a department-wide meeting)? */
+    public function hasExplicitAudience(): bool
+    {
+        if ($this->relationLoaded('participants')) {
+            return $this->participants->contains(fn (MeetingParticipant $p) => $p->source === MeetingParticipant::SOURCE_INVITED);
+        }
+
+        return $this->participants()->where('source', MeetingParticipant::SOURCE_INVITED)->exists();
+    }
 }
