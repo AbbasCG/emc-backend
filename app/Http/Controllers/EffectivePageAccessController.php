@@ -76,6 +76,12 @@ class EffectivePageAccessController extends Controller
                             'primary_route' => $entry?->primaryRoute,
                             'route_patterns' => $entry?->routePatterns ?? [],
                             'label_ar' => $entry?->labelAr,
+                            // Navigation metadata: lets the sidebar place a page the user was
+                            // granted (by a role/department default or an override) under the
+                            // right heading even when that role's static menu does not list it.
+                            'category' => $entry?->category->value,
+                            'category_label_ar' => $entry?->category->labelAr(),
+                            'risk_level' => $entry?->riskLevel->value,
                         ];
                     },
                     $resolved
