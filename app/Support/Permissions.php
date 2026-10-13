@@ -137,6 +137,15 @@ final class Permissions
      */
     const TECH_DEPARTMENT_DASHBOARDS_VIEW = 'tech.department_dashboards.view';
 
+    /**
+     * Private executive follow-up hub (cross-platform feed).
+     * Intentionally excluded from all(), like users.impersonate: no role inherits it, not
+     * even tech_admin, and the Gate::before root bypass skips it. It must be granted
+     * explicitly: ExecutiveCommandCenterPermissionSeeder grants it to super_admin only;
+     * anyone else is added through the role/permission UI or a per-user assignment.
+     */
+    const EXECUTIVE_COMMAND_CENTER_VIEW = 'executive.command_center.view';
+
     // ── Workshop Requests (granular) ─────────────────────────────────────────
     const WR_VIEW_OWN        = 'workshop_requests.view_own';
     const WR_VIEW_DEPARTMENT = 'workshop_requests.view_department';
@@ -477,6 +486,7 @@ final class Permissions
             'ai'           => [self::USE_AI_ASSISTANT, self::MANAGE_AI_PROMPTS, self::VIEW_AI_USAGE],
             'system'           => [self::VIEW_AUDIT_LOGS, self::MANAGE_SETTINGS, self::MANAGE_INTEGRATIONS, self::MANAGE_WEBHOOKS, self::MANAGE_API_TOKENS],
             'tech'             => [self::TECH_DEPARTMENT_DASHBOARDS_VIEW],
+            'executive'        => [self::EXECUTIVE_COMMAND_CENTER_VIEW],
             // Granular module groups
             'workshop_requests'=> [self::WR_VIEW_OWN, self::WR_VIEW_DEPARTMENT, self::WR_VIEW_ALL, self::WR_CREATE, self::WR_REVIEW, self::WR_APPROVE, self::WR_REJECT, self::WR_ASSIGN, self::WR_EDIT, self::WR_DELETE, self::WR_EXPORT, self::WR_MANAGE],
             'members'          => [self::MEMBERS_VIEW, self::MEMBERS_VIEW_DEPARTMENT, self::MEMBERS_CREATE, self::MEMBERS_UPDATE, self::MEMBERS_DELETE, self::MEMBERS_RECOGNIZE, self::MEMBERS_MANAGE],

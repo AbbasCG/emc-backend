@@ -271,6 +271,11 @@ final class PageAccessCatalog
             ['administration.super_admin_overview', '/dashboard/super-admin', 'لوحة السوبر أدمن', $C::Administration, $R::SystemProtected, false, null, false, []],
             ['administration.admin_overview', '/dashboard/admin', 'لوحة الإدارة', $C::Administration, $R::AdminOnly, false, null, false, []],
             ['administration.tech_admin_overview', '/dashboard/tech-admin', 'لوحة المشرف التقني', $C::Administration, $R::AdminOnly, false, null, false, []],
+            // Private executive follow-up hub. ADMIN_ONLY and not delegatable. Root authority opens
+            // the page for super_admin/tech_admin by design, but the API behind it requires the
+            // explicit executive.command_center.view permission (granted to super_admin only), so
+            // opening the page without that permission shows an unauthorized state, never data.
+            ['executive.command_center', '/dashboard/executive/command-center', 'مركز المتابعة التنفيذي', $C::Administration, $R::AdminOnly, false, P::EXECUTIVE_COMMAND_CENTER_VIEW, false, []],
             ['administration.users', '/dashboard/super-admin/crud/users', 'إدارة المستخدمين', $C::Administration, $R::AdminOnly, false, P::VIEW_USERS, false, []],
             ['administration.roles', '/dashboard/super-admin/crud/roles', 'الأدوار والصلاحيات', $C::Administration, $R::SystemProtected, false, P::MANAGE_ROLES, false, []],
             ['administration.permission_delegation_config', '/dashboard/super-admin/crud/permissions', 'إعدادات تفويض الصلاحيات', $C::Administration, $R::SystemProtected, false, P::MANAGE_ROLES, false, []],

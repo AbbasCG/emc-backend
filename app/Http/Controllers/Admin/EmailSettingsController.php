@@ -19,7 +19,7 @@ class EmailSettingsController extends Controller
      * key not yet in the table as enabled=true, so adding a key here never
      * changes existing behaviour until an admin explicitly flips it off.
      */
-    private const LABELS = [
+    public const LABELS = [
         // ── Users ─────────────────────────────────────────────────────────────
         'welcome'                            => ['label' => 'بريد الترحيب (تسجيل ذاتي)',      'description' => 'يُرسل للمستخدم عند إنشاء حسابه بنفسه لأول مرة',                          'category' => 'users'],
         'account_created'                    => ['label' => 'حساب جديد (إنشاء إداري)',        'description' => 'يُرسل للمستخدم عند إنشاء حسابه من قِبل مشرف مع كلمة مرور مؤقتة',           'category' => 'users'],

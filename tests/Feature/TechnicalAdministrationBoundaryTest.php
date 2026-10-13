@@ -204,7 +204,7 @@ class TechnicalAdministrationBoundaryTest extends TestCase
     public function test_catalog_size_and_other_risk_levels_are_unchanged(): void
     {
         $all = PageAccessCatalog::all();
-        $this->assertCount(134, $all);
+        $this->assertCount(135, $all);
 
         $byRisk = [];
         foreach ($all as $e) {
@@ -228,10 +228,11 @@ class TechnicalAdministrationBoundaryTest extends TestCase
         // +2 ADMIN_ONLY afterwards: finance.expenses and finance.revenues, also new
         // capabilities rather than reclassifications.
         // +1 ADMIN_ONLY afterwards: technical_system.department_dashboards, the read-only
-        // cross-department monitoring page (a new capability, not a reclassification).
-        $this->assertSame(79, $byRisk['ADMIN_ONLY']);
+        // cross-department monitoring page, and executive.command_center the private follow-up hub
+        // (new capabilities, not reclassifications).
+        $this->assertSame(80, $byRisk['ADMIN_ONLY']);
         $this->assertSame(46, $byRisk['SAFE_DELEGATABLE']);
-        $this->assertSame(134, array_sum($byRisk));
+        $this->assertSame(135, array_sum($byRisk));
     }
 
     // ── 2. PAGE ACCESS != BUSINESS AUTHORIZATION ─────────────────────────────

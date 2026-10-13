@@ -1808,6 +1808,11 @@ Route::middleware(['auth:sanctum', 'role:tech_admin,super_admin'])->prefix('tech
     Route::get('dashboard', [\App\Http\Controllers\TechAdmin\TechAdminDashboardController::class, 'dashboard']);
 });
 
+// ─── Executive: private command center (read-only feed) ─────────────────────
+// Gated by the explicit executive.command_center.view permission, checked inside the controller
+// with hasPermission() so the role bypass in the `permission` middleware cannot open it.
+Route::middleware(['auth:sanctum', 'throttle:api'])->get('executive/command-center', [\App\Http\Controllers\Executive\ExecutiveCommandCenterController::class, 'index']);
+
 // ─── Tech: read-only cross-department monitoring ───────────────────────────
 // Permission-gated (NOT role-gated): tech.department_dashboards.view. super_admin and
 // tech_admin hold it through their full permission set; admin/executive_admin through role

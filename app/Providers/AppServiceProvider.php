@@ -145,7 +145,7 @@ class AppServiceProvider extends ServiceProvider
         // super_admin bypasses all Gates and policies EXCEPT users.impersonate,
         // which requires an explicit DB-granted permission even for super_admin.
         Gate::before(function (User $user, string $ability) {
-            if ($ability === Permissions::IMPERSONATE_USERS) {
+            if (in_array($ability, [Permissions::IMPERSONATE_USERS, Permissions::EXECUTIVE_COMMAND_CENTER_VIEW], true)) {
                 return null; // fall through to the registered Gate definition
             }
             // super_admin and tech_admin bypass all Gates.
@@ -210,6 +210,7 @@ class AppServiceProvider extends ServiceProvider
         // Register gated permissions that are intentionally excluded from all()
         // so they are never auto-granted. Gate::before bypass is also skipped for these.
         Gate::define(Permissions::IMPERSONATE_USERS, fn (User $user) => $user->hasPermission(Permissions::IMPERSONATE_USERS));
+        Gate::define(Permissions::EXECUTIVE_COMMAND_CENTER_VIEW, fn (User $user) => $user->hasPermission(Permissions::EXECUTIVE_COMMAND_CENTER_VIEW));
     }
 
     private function configureRateLimiting(): void
