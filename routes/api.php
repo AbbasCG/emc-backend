@@ -1808,6 +1808,16 @@ Route::middleware(['auth:sanctum', 'role:tech_admin,super_admin'])->prefix('tech
     Route::get('dashboard', [\App\Http\Controllers\TechAdmin\TechAdminDashboardController::class, 'dashboard']);
 });
 
+// ─── Tech: read-only cross-department monitoring ───────────────────────────
+// Permission-gated (NOT role-gated): tech.department_dashboards.view. super_admin and
+// tech_admin hold it through their full permission set; admin/executive_admin through role
+// permissions; any other role only if it has been explicitly granted. Page access (sidebar
+// and route guard) is a separate layer and grants nothing here.
+Route::middleware(['auth:sanctum', 'permission:tech.department_dashboards.view', 'throttle:api'])->prefix('tech/department-dashboards')->group(function () {
+    Route::get('/',             [\App\Http\Controllers\TechAdmin\TechDepartmentDashboardController::class, 'index']);
+    Route::get('{department}',  [\App\Http\Controllers\TechAdmin\TechDepartmentDashboardController::class, 'show'])->whereNumber('department');
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // SUPER_ADMIN / ADMIN — missing CRUD endpoints
 // super_admin bypasses all role checks via RoleMiddleware::isSuperAdmin()

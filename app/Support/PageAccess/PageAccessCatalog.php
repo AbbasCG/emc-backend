@@ -324,6 +324,11 @@ final class PageAccessCatalog
             ['technical_system.automations', '/dashboard/admin/automations', 'الأتمتة العامة', $C::TechnicalSystem, $R::AdminOnly, false, null, false, [
                 '/dashboard/admin/automations/runs',
             ]],
+            // Read-only cross-department monitoring view for Technology Management. ADMIN_ONLY
+            // and NOT delegatable: it shows every department's operational counts at once.
+            // Page access opens the page only; the API behind it independently requires the
+            // tech.department_dashboards.view permission.
+            ['technical_system.department_dashboards', '/dashboard/tech-admin/department-dashboards', 'لوحات الإدارات', $C::TechnicalSystem, $R::AdminOnly, false, P::TECH_DEPARTMENT_DASHBOARDS_VIEW, false, []],
             ['technical_system.platform_scale', '/dashboard/admin/platform-scale', 'قياس نمو المنصة', $C::TechnicalSystem, $R::SystemProtected, false, null, false, []],
             ['technical_system.api_tokens', '/dashboard/admin/developer/api-tokens', 'رموز واجهة البرمجة', $C::TechnicalSystem, $R::AdminOnly, false, P::MANAGE_API_TOKENS, false, []],
             ['technical_system.mobile_readiness', '/dashboard/admin/mobile-readiness', 'جاهزية التطبيق المحمول', $C::TechnicalSystem, $R::SystemProtected, false, null, false, []],

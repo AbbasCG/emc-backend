@@ -50,6 +50,7 @@ class RolePermissionSeeder extends Seeder
                 Permissions::VIEW_KNOWLEDGE,
                 Permissions::VIEW_AUDIT_LOGS,
                 Permissions::VIEW_AI_USAGE,
+                Permissions::TECH_DEPARTMENT_DASHBOARDS_VIEW,
             ],
 
             'admin' => [
@@ -90,6 +91,7 @@ class RolePermissionSeeder extends Seeder
                 Permissions::USE_AI_ASSISTANT, Permissions::VIEW_AI_USAGE,
                 // System
                 Permissions::VIEW_AUDIT_LOGS,
+                Permissions::TECH_DEPARTMENT_DASHBOARDS_VIEW,
             ],
 
             'department_manager' => [

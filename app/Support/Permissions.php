@@ -131,6 +131,12 @@ final class Permissions
     const MANAGE_WEBHOOKS     = 'manage_webhooks';
     const MANAGE_API_TOKENS   = 'manage_api_tokens';
 
+    /**
+     * Read-only cross-department monitoring dashboard (Technology Management).
+     * Aggregated counts only; never grants any action on department data.
+     */
+    const TECH_DEPARTMENT_DASHBOARDS_VIEW = 'tech.department_dashboards.view';
+
     // ── Workshop Requests (granular) ─────────────────────────────────────────
     const WR_VIEW_OWN        = 'workshop_requests.view_own';
     const WR_VIEW_DEPARTMENT = 'workshop_requests.view_department';
@@ -224,7 +230,7 @@ final class Permissions
             self::USE_AI_ASSISTANT, self::MANAGE_AI_PROMPTS, self::VIEW_AI_USAGE,
             // System
             self::VIEW_AUDIT_LOGS, self::MANAGE_SETTINGS, self::MANAGE_INTEGRATIONS,
-            self::MANAGE_WEBHOOKS, self::MANAGE_API_TOKENS,
+            self::MANAGE_WEBHOOKS, self::MANAGE_API_TOKENS, self::TECH_DEPARTMENT_DASHBOARDS_VIEW,
             // Workshop Requests (granular)
             self::WR_VIEW_OWN, self::WR_VIEW_DEPARTMENT, self::WR_VIEW_ALL,
             self::WR_CREATE, self::WR_REVIEW, self::WR_APPROVE, self::WR_REJECT,
@@ -264,6 +270,7 @@ final class Permissions
                 self::VIEW_TEAM, self::VIEW_PARTNERS, self::VIEW_PARTNER_REPORTS, self::VIEW_QUALITY,
                 self::APPROVE_QUALITY_REVIEWS, self::VIEW_KPI, self::VIEW_REPORTS, self::EXPORT_REPORTS,
                 self::VIEW_KNOWLEDGE, self::VIEW_AUDIT_LOGS, self::VIEW_AI_USAGE,
+                self::TECH_DEPARTMENT_DASHBOARDS_VIEW,
                 // Granular
                 self::WR_VIEW_ALL, self::WR_APPROVE, self::WR_ASSIGN,
                 self::MEMBERS_VIEW, self::DEPTS_VIEW, self::COURSES_VIEW,
@@ -287,7 +294,7 @@ final class Permissions
                 self::VIEW_KPI, self::VIEW_REPORTS, self::GENERATE_REPORTS,
                 self::VIEW_KNOWLEDGE, self::MANAGE_KNOWLEDGE,
                 self::USE_AI_ASSISTANT, self::VIEW_AI_USAGE,
-                self::VIEW_AUDIT_LOGS, self::MANAGE_PRODUCT_UPDATES,
+                self::VIEW_AUDIT_LOGS, self::MANAGE_PRODUCT_UPDATES, self::TECH_DEPARTMENT_DASHBOARDS_VIEW,
                 // Granular workshop requests
                 self::WR_VIEW_ALL, self::WR_MANAGE, self::WR_ASSIGN, self::WR_EXPORT, self::WR_DELETE,
                 // Granular members / departments / courses / attendance / assignments
@@ -469,6 +476,7 @@ final class Permissions
             'knowledge'    => [self::VIEW_KNOWLEDGE, self::MANAGE_KNOWLEDGE],
             'ai'           => [self::USE_AI_ASSISTANT, self::MANAGE_AI_PROMPTS, self::VIEW_AI_USAGE],
             'system'           => [self::VIEW_AUDIT_LOGS, self::MANAGE_SETTINGS, self::MANAGE_INTEGRATIONS, self::MANAGE_WEBHOOKS, self::MANAGE_API_TOKENS],
+            'tech'             => [self::TECH_DEPARTMENT_DASHBOARDS_VIEW],
             // Granular module groups
             'workshop_requests'=> [self::WR_VIEW_OWN, self::WR_VIEW_DEPARTMENT, self::WR_VIEW_ALL, self::WR_CREATE, self::WR_REVIEW, self::WR_APPROVE, self::WR_REJECT, self::WR_ASSIGN, self::WR_EDIT, self::WR_DELETE, self::WR_EXPORT, self::WR_MANAGE],
             'members'          => [self::MEMBERS_VIEW, self::MEMBERS_VIEW_DEPARTMENT, self::MEMBERS_CREATE, self::MEMBERS_UPDATE, self::MEMBERS_DELETE, self::MEMBERS_RECOGNIZE, self::MEMBERS_MANAGE],

@@ -136,6 +136,7 @@ final class RoleDefaultMap
             'technical_system.ai_usage',
             'technical_system.api_tokens',
             'technical_system.automations',
+            'technical_system.department_dashboards',
         ],
         'advisors_manager' => [
             'operations.meeting_lounge',
@@ -177,6 +178,7 @@ final class RoleDefaultMap
             'operations.reports_dashboard',
             'operations.workshop_requests',
             'personal.resource_center_courses',
+            'technical_system.department_dashboards',
         ],
         'finance_manager' => [
             'finance.accounts',
