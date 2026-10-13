@@ -26,6 +26,7 @@ use App\Models\VolunteerHrProfile;
 use App\Models\VolunteerPointAward;
 use App\Models\VolunteerRequest;
 use App\Models\WeeklyDepartmentReport;
+use App\Support\SmartOperationalRuleConfig;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -79,22 +80,20 @@ class ExecutiveCommandCenterService
 
     /** Filter groups shown on the page; every item belongs to exactly one. */
     public const SOURCES = [
+        'smart_rules' => 'التنبيهات الذكية',
         'tickets' => 'التذاكر',
         'meetings' => 'الاجتماعات',
         'education' => 'التعليم',
         'finance' => 'المالية',
         'hr' => 'الموارد البشرية',
         'quality' => 'الجودة',
+        'email' => 'البريد',
+        'users' => 'المستخدمون',
         'system' => 'النظام',
     ];
 
-    public const PRIORITIES = [
-        'critical' => 'عاجل',
-        'high' => 'مهم',
-        'medium' => 'متوسط',
-        'low' => 'منخفض',
-        'info' => 'معلومة',
-    ];
+    /** One scale across the whole page, base items and smart alerts alike. */
+    public const PRIORITIES = SmartOperationalRuleConfig::SEVERITY_LABELS;
 
     public const RANGES = ['today', 'week', 'month'];
 
@@ -113,6 +112,14 @@ class ExecutiveCommandCenterService
     /** @var array<string, array{available: bool, group: string, count: int, label: string}> */
     private array $health = [];
 
+    /** @var array<int, string> labels of smart rules that failed in the current run */
+    private array $pendingFailedRules = [];
+
+    /** @var array<int, array<string, mixed>> per-rule status of the smart engine, for the page */
+    private array $smartRules = [];
+
+    public function __construct(private readonly SmartOperationalRulesService $smart) {}
+
     /**
      * @return array<string, mixed>
      */
@@ -124,6 +131,8 @@ class ExecutiveCommandCenterService
         [$this->since, $this->until] = $this->window($range);
         $this->items = [];
         $this->health = [];
+        $this->smartRules = [];
+        $this->pendingFailedRules = [];
 
         foreach ($this->collectors() as $name => [$group, $label, $method]) {
             $this->run($name, $group, $label, fn () => $this->{$method}());
@@ -137,7 +146,7 @@ class ExecutiveCommandCenterService
         }
 
         $visible = $all
-            ->when($source !== 'all', fn ($c) => $c->where('source', $source))
+            ->when($source !== 'all', fn ($c) => $c->filter(fn ($i) => $i['source'] === $source || ($i['module'] ?? null) === $source))
             ->when($priority !== 'all', fn ($c) => $c->where('priority', $priority));
 
         $sections = [];
@@ -145,7 +154,7 @@ class ExecutiveCommandCenterService
             $rows = $visible->where('section', $key);
             $rows = $key === 'upcoming'
                 ? $rows->sortBy(fn ($i) => $i['due_at'] ?? $i['timestamp'])
-                : $rows->sortBy([[fn ($i) => self::PRIORITY_RANK[$i['priority']] ?? 9, 'asc'], [fn ($i) => $i['timestamp'] ?? '', 'desc']]);
+                : $rows->sort(fn ($x, $y) => [self::PRIORITY_RANK[$x['priority']] ?? 9, $y['priority_score'] ?? 0, $y['timestamp'] ?? ''] <=> [self::PRIORITY_RANK[$y['priority']] ?? 9, $x['priority_score'] ?? 0, $x['timestamp'] ?? '']);
 
             $sections[] = [
                 'key' => $key,
@@ -156,6 +165,7 @@ class ExecutiveCommandCenterService
         }
 
         $sources = $this->sourceRows($all);
+        $summary['smart_alerts'] = $all->where('source', 'smart_rules')->where('type', 'operational_alert')->count();
         $active = count(array_filter($sources, fn ($s) => $s['available']));
 
         return [
@@ -169,6 +179,7 @@ class ExecutiveCommandCenterService
             'summary' => $summary + ['sources_active' => $active, 'sources_total' => count($sources)],
             'sections' => $sections,
             'sources' => $sources,
+            'smart_rules' => $this->smartRules,
             'capabilities' => ['can_view' => true, 'can_refresh' => true, 'read_only' => true],
         ];
     }
@@ -191,10 +202,12 @@ class ExecutiveCommandCenterService
             'impact_points' => ['hr', 'نقاط الأثر', 'collectImpactPoints'],
             'quality' => ['quality', 'الجودة', 'collectQuality'],
             'weekly_reports' => ['quality', 'التقارير الأسبوعية', 'collectWeeklyReports'],
-            'email_failures' => ['system', 'فشل الرسائل', 'collectEmailFailures'],
-            'users' => ['system', 'المستخدمون', 'collectUsers'],
+            'email_failures' => ['email', 'فشل الرسائل', 'collectEmailFailures'],
+            'users' => ['users', 'المستخدمون', 'collectUsers'],
             'system_health' => ['system', 'صحة النظام', 'collectSystemHealth'],
             'notifications' => ['system', 'الإشعارات', 'collectNotifications'],
+            // Last on purpose: it replaces the base items it makes redundant.
+            'smart_rules' => ['smart_rules', 'القواعد الذكية', 'collectSmartRules'],
         ];
     }
 
@@ -205,6 +218,9 @@ class ExecutiveCommandCenterService
         try {
             $collect();
             $this->health[$name] = ['available' => true, 'group' => $group, 'count' => count($this->items) - $before, 'label' => $label];
+            if ($name === 'smart_rules' && $this->pendingFailedRules !== []) {
+                $this->health[$name]['failed'] = $this->pendingFailedRules;
+            }
         } catch (Throwable $e) {
             // Drop whatever a half-run collector added, then report the source as unavailable.
             $this->items = array_slice($this->items, 0, $before);
@@ -247,6 +263,8 @@ class ExecutiveCommandCenterService
         $this->items[] = [
             'id' => $type.'-'.($idSuffix !== '' ? $idSuffix : $n),
             'source' => $group,
+            'module' => $group,
+            'priority_score' => null,
             'type' => $type,
             'section' => $section,
             'title' => $title,
@@ -267,7 +285,7 @@ class ExecutiveCommandCenterService
     /** @param array<string, mixed> $i @return array<string, mixed> */
     private function publicItem(array $i): array
     {
-        unset($i['section']);
+        unset($i['section'], $i['_supersedes'], $i['_entity']);
 
         return $i;
     }
@@ -281,9 +299,12 @@ class ExecutiveCommandCenterService
             $rows[] = [
                 'key' => $key,
                 'label' => $label,
-                'available' => $mine !== [] && ! in_array(false, array_column($mine, 'available'), true),
-                'count' => $all->where('source', $key)->where('type', '!=', 'source_unavailable')->count(),
-                'unavailable' => array_values(array_map(fn ($h) => $h['label'], array_filter($mine, fn ($h) => ! $h['available']))),
+                'available' => $mine !== [] && ! in_array(false, array_column($mine, 'available'), true) && ! array_filter(array_map(fn ($h) => $h['failed'] ?? [], $mine)),
+                'count' => $all->filter(fn ($i) => $i['type'] !== 'source_unavailable' && ($i['source'] === $key || ($i['module'] ?? null) === $key))->count(),
+                'unavailable' => array_values(array_merge(
+                    array_map(fn ($h) => $h['label'], array_filter($mine, fn ($h) => ! $h['available'])),
+                    ...array_map(fn ($h) => $h['failed'] ?? [], array_values($mine)),
+                )),
             ];
         }
 
@@ -542,7 +563,7 @@ class ExecutiveCommandCenterService
 
         foreach ($rows as $r) {
             $label = $labels[$r->type]['label'] ?? 'رسالة بريد';
-            $this->add('system', 'email_failures', 'errors', "فشل إرسال {$r->c} رسالة: {$label}", 'رسائل لم تُسلَّم؛ راجع سجلات البريد وأعد المحاولة.', $r->c >= 5 ? 'critical' : 'high', '/dashboard/super-admin/email-logs', 'فتح سجلات البريد',
+            $this->add('email', 'email_failures', 'errors', "فشل إرسال {$r->c} رسالة: {$label}", 'رسائل لم تُسلَّم؛ راجع سجلات البريد وأعد المحاولة.', $r->c >= 5 ? 'critical' : 'high', '/dashboard/super-admin/email-logs', 'فتح سجلات البريد',
                 'failed', 'فاشلة', $r->c >= 5 ? 'متكرر' : null, $r->last_at, null, null, (string) $r->type);
         }
     }
@@ -551,14 +572,14 @@ class ExecutiveCommandCenterService
     {
         $new = User::query()->where('created_at', '>=', $this->since)->count();
         if ($new > 0) {
-            $this->add('system', 'users_new', 'recent_updates', "{$new} مستخدم جديد", 'حسابات أُنشئت خلال الفترة المحددة.', 'info', '/dashboard/super-admin/crud/users', 'عرض المستخدمين',
+            $this->add('users', 'users_new', 'recent_updates', "{$new} مستخدم جديد", 'حسابات أُنشئت خلال الفترة المحددة.', 'info', '/dashboard/super-admin/crud/users', 'عرض المستخدمين',
                 'new', 'جديد', null, $this->now, null, null, 'all');
         }
 
         // Recent accounts only: legacy accounts predate verification and are not a signal.
         $unverified = User::query()->whereNull('email_verified_at')->where('is_active', true)->where('created_at', '>=', $this->now->subDays(30))->count();
         if ($unverified > 0) {
-            $this->add('system', 'users_unverified', 'needs_attention', "{$unverified} حساب لم يوثّق بريده", 'حسابات أُنشئت خلال آخر 30 يومًا وما زال بريدها غير موثّق.', 'medium', '/dashboard/super-admin/crud/users', 'متابعة التوثيق',
+            $this->add('users', 'users_unverified', 'needs_attention', "{$unverified} حساب لم يوثّق بريده", 'حسابات أُنشئت خلال آخر 30 يومًا وما زال بريدها غير موثّق.', 'medium', '/dashboard/super-admin/crud/users', 'متابعة التوثيق',
                 'unverified', 'غير موثّق', null, $this->now, null, null, 'all');
         }
     }
@@ -589,5 +610,47 @@ class ExecutiveCommandCenterService
             $this->add('system', 'notifications_pinned', 'needs_attention', "{$unread} إشعار مثبّت غير مقروء", 'إشعارات مهمة مثبّتة في صندوقك لم تُقرأ بعد.', 'medium', '/dashboard/notifications', 'فتح الإشعارات',
                 'unread', 'غير مقروء', null, $this->now, null, null, 'pinned');
         }
+    }
+
+    /**
+     * The smart rules engine. It replaces the base items that describe the same condition
+     * (an entity alert replaces that entity's base item; an aggregate alert replaces the base
+     * item type), so one problem is one card. A rule that fails is reported, not fatal.
+     */
+    private function collectSmartRules(): void
+    {
+        $result = $this->smart->evaluate(['now' => $this->now]);
+        $this->smartRules = $result['rules'];
+
+        foreach ($result['alerts'] as $alert) {
+            $this->supersede($alert);
+            $this->items[] = $alert;
+        }
+
+        foreach ($result['rules'] as $rule) {
+            if ($rule['status'] === 'failed') {
+                $this->pendingFailedRules[] = $rule['label'];
+                $this->add('smart_rules', 'source_unavailable', 'errors', "قاعدة ذكية غير متاحة: {$rule['label']}", 'تعذّر تقييم هذه القاعدة؛ بقية القواعد تعمل بشكل طبيعي.', 'high', '/dashboard/tech-admin', 'فتح لوحة التقنية', status: 'unavailable', statusLabel: 'غير متاحة', idSuffix: 'rule-'.$rule['key']);
+            }
+        }
+    }
+
+    /** @param array<string, mixed> $alert */
+    private function supersede(array $alert): void
+    {
+        $types = $alert['_supersedes'] ?? [];
+        if ($types === []) {
+            return;
+        }
+
+        $entityId = $alert['related_entity']['id'] ?? null;
+        $this->items = array_values(array_filter($this->items, function ($i) use ($types, $alert, $entityId) {
+            if (! in_array($i['type'], $types, true)) {
+                return true;
+            }
+
+            // Entity alert: only that entity's base item. Aggregate alert: every base item of the type.
+            return $alert['_entity'] ? $i['id'] !== $i['type'].'-'.$entityId : false;
+        }));
     }
 }

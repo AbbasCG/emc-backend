@@ -17,6 +17,7 @@ use App\Models\Ticket;
 use App\Models\User;
 use App\Models\UserPageAccessOverride;
 use App\Services\EffectivePageAccessService;
+use App\Support\SmartOperationalRuleConfig;
 use App\Support\PageAccess\PageAccessCatalog;
 use App\Support\PageAccess\RoleDefaultMap;
 use App\Support\Permissions;
@@ -55,6 +56,11 @@ class ExecutiveCommandCenterTest extends TestCase
         $this->seed(PermissionSeeder::class);
         $this->seed(RolePermissionSeeder::class);
         $this->seed(ExecutiveCommandCenterPermissionSeeder::class);
+
+        // This file tests the BASE collectors on their own; the smart rules (which replace some
+        // of these items by design) are covered in SmartOperationalRulesTest.
+        $off = array_map(fn () => ['enabled' => false], (new SmartOperationalRuleConfig())->all());
+        app()->instance(SmartOperationalRuleConfig::class, new SmartOperationalRuleConfig($off));
 
         $this->owner = $this->user('super_admin');
     }
@@ -197,7 +203,7 @@ class ExecutiveCommandCenterTest extends TestCase
         }
         $this->assertSame(['needs_attention', 'upcoming', 'recent_updates', 'errors'], array_column($data['sections'], 'key'));
         $this->assertSame(['يحتاج انتباه الآن', 'القادم', 'آخر التحديثات', 'مشاكل وتنبيهات'], array_column($data['sections'], 'title'));
-        $this->assertSame(['tickets', 'meetings', 'education', 'finance', 'hr', 'quality', 'system'], array_column($data['sources'], 'key'));
+        $this->assertSame(['smart_rules', 'tickets', 'meetings', 'education', 'finance', 'hr', 'quality', 'email', 'users', 'system'], array_column($data['sources'], 'key'));
         $this->assertSame('today', $data['meta']['range']);
         $this->assertSame('Europe/Amsterdam', $data['meta']['timezone']);
         $this->assertSame(['can_view' => true, 'can_refresh' => true, 'read_only' => true], $data['capabilities']);
@@ -210,7 +216,7 @@ class ExecutiveCommandCenterTest extends TestCase
     {
         $data = $this->feed(['range' => 'month'])->assertOk()->json('data');
 
-        $this->assertSame(7, $data['summary']['sources_total']);
+        $this->assertSame(10, $data['summary']['sources_total']);
         foreach ($data['sections'] as $s) {
             $this->assertIsArray($s['items']);
         }
@@ -269,8 +275,7 @@ class ExecutiveCommandCenterTest extends TestCase
         $n = collect($this->ofType($json, 'ticket_new'))->firstWhere('id', 'ticket_new-'.$new->id);
         $this->assertSame('tickets', $n['source']);
         $this->assertSame('high', $n['priority']);
-        $this->assertSame('عاجل' === $n['priority_label'], false);
-        $this->assertSame('مهم', $n['priority_label']);
+        $this->assertSame('عاجل', $n['priority_label']);
         $this->assertSame('/dashboard/tickets/'.$new->id, $n['url']);
         $this->assertSame('فتح التذكرة', $n['action_label']);
         $this->assertSame('مقدّم البلاغ', $n['actor']['name']);
@@ -335,7 +340,7 @@ class ExecutiveCommandCenterTest extends TestCase
         $this->assertStringContainsString('توثيق البريد الإلكتروني', $row['title']);
         $this->assertStringContainsString('6', $row['title']);
         $this->assertSame('critical', $row['priority']);
-        $this->assertSame('system', $row['source']);
+        $this->assertSame('email', $row['source']);
         $this->assertContains($row, $this->items($json, 'errors'));
         $this->assertSame('/dashboard/super-admin/email-logs', $row['url']);
         $this->assertStringNotContainsString('secret', strtolower(json_encode($json, JSON_UNESCAPED_UNICODE)));
@@ -405,7 +410,7 @@ class ExecutiveCommandCenterTest extends TestCase
         $warn = $this->ofType($json, 'source_unavailable')[0];
         $this->assertSame('errors', collect($json['data']['sections'])->first(fn ($s) => in_array($warn, $s['items']))['key']);
         $this->assertNotEmpty($this->ofType($json, 'ticket_new'), 'the other sources still load');
-        $this->assertSame(6, $json['data']['summary']['sources_active']);
+        $this->assertSame(9, $json['data']['summary']['sources_active']);
     }
 
     // ═══ Safety ══════════════════════════════════════════════════════════════
@@ -444,7 +449,7 @@ class ExecutiveCommandCenterTest extends TestCase
         DB::table('failed_jobs')->insert(['uuid' => (string) \Illuminate\Support\Str::uuid(), 'connection' => 'db', 'queue' => 'q', 'payload' => '{}', 'exception' => 'x', 'failed_at' => now()]);
 
         foreach ($this->items($this->feed()->json()) as $i) {
-            $this->assertContains($i['priority_label'], ['عاجل', 'مهم', 'متوسط', 'منخفض', 'معلومة']);
+            $this->assertContains($i['priority_label'], ['حرج', 'عاجل', 'مهم', 'متوسط', 'معلومة']);
             $this->assertDoesNotMatchRegularExpression('/[A-Z]{3,}_[A-Z_]+/', $i['title'].' '.$i['description'].' '.($i['status_label'] ?? '').' '.($i['badge'] ?? ''));
         }
     }
