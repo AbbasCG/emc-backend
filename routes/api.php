@@ -2271,6 +2271,13 @@ Route::middleware(['auth:sanctum', 'role:super_admin,tech_admin'])->prefix('admi
 // the canonical DepartmentAccessService — see its class docblock.
 Route::middleware('auth:sanctum')->prefix('v1/tickets')->group(function () {
     Route::get('/meta', [TicketController::class, 'meta']);
+    // Operations Center (read-only figures are scoped to what the viewer may see; writes are checked per ticket).
+    // Static paths MUST stay above /{id}, which also accepts ticket numbers.
+    Route::get('/stats', [\App\Http\Controllers\Api\TicketOpsController::class, 'stats']);
+    Route::get('/board', [\App\Http\Controllers\Api\TicketOpsController::class, 'board']);
+    Route::get('/analytics', [\App\Http\Controllers\Api\TicketOpsController::class, 'analytics']);
+    Route::get('/insights', [\App\Http\Controllers\Api\TicketOpsController::class, 'insights']);
+    Route::post('/bulk', [\App\Http\Controllers\Api\TicketOpsController::class, 'bulk'])->middleware('throttle:10,1');
     Route::get('/', [TicketController::class, 'index']);
     Route::post('/', [TicketController::class, 'store']);
     Route::get('/{id}', [TicketController::class, 'show']);
@@ -2281,6 +2288,9 @@ Route::middleware('auth:sanctum')->prefix('v1/tickets')->group(function () {
     Route::post('/{id}/complete-task', [TicketController::class, 'completeTask']);
     Route::post('/{id}/comment', [TicketController::class, 'addComment']);
     Route::post('/{id}/reassign', [TicketController::class, 'reassign']);
+    Route::get('/{id}/assignment-suggestions', [\App\Http\Controllers\Api\TicketOpsController::class, 'assignmentSuggestions'])->whereNumber('id');
+    Route::get('/{id}/possible-duplicates', [\App\Http\Controllers\Api\TicketOpsController::class, 'possibleDuplicates'])->whereNumber('id');
+    Route::patch('/{id}/priority', [\App\Http\Controllers\Api\TicketOpsController::class, 'priority'])->whereNumber('id')->middleware('throttle:30,1');
     Route::get('/{ticketId}/attachments/{attachmentId}/download', [TicketController::class, 'downloadAttachment'])
         ->name('tickets.attachments.download');
 });

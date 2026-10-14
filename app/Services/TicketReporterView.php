@@ -79,6 +79,37 @@ class TicketReporterView
     }
 
     /**
+     * One row of the ticket list for a submitter. A whitelist, like present(): no assignee, approver,
+     * deadline, internal notes, submitter email or rejection reasons, and every action off. A column
+     * added to `tickets` later is hidden from reporters by default.
+     *
+     * @return array<string, mixed>
+     */
+    public function row(Ticket $ticket): array
+    {
+        $ticket->loadMissing('department');
+
+        return [
+            'viewer_role'     => 'reporter',
+            'id'              => $ticket->id,
+            'ticket_number'   => $ticket->ticket_number,
+            'title'           => $ticket->title,
+            'ticket_category' => $ticket->ticket_category,
+            'priority'        => $ticket->priority,
+            'status'          => $ticket->status,
+            'created_at'      => $ticket->created_at?->toIso8601String(),
+            'updated_at'      => $ticket->updated_at?->toIso8601String(),
+            'resolved_at'     => $ticket->resolved_at?->toIso8601String(),
+            'department_id'   => $ticket->department_id,
+            'department'      => $ticket->department ? ['id' => $ticket->department->id, 'name' => $ticket->department->name_ar ?: $ticket->department->name] : null,
+            'capabilities'    => [
+                'approve' => false, 'reject' => false, 'reassign' => false, 'accept_task' => false, 'reject_task' => false,
+                'complete_task' => false, 'add_internal_note' => false, 'comment' => ! in_array($ticket->status, self::FINAL_STATUSES, true), 'change_priority' => false,
+            ],
+        ];
+    }
+
+    /**
      * Only what the reporter themself uploaded at submission. Proof files an
      * assignee attached while resolving are working material, not part of the
      * reporter's own submission.

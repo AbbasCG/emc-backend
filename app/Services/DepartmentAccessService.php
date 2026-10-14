@@ -7,6 +7,7 @@ use App\Models\TeamMember;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Single source of truth for department scoping — reused by every
@@ -192,7 +193,25 @@ class DepartmentAccessService
             'read_scope'                    => $readsEveryDepartment ? 'global' : 'restricted',
             'readable_departments'          => $readableDepartments,
             'can_view_multiple_departments' => $readableDepartments->count() > 1,
+
+            // The user's own primary department (user_departments.is_primary), offered only when it is
+            // UNAMBIGUOUS and inside their read scope. Null for global roles (they are never steered into
+            // one department) and whenever there is no primary, more than one, or one they cannot read.
+            'primary_department_id' => $readsEveryDepartment ? null : $this->primaryDepartmentId($user, $readableDepartments),
         ];
+    }
+
+    /** @param  Collection<int, array{id: int, name: string}>  $readable */
+    private function primaryDepartmentId(User $user, Collection $readable): ?int
+    {
+        $primary = DB::table('user_departments')->where('user_id', $user->id)->where('is_primary', true)->pluck('department_id');
+        if ($primary->count() !== 1) {
+            return null;
+        }
+
+        $id = (int) $primary->first();
+
+        return $readable->contains(fn ($d) => (int) $d['id'] === $id) ? $id : null;
     }
 
     /**
@@ -205,8 +224,9 @@ class DepartmentAccessService
             ->when($restrictToIds !== null, fn (Builder $q) => $q->whereIn('id', $restrictToIds))
             ->active()
             ->orderBy('sort_order')
-            ->get(['id', 'name'])
-            ->map(fn (Department $d) => ['id' => $d->id, 'name' => $d->name])
+            ->get(['id', 'name', 'name_ar'])
+            // `name` stays exactly as before; `name_ar` is the display name for Arabic screens (null when not set).
+            ->map(fn (Department $d) => ['id' => $d->id, 'name' => $d->name, 'name_ar' => $d->name_ar])
             ->values();
     }
 }

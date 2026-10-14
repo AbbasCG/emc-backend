@@ -10,6 +10,10 @@ use App\Models\TicketActivityLog;
 use App\Models\TicketAttachment;
 use App\Models\User;
 use App\Services\DepartmentAccessService;
+use App\Exceptions\TicketActionException;
+use App\Services\TicketAccess;
+use App\Services\TicketActions;
+use App\Services\TicketQuery;
 use App\Services\TicketReporterView;
 use Illuminate\Http\Request;
 use Illuminate\Database\QueryException;
@@ -37,130 +41,85 @@ use Illuminate\Support\Facades\Validator;
  */
 class TicketController extends Controller
 {
-    public function __construct(private readonly DepartmentAccessService $departmentAccess)
-    {
-    }
+    private readonly TicketAccess $access;
+
+    private readonly TicketQuery $ticketQuery;
 
     /**
-     * Can this user read the ticket (creator, assignee, department member/leader, or global)?
+     * The original one-argument construction keeps working (a subclass or test may build the controller
+     * with only the department service); the shared access and query services then come from the
+     * container. When the container builds the controller it injects all three.
      */
+    public function __construct(
+        private readonly DepartmentAccessService $departmentAccess,
+        ?TicketAccess $access = null,
+        ?TicketQuery $ticketQuery = null,
+    ) {
+        $this->access = $access ?? app(TicketAccess::class);
+        $this->ticketQuery = $ticketQuery ?? app(TicketQuery::class);
+    }
+
+    // The authorization rules live in TicketAccess (shared with the operations endpoints, so the work
+    // queue and the single-ticket page can never differ). These thin wrappers keep this controller's
+    // call sites unchanged.
+
+    /** Creator, assignee, department member/leader, or global. */
     private function canView(User $user, Ticket $ticket): bool
     {
-        if ($this->departmentAccess->isGlobal($user)) {
-            return true;
-        }
-
-        return $ticket->created_by_id === $user->id
-            || $ticket->assigned_to_id === $user->id
-            || $this->departmentAccess->canAccessDepartment($user, (int) $ticket->department_id);
+        return $this->access->canView($user, $ticket);
     }
 
-    /**
-     * Can this user perform department-management actions (approve, admin-reject,
-     * reassign) on this ticket's department? Leadership or global only — never
-     * mere membership, and never a role-name guess.
-     */
+    /** Department leadership (or global) only — never mere membership, never a role-name guess. */
     private function canManage(User $user, int $departmentId): bool
     {
-        return $this->departmentAccess->canManageDepartment($user, $departmentId);
+        return $this->access->canManage($user, $departmentId);
     }
 
-    /**
-     * Can this user act as the assignee (accept/reject/complete the task)?
-     */
+    /** The ticket's actual assignee (or global). */
     private function isAssignee(User $user, Ticket $ticket): bool
     {
-        if ($this->departmentAccess->isGlobal($user)) {
-            return true;
-        }
-
-        return $ticket->assigned_to_id !== null && $ticket->assigned_to_id === $user->id;
+        return $this->access->isAssignee($user, $ticket);
     }
 
-    /**
-     * Is this viewer ONLY the person who submitted the ticket - not global, not a
-     * manager of its department and not its assignee? Those viewers get the
-     * read-only, public-safe projection (TicketReporterView) instead of the
-     * operational payload. Anyone with a staff role over the ticket keeps the
-     * full payload, even when they also happen to be the submitter.
-     */
+    /** Only the submitter: no management, assignment or global role over the ticket. */
     private function isReporterOnly(User $user, Ticket $ticket): bool
     {
-        return $ticket->created_by_id !== null
-            && $ticket->created_by_id === $user->id
-            && ! $this->departmentAccess->isGlobal($user)
-            && ! $this->canManage($user, (int) $ticket->department_id)
-            && $ticket->assigned_to_id !== $user->id;
+        return $this->access->isReporterOnly($user, $ticket);
     }
 
-    /**
-     * Is $assignee eligible to be assigned a ticket in $departmentId, optionally
-     * scoped to a specific technical unit? When $unitId is given, membership must
-     * be exact — an active team_members row for that user in that unit AND
-     * department (never just "somewhere in the department"), closing the ID-
-     * manipulation path where a caller sends a valid unit alongside a user who
-     * belongs to a *different* unit. Global roles bypass both checks, same as
-     * every other authorization path in this controller.
-     */
+    /** Exact unit membership when a unit is given; department access otherwise. */
     private function assigneeEligible(User $assignee, int $departmentId, ?int $unitId): bool
     {
-        if ($this->departmentAccess->isGlobal($assignee)) {
-            return true;
-        }
-
-        if ($unitId) {
-            return \App\Models\TeamMember::where('user_id', $assignee->id)
-                ->where('unit_id', $unitId)
-                ->where('department_id', $departmentId)
-                ->where('status', 'active')
-                ->exists();
-        }
-
-        return $this->departmentAccess->canAccessDepartment($assignee, $departmentId);
+        return $this->access->assigneeEligible($assignee, $departmentId, $unitId);
     }
 
     /**
-     * The canonical per-ticket, per-user capability set.
-     *
-     * ONE authoritative place, reusing the EXACT SAME authorization helpers
-     * every mutating endpoint already guards itself with (canManage/
-     * isAssignee) and the EXACT SAME status guards each endpoint already
-     * enforces server-side. This does not decide authorization - it REPORTS
-     * the decision those endpoints would already make, so the frontend can
-     * show only the actions that would actually succeed instead of drifting
-     * out of sync with the real rules (as the Admin table's "reassign"
-     * button had: it showed for REJECTED_BY_ASSIGNEE, a status reassign()
-     * has never accepted).
-     *
-     * `assign` and `reassign` intentionally share one flag: there is no
-     * separate "assign" endpoint. approve() optionally sets the first
-     * assignee; reassign() is the ONLY endpoint that sets one afterwards,
-     * for both "assign for the first time post-approval" and "true
-     * reassignment" - it guards on status only, never on whether an
-     * assignee already exists. The frontend derives its OWN button label
-     * ("تعيين" vs "إعادة التوجيه") from whether ticket.assignee is null;
-     * that is presentation, not a second authorization decision.
-     *
-     * `comment` is always true here because building capabilities at all
-     * implies canView() already passed for this ticket.
+     * The canonical per-ticket, per-user capability set (see TicketAccess::capabilities). It REPORTS
+     * what the endpoints below would allow; `assign` and `reassign` share one flag because there is
+     * no separate assign endpoint.
      *
      * @return array<string, bool>
      */
     private function buildCapabilities(User $user, Ticket $ticket): array
     {
-        $canManage = $this->canManage($user, (int) $ticket->department_id);
-        $isAssignee = $this->isAssignee($user, $ticket);
+        return $this->access->capabilities($user, $ticket);
+    }
 
-        return [
-            'approve' => $canManage && $ticket->status === 'PENDING_APPROVAL',
-            'reject' => $canManage && $ticket->status === 'PENDING_APPROVAL',
-            'reassign' => $canManage && in_array($ticket->status, ['ASSIGNED', 'IN_PROGRESS'], true),
-            'accept_task' => $isAssignee && $ticket->status === 'ASSIGNED',
-            'reject_task' => $isAssignee && $ticket->status === 'ASSIGNED',
-            'complete_task' => $isAssignee && $ticket->status === 'IN_PROGRESS',
-            'add_internal_note' => $canManage,
-            'comment' => true,
-        ];
+    /**
+     * Run a status transition under a row lock: the ticket is re-read FOR UPDATE inside a
+     * transaction and the callback decides from THAT state, so two people acting at once cannot both
+     * succeed (the second sees the new status and gets its 409). Observer notifications are
+     * deferred until the transaction commits.
+     *
+     * @param  callable(Ticket): mixed  $fn
+     */
+    private function lockedTransition(int|string $id, callable $fn): mixed
+    {
+        return DB::transaction(function () use ($id, $fn) {
+            $ticket = Ticket::lockForUpdate()->where('id', $id)->orWhere('ticket_number', $id)->firstOrFail();
+
+            return $fn($ticket);
+        });
     }
 
     private function forbidden(string $message = 'ليست لديك صلاحية للوصول إلى هذه التذكرة.')
@@ -282,79 +241,49 @@ class TicketController extends Controller
     }
 
     /**
-     * Filterable tickets list — scoped to what the user may actually see:
-     * global roles see everything, everyone else sees tickets in their
-     * accessible departments plus anything they created or are assigned to.
+     * Filterable, sortable, paginated tickets list — scoped to what the user may actually see: global
+     * roles see everything, everyone else sees tickets in their accessible departments plus anything
+     * they created or are assigned to. A filter only ever narrows that set (TicketQuery).
+     *
+     * `lite=1` (the work queue) returns slim rows: no attachment files and only id/name for the
+     * people involved. Without it the payload is exactly what existing callers always received.
      */
     public function index(Request $request)
     {
         $user = $request->user();
+        $f = $this->ticketQuery->validate($request);
+        $lite = (bool) ($f['lite'] ?? false);
 
-        $query = Ticket::with(['department', 'unit', 'creator', 'approver', 'assignee', 'attachments']);
+        $query = $this->ticketQuery->visible($user);
+        $this->ticketQuery->filter($query, $f, $user);
+        $this->ticketQuery->withLastActivity($query);
 
-        if (! $this->departmentAccess->isGlobal($user)) {
-            $accessibleDeptIds = $this->departmentAccess->getAccessibleDepartmentIds($user);
-            $query->where(function ($q) use ($accessibleDeptIds, $user) {
-                $q->whereIn('department_id', $accessibleDeptIds)
-                  ->orWhere('created_by_id', $user->id)
-                  ->orWhere('assigned_to_id', $user->id);
-            });
+        if ($lite) {
+            $query->with(['department:id,name,name_ar', 'unit:id,name_ar', 'creator:id,name', 'assignee:id,name'])
+                ->withCount('attachments');
+        } else {
+            $query->with(['department', 'unit', 'creator', 'approver', 'assignee', 'attachments']);
         }
 
-        if ($request->filled('status')) {
-            $query->where('status', $request->status);
-        }
+        $this->ticketQuery->sort($query, $f);
+        $tickets = $query->paginate($f['per_page'] ?? TicketQuery::DEFAULT_PER_PAGE);
 
-        if ($request->filled('department_id')) {
-            $query->where('department_id', $request->department_id);
-        }
+        // Same capability computation as show() - one canonical source, so the work queue and the
+        // detail page can never drift on which actions a given ticket/user pair actually permits.
+        $tickets->getCollection()->transform(function (Ticket $ticket) use ($user, $lite) {
+            // Someone who is only the submitter gets the reporter-safe row (no assignee, deadline or notes).
+            if ($this->isReporterOnly($user, $ticket)) {
+                return app(TicketReporterView::class)->row($ticket);
+            }
 
-        if ($request->filled('unit_id')) {
-            $query->where('unit_id', $request->unit_id);
-        }
-
-        if ($request->filled('ticket_category')) {
-            $query->where('ticket_category', $request->ticket_category);
-        }
-
-        if ($request->filled('priority')) {
-            $query->where('priority', $request->priority);
-        }
-
-        if ($request->filled('assigned_to_id')) {
-            $query->where('assigned_to_id', $request->assigned_to_id);
-        }
-
-        if ($request->filled('created_by_id')) {
-            $query->where('created_by_id', $request->created_by_id);
-        }
-
-        if ($request->filled('search')) {
-            $search = $request->search;
-            $query->where(function ($q) use ($search) {
-                $q->where('ticket_number', 'LIKE', "%{$search}%")
-                  ->orWhere('title', 'LIKE', "%{$search}%")
-                  ->orWhere('description', 'LIKE', "%{$search}%")
-                  ->orWhere('created_by_name', 'LIKE', "%{$search}%");
-            });
-        }
-
-        if ($request->boolean('delayed_only')) {
-            $query->whereNotIn('status', ['RESOLVED', 'REJECTED_BY_ADMIN', 'UNRESOLVED'])
-                  ->whereNotNull('expected_resolution_time')
-                  ->where('expected_resolution_time', '<', now());
-        }
-
-        $tickets = $query->orderBy('created_at', 'desc')->paginate($request->get('per_page', 20));
-
-        // Same capability computation as show() - one canonical source, so the
-        // Admin table and Ticket Detail can never drift on which actions a
-        // given ticket/user pair actually permits.
-        $tickets->getCollection()->transform(function (Ticket $ticket) use ($user) {
             $data = $ticket->toArray();
+            if ($lite) {
+                // The list never needs the long text; the detail request has it.
+                unset($data['description']);
+            }
             $data['capabilities'] = $this->buildCapabilities($user, $ticket);
 
-            return $data;
+            return $this->access->redactInternal($user, $ticket, $data);
         });
 
         return response()->json([
@@ -598,9 +527,11 @@ class TicketController extends Controller
         $data['viewer_role'] = 'staff';
         $data['capabilities'] = $this->buildCapabilities($request->user(), $ticket);
 
+        // Internal notes (the column and the INTERNAL_NOTE log rows) are for leadership, global roles
+        // and the assignee. A plain department member can open the ticket without reading them.
         return response()->json([
             'success' => true,
-            'data' => $data,
+            'data' => $this->access->redactInternal($request->user(), $ticket, $data),
         ]);
     }
 
@@ -609,7 +540,11 @@ class TicketController extends Controller
      */
     public function approve(Request $request, $id)
     {
-        $ticket = Ticket::findOrFail($id);
+        return $this->lockedTransition($id, fn (Ticket $ticket) => $this->doApprove($request, $ticket));
+    }
+
+    private function doApprove(Request $request, Ticket $ticket)
+    {
         $user = $request->user();
 
         if (! $this->canManage($user, (int) $ticket->department_id)) {
@@ -703,7 +638,11 @@ class TicketController extends Controller
      */
     public function rejectByAdmin(Request $request, $id)
     {
-        $ticket = Ticket::findOrFail($id);
+        return $this->lockedTransition($id, fn (Ticket $ticket) => $this->doRejectByAdmin($request, $ticket));
+    }
+
+    private function doRejectByAdmin(Request $request, Ticket $ticket)
+    {
         $user = $request->user();
 
         if (! $this->canManage($user, (int) $ticket->department_id)) {
@@ -763,7 +702,11 @@ class TicketController extends Controller
      */
     public function acceptTask(Request $request, $id)
     {
-        $ticket = Ticket::findOrFail($id);
+        return $this->lockedTransition($id, fn (Ticket $ticket) => $this->doAcceptTask($request, $ticket));
+    }
+
+    private function doAcceptTask(Request $request, Ticket $ticket)
+    {
         $user = $request->user();
 
         if (! $this->isAssignee($user, $ticket)) {
@@ -807,7 +750,11 @@ class TicketController extends Controller
      */
     public function rejectTask(Request $request, $id)
     {
-        $ticket = Ticket::findOrFail($id);
+        return $this->lockedTransition($id, fn (Ticket $ticket) => $this->doRejectTask($request, $ticket));
+    }
+
+    private function doRejectTask(Request $request, Ticket $ticket)
+    {
         $user = $request->user();
 
         if (! $this->isAssignee($user, $ticket)) {
@@ -867,7 +814,11 @@ class TicketController extends Controller
      */
     public function completeTask(Request $request, $id)
     {
-        $ticket = Ticket::findOrFail($id);
+        return $this->lockedTransition($id, fn (Ticket $ticket) => $this->doCompleteTask($request, $ticket));
+    }
+
+    private function doCompleteTask(Request $request, Ticket $ticket)
+    {
         $user = $request->user();
 
         if (! $this->isAssignee($user, $ticket)) {
@@ -1023,9 +974,10 @@ class TicketController extends Controller
     }
 
     /**
-     * Reassign ticket to a different assignee (department leader / privileged only).
+     * Reassign ticket to a different assignee (department leader / privileged only). The rules and
+     * the locked, re-checked update live in TicketActions, the same code the bulk endpoint uses.
      */
-    public function reassign(Request $request, $id)
+    public function reassign(Request $request, $id, TicketActions $actions)
     {
         $ticket = Ticket::where('id', $id)->orWhere('ticket_number', $id)->firstOrFail();
         $user = $request->user();
@@ -1047,59 +999,22 @@ class TicketController extends Controller
             'reason'         => 'nullable|string|max:500',
         ]);
 
-        if ($request->filled('unit_id')) {
-            $unitBelongs = DepartmentalUnit::where('id', $request->unit_id)
-                ->where('department_id', $ticket->department_id)
-                ->exists();
-            if (! $unitBelongs) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'الوحدة المحددة لا تتبع إدارة هذه التذكرة.',
-                    'errors' => ['unit_id' => ['الوحدة المحددة لا تتبع إدارة هذه التذكرة.']],
-                ], 422);
-            }
+        try {
+            $updated = $actions->reassign(
+                (int) $ticket->id,
+                $user,
+                (int) $request->assigned_to_id,
+                $request->filled('unit_id') ? (int) $request->unit_id : null,
+                $request->input('reason'),
+            );
+        } catch (TicketActionException $e) {
+            return response()->json(array_filter(['success' => false, 'message' => $e->getMessage(), 'errors' => $e->errors ?: null]), $e->status);
         }
-
-        // Effective unit for eligibility purposes: the one being set now, else the
-        // ticket's existing unit (a reassign that doesn't touch unit_id must still
-        // enforce membership in whatever unit the ticket already carries).
-        $effectiveUnitId = $request->filled('unit_id') ? (int) $request->unit_id : $ticket->unit_id;
-
-        $assignee = User::find($request->assigned_to_id);
-        if (! $this->assigneeEligible($assignee, (int) $ticket->department_id, $effectiveUnitId)) {
-            return response()->json([
-                'success' => false,
-                'message' => $effectiveUnitId
-                    ? 'المستخدم المحدد ليس عضواً فعالاً في الوحدة التقنية المختارة.'
-                    : 'المستخدم المحدد غير مؤهل لإسناد تذاكر هذه الإدارة إليه.',
-                'errors' => ['assigned_to_id' => ['المستخدم المحدد غير مؤهل للتكليف بناءً على الوحدة/الإدارة المحددة.']],
-            ], 422);
-        }
-
-        $prevState = $ticket->status;
-
-        $ticket->update([
-            'assigned_to_id' => $request->assigned_to_id,
-            'unit_id'        => $request->unit_id ?? $ticket->unit_id,
-            'status'         => 'ASSIGNED',
-            'accepted_at'    => null,
-        ]);
-
-        TicketActivityLog::create([
-            'ticket_id'         => $ticket->id,
-            'action'            => 'REASSIGNED',
-            'previous_state'    => $prevState,
-            'new_state'         => 'ASSIGNED',
-            'performed_by'      => $user->id,
-            'performed_by_name' => $user->name,
-            'details'           => 'تمت إعادة التوجيه وتغيير المكلف' . ($request->reason ? ': ' . $request->reason : ''),
-            'logged_at'         => now(),
-        ]);
 
         return response()->json([
             'success' => true,
             'message' => 'تمت إعادة توجيه التذكرة وتغيير المكلف بنجاح',
-            'data'    => $ticket->fresh(['department', 'unit', 'assignee']),
+            'data'    => $updated->fresh(['department', 'unit', 'assignee']),
         ]);
     }
 

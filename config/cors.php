@@ -29,7 +29,7 @@ return [
     'exposed_headers' => ['Content-Disposition'],
 
     // Preflight cache in seconds (24 h in production, 0 in dev)
-    'max_age' => (int) env('CORS_MAX_AGE', 0),
+    'max_age' => (int) env('CORS_MAX_AGE', 600),
 
     // Required by Sanctum's first-party SPA cookie authentication. Origins
     // above are explicit; credentialed requests are never combined with `*`.

@@ -31,16 +31,33 @@ class AdminDepartmentalUnitController extends Controller
     }
 
     // GET /api/admin/departmental-units?department_id=X
+    //
+    // READ scope mirrors every other department-scoped read: a user sees the units of the departments they
+    // may access (member, leader, or global); global and read-only-global roles see all. A department the
+    // user cannot access is refused (403) rather than returned or silently emptied, and without a
+    // department_id a restricted user receives only their accessible departments' units. `meta.can_manage`
+    // reports whether THIS user may create or change units of the requested department, so the screen shows
+    // write controls from the server's answer, never from a guess.
     public function index(Request $request): JsonResponse
     {
+        $user = $request->user();
+        $request->validate(['department_id' => ['sometimes', 'nullable', 'integer', 'min:1']]);
+        $departmentId = $request->filled('department_id') ? (int) $request->input('department_id') : null;
+
+        if ($departmentId !== null && ! $this->departmentAccess->canAccessDepartment($user, $departmentId)) {
+            abort(403, 'لا تملك صلاحية عرض وحدات هذه الإدارة.');
+        }
+
         $units = DepartmentalUnit::withCount(['teamMembers' => fn ($q) => $q->where('status', 'active')])
-            ->when($request->filled('department_id'), fn ($q) => $q->where('department_id', $request->department_id))
+            ->when($departmentId !== null, fn ($q) => $q->where('department_id', $departmentId))
+            ->tap(fn ($q) => $departmentId === null ? $this->departmentAccess->scopeQuery($q, $user) : $q)
             ->orderBy('name_ar')
             ->get();
 
         return response()->json([
             'success' => true,
             'data' => $units->map(fn ($u) => $this->format($u)),
+            'meta' => ['can_manage' => $departmentId !== null && $this->departmentAccess->canManageDepartment($user, $departmentId)],
         ]);
     }
 
