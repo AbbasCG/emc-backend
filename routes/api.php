@@ -326,6 +326,19 @@ Route::middleware('auth:sanctum')->prefix('admin')->group(function () {
     Route::get('/hr-requests/{hrRequest}/opportunity-draft/suggestion',      [\App\Http\Controllers\Hr\HrRequestMatchingController::class, 'suggestion'])->whereNumber('hrRequest');
     Route::post('/hr-requests/{hrRequest}/opportunity-draft',                [\App\Http\Controllers\Hr\HrRequestMatchingController::class, 'store'])->whereNumber('hrRequest')->middleware('throttle:20,1');
     Route::put('/hr-requests/{hrRequest}/opportunity-draft',                 [\App\Http\Controllers\Hr\HrRequestMatchingController::class, 'update'])->whereNumber('hrRequest')->middleware('throttle:20,1');
+
+    // Phase 4/5: opportunity management (publish workflow) and the applicants linked to a request.
+    // Authorization is inside the controller (HrRequestAccessService): manage_team to change anything,
+    // plus view_volunteers to see applicants.
+    Route::get('/hr-requests/{hrRequest}/applicants',                        [\App\Http\Controllers\Hr\VolunteerOpportunityController::class, 'applicantsOfRequest'])->whereNumber('hrRequest');
+    Route::get('/volunteer-opportunities',                                   [\App\Http\Controllers\Hr\VolunteerOpportunityController::class, 'index']);
+    Route::post('/volunteer-opportunities',                                  [\App\Http\Controllers\Hr\VolunteerOpportunityController::class, 'store'])->middleware('throttle:20,1');
+    Route::get('/volunteer-opportunities/{opportunity}',                     [\App\Http\Controllers\Hr\VolunteerOpportunityController::class, 'show'])->whereNumber('opportunity');
+    Route::put('/volunteer-opportunities/{opportunity}',                     [\App\Http\Controllers\Hr\VolunteerOpportunityController::class, 'update'])->whereNumber('opportunity')->middleware('throttle:30,1');
+    Route::post('/volunteer-opportunities/{opportunity}/publish',            [\App\Http\Controllers\Hr\VolunteerOpportunityController::class, 'publish'])->whereNumber('opportunity')->middleware('throttle:20,1');
+    Route::post('/volunteer-opportunities/{opportunity}/unpublish',          [\App\Http\Controllers\Hr\VolunteerOpportunityController::class, 'unpublish'])->whereNumber('opportunity')->middleware('throttle:20,1');
+    Route::post('/volunteer-opportunities/{opportunity}/close',              [\App\Http\Controllers\Hr\VolunteerOpportunityController::class, 'close'])->whereNumber('opportunity')->middleware('throttle:20,1');
+    Route::get('/volunteer-opportunities/{opportunity}/applicants',          [\App\Http\Controllers\Hr\VolunteerOpportunityController::class, 'applicantsOf'])->whereNumber('opportunity');
 });
 
 // ─── Instructor submission file (inline preview or attachment, JSON errors) ────
@@ -713,6 +726,16 @@ Route::post('/partnership-requests', [PublicPartnershipRequestController::class,
 
 // ─── Public: Volunteer requests (throttle:workshop — 5 req/min per IP) ────────
 Route::post('/volunteer-requests', [PublicVolunteerRequestController::class, 'store'])
+    ->middleware('throttle:workshop');
+
+// ─── Public: volunteer opportunities (browse, read one, apply) ───────────────
+// Only published, open opportunities are exposed; applying is limited to 5 requests/min per IP.
+Route::middleware('throttle:api')->group(function () {
+    Route::get('/volunteer-opportunities',      [\App\Http\Controllers\Public\VolunteerOpportunityController::class, 'index']);
+    Route::get('/volunteer-opportunities/{id}', [\App\Http\Controllers\Public\VolunteerOpportunityController::class, 'show'])->whereNumber('id');
+});
+Route::post('/volunteer-opportunities/{id}/applications', [\App\Http\Controllers\Public\VolunteerOpportunityController::class, 'apply'])
+    ->whereNumber('id')
     ->middleware('throttle:workshop');
 
 // ─── Public: AI Level Assessment — النتيجة + مكافأة 7% (كوبون حقيقي) ─────────

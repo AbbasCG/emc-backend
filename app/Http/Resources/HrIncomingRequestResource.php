@@ -56,7 +56,13 @@ class HrIncomingRequestResource extends JsonResource
             'hr_feedback' => $r->hr_feedback,
             'created_at' => $r->created_at?->toIso8601String(),
             'updated_at' => $r->updated_at?->toIso8601String(),
-            'draft' => $draft ? ['id' => $draft->id, 'title' => $draft->title, 'status' => $draft->status] : null,
+            'draft' => $draft ? [
+                'id' => $draft->id,
+                'title' => $draft->title,
+                'status' => $draft->status,
+                'status_label' => \App\Models\VolunteerOpportunity::STATUS_LABELS[$draft->status] ?? 'غير محدد',
+                'applicants_count' => (int) ($draft->applications_count ?? 0),
+            ] : null,
         ];
     }
 }

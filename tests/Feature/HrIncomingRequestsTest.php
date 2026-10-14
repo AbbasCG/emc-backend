@@ -410,7 +410,7 @@ class HrIncomingRequestsTest extends TestCase
         $this->assertSame($row->id, $r->fresh()->opportunityDraft->id);
 
         $list = $this->getJson(self::BASE.'/incoming')->json();
-        $this->assertSame(['id' => $row->id, 'title' => $res['title'], 'status' => 'draft'], $list['data'][0]['draft']);
+        $this->assertSame(['id' => $row->id, 'title' => $res['title'], 'status' => 'draft', 'status_label' => 'مسودة', 'applicants_count' => 0], $list['data'][0]['draft']);
         $this->assertSame(1, $list['stats']['with_drafts']);
         $this->assertSame(1, $this->getJson(self::BASE.'/incoming?has_draft=yes')->json('meta.total'));
         $this->assertSame(0, $this->getJson(self::BASE.'/incoming?has_draft=no')->json('meta.total'));

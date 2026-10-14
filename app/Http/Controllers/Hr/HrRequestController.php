@@ -168,7 +168,7 @@ class HrRequestController extends Controller
 
         $page = (clone $base)
             ->when($request->filled('status'), fn ($q) => $q->where('status', $request->query('status')))
-            ->with(['department:id,name,name_ar', 'creator:id,name', 'opportunityDraft:id,incoming_request_id,title,status'])
+            ->with(['department:id,name,name_ar', 'creator:id,name', 'opportunityDraft' => fn ($q) => $q->select(['id', 'incoming_request_id', 'title', 'status'])->withCount('applications')])
             ->orderByDesc('created_at')->orderByDesc('id')
             ->paginate((int) $request->query('per_page', 25));
 
@@ -200,7 +200,7 @@ class HrRequestController extends Controller
             return $this->forbidden();
         }
 
-        $hrRequest->load(['department:id,name,name_ar', 'creator:id,name', 'opportunityDraft']);
+        $hrRequest->load(['department:id,name,name_ar', 'creator:id,name', 'opportunityDraft' => fn ($q) => $q->withCount('applications')]);
 
         return response()->json([
             'success' => true,
@@ -234,7 +234,7 @@ class HrRequestController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'تم تحديث حالة الطلب بنجاح',
-            'data'    => (new HrIncomingRequestResource($hrRequest->load(['department:id,name,name_ar', 'creator:id,name', 'opportunityDraft'])))->resolve(),
+            'data'    => (new HrIncomingRequestResource($hrRequest->load(['department:id,name,name_ar', 'creator:id,name', 'opportunityDraft' => fn ($q) => $q->withCount('applications')])))->resolve(),
         ]);
     }
 

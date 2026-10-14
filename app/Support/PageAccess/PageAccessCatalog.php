@@ -180,6 +180,9 @@ final class PageAccessCatalog
             ['hr.volunteers', '/dashboard/hr/volunteers', 'المتطوعون', $C::Hr, $R::SafeDelegatable, true, P::VIEW_VOLUNTEERS, true, [
                 '/dashboard/hr/volunteers/:id',
             ]],
+            // Publish workflow for volunteer opportunities (public site). ADMIN_ONLY and not delegatable:
+            // publishing is public-facing. The API behind it needs manage_team (view_volunteers for applicants).
+            ['hr.volunteer_opportunities', '/dashboard/hr/opportunities', 'فرص التطوع', $C::Hr, $R::AdminOnly, false, P::MANAGE_TEAM, false, []],
             ['hr.instructors', '/dashboard/hr/instructors', 'المدربون', $C::Hr, $R::AdminOnly, false, P::VIEW_TEAM, false, []],
             ['hr.onboarding', '/dashboard/hr/onboarding', 'التهيئة', $C::Hr, $R::SafeDelegatable, true, P::MANAGE_TEAM, true, []],
             ['hr.volunteer_requests', '/dashboard/hr/volunteer-requests', 'طلبات المتطوعين', $C::Hr, $R::SafeDelegatable, true, P::MANAGE_VOLUNTEERS, true, [

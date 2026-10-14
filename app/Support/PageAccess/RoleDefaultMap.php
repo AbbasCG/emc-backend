@@ -209,6 +209,7 @@ final class RoleDefaultMap
             'hr.onboarding',
             'hr.tasks',
             'hr.team',
+            'hr.volunteer_opportunities',
             'hr.volunteer_requests',
             'hr.volunteers',
             'operations.accepted_volunteers',

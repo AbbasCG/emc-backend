@@ -54,8 +54,10 @@ class VolunteerOpportunityDraftService
             'preferred_skills' => [],
             'volunteers_needed' => $count,
             'availability' => null,
+            'duration' => null,
             'location_mode' => null,
             'start_date' => null,
+            'closes_at' => null,
             'application_instructions' => 'قدّم طلب التطوع عبر المنصة، وسيتواصل معك فريق الموارد البشرية بعد مراجعة طلبك.',
         ];
     }
@@ -80,6 +82,23 @@ class VolunteerOpportunityDraftService
 
             return $draft->fresh();
         });
+    }
+
+    /**
+     * An opportunity created on its own (no incoming request). Still a draft until published.
+     *
+     * @param  array<string, mixed>  $data  validated form values
+     */
+    public function createIndependent(array $data, User $by): VolunteerOpportunity
+    {
+        $draft = new VolunteerOpportunity($this->clean($data));
+        $draft->incoming_request_id = null;
+        $draft->department_id = $data['department_id'] ?? null;
+        $draft->created_by = $by->id;
+        $draft->updated_by = $by->id;
+        $draft->save();
+
+        return $draft->fresh();
     }
 
     /** @param array<string, mixed> $data */
@@ -109,11 +128,16 @@ class VolunteerOpportunityDraftService
             'preferred_skills' => $d->preferred_skills ?? [],
             'volunteers_needed' => $d->volunteers_needed,
             'availability' => $d->availability,
+            'duration' => $d->duration,
             'location_mode' => $d->location_mode,
             'start_date' => $d->start_date?->toDateString(),
+            'closes_at' => $d->closes_at?->toDateString(),
             'application_instructions' => $d->application_instructions,
             'status' => $d->status,
-            'is_published' => $d->published_at !== null,
+            'status_label' => VolunteerOpportunity::STATUS_LABELS[$d->status] ?? 'غير محدد',
+            'is_published' => $d->status === VolunteerOpportunity::STATUS_PUBLISHED && $d->published_at !== null,
+            'published_at' => $d->published_at?->toIso8601String(),
+            'closed_at' => $d->closed_at?->toIso8601String(),
             'created_at' => $d->created_at?->toIso8601String(),
             'updated_at' => $d->updated_at?->toIso8601String(),
         ];
@@ -126,7 +150,7 @@ class VolunteerOpportunityDraftService
     {
         $out = array_intersect_key($data, array_flip([
             'title', 'summary', 'responsibilities', 'required_skills', 'preferred_skills', 'volunteers_needed',
-            'availability', 'location_mode', 'start_date', 'application_instructions',
+            'availability', 'duration', 'location_mode', 'start_date', 'closes_at', 'application_instructions',
         ]));
         foreach (['responsibilities', 'required_skills', 'preferred_skills'] as $list) {
             if (array_key_exists($list, $out)) {

@@ -113,8 +113,10 @@ class HrRequestMatchingController extends Controller
             'preferred_skills.*' => ['nullable', 'string', 'max:100'],
             'volunteers_needed' => ['nullable', 'integer', 'min:1', 'max:500'],
             'availability' => ['nullable', 'string', 'max:255'],
+            'duration' => ['nullable', 'string', 'max:100'],
             'location_mode' => ['nullable', Rule::in(VolunteerOpportunity::LOCATION_MODES)],
             'start_date' => ['nullable', 'date'],
+            'closes_at' => ['nullable', 'date'],
             'application_instructions' => ['nullable', 'string', 'max:2000'],
             'department_id' => ['nullable', 'integer', 'exists:departments,id'],
         ], [
@@ -127,6 +129,7 @@ class HrRequestMatchingController extends Controller
             'volunteers_needed.min' => 'العدد المطلوب يجب ألا يقل عن 1.',
             'location_mode.in' => 'نمط المكان غير صالح.',
             'start_date.date' => 'تاريخ البدء غير صالح.',
+            'closes_at.date' => 'آخر موعد للتقديم غير صالح.',
             'department_id.exists' => 'القسم المحدد غير موجود.',
         ]);
     }

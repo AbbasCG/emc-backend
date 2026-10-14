@@ -12,6 +12,7 @@ class VolunteerRequest extends Model
     use Auditable, SoftDeletes;
 
     protected $fillable = [
+        'opportunity_id',
         'full_name',
         'email',
         'phone',
@@ -43,6 +44,12 @@ class VolunteerRequest extends Model
         'accepted_at'            => 'datetime',
         'converted_to_member_at' => 'datetime',
     ];
+
+    /** The published opportunity this application was submitted for, if any. */
+    public function opportunity(): BelongsTo
+    {
+        return $this->belongsTo(VolunteerOpportunity::class, 'opportunity_id');
+    }
 
     public function convertedMember(): BelongsTo
     {

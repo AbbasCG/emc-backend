@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Department;
 use App\Models\HrRequest;
+use App\Models\VolunteerOpportunity;
 use App\Models\VolunteerRequest;
 use App\Support\SkillText;
 use Carbon\CarbonImmutable;
@@ -78,15 +79,20 @@ class VolunteerMatchingService
         $profile = $this->requestProfile($request);
         $limitations = $this->limitations($profile);
 
+        // People who applied directly to THIS request's opportunity are in the same pool (an
+        // application is a volunteer request), so they appear once and are only labelled; the link
+        // comes from the stored opportunity -> request key, never from text.
+        $directOpportunityIds = VolunteerOpportunity::query()->where('incoming_request_id', $request->id)->pluck('id')->all();
+
         $pool = VolunteerRequest::query()
             ->whereIn('status', self::CANDIDATE_STATUSES)
             ->orderByDesc('created_at')->limit(self::POOL)
-            ->get(['id', 'full_name', 'desired_department', 'experience_level', 'skills', 'availability', 'motivation', 'previous_experience', 'status', 'created_at']);
+            ->get(['id', 'opportunity_id', 'full_name', 'desired_department', 'experience_level', 'skills', 'availability', 'motivation', 'previous_experience', 'status', 'created_at']);
 
         $out = [];
         if ($profile['max'] > 0) {
             foreach ($pool as $v) {
-                $c = $this->score($profile, $v);
+                $c = $this->score($profile, $v, $directOpportunityIds);
                 if ($c['score'] >= $minScore) {
                     $out[] = $c;
                 }
@@ -106,6 +112,7 @@ class VolunteerMatchingService
                 'min_score' => $minScore,
                 'evaluated' => $profile['max'] > 0 ? $pool->count() : 0,
                 'returned' => count($out),
+                'direct_applicants_in_results' => count(array_filter($out, fn ($c) => $c['source'] === 'direct_application')),
                 'generated_at' => now()->toIso8601String(),
                 'persisted' => false,
                 'criteria_evaluated' => array_values(array_keys(array_filter($profile['evaluable']))),
@@ -164,8 +171,8 @@ class VolunteerMatchingService
 
     // ── Candidate side ───────────────────────────────────────────────────────
 
-    /** @param array<string, mixed> $p @return array<string, mixed> */
-    private function score(array $p, VolunteerRequest $v): array
+    /** @param array<string, mixed> $p @param array<int, int> $directOpportunityIds @return array<string, mixed> */
+    private function score(array $p, VolunteerRequest $v, array $directOpportunityIds = []): array
     {
         $skillsNorm = SkillText::normalize($v->skills);
         $skillsWords = SkillText::keywords($v->skills);
@@ -282,6 +289,10 @@ class VolunteerMatchingService
             'reasons' => $reasons,
             'warnings' => $warnings,
             'breakdown' => $breakdown,
+            // Where the candidate came from: a suggestion of this matcher, or an applicant of the
+            // opportunity created from this very request. Never both, never duplicated.
+            'source' => $v->opportunity_id !== null && in_array((int) $v->opportunity_id, $directOpportunityIds, true) ? 'direct_application' : 'smart_match',
+            'source_label' => $v->opportunity_id !== null && in_array((int) $v->opportunity_id, $directOpportunityIds, true) ? 'تقدّم مباشرة على الفرصة' : 'اقتراح من المطابقة الذكية',
             'desired_department' => $v->desired_department,
             'experience_level' => $v->experience_level,
             'availability' => $v->availability,
