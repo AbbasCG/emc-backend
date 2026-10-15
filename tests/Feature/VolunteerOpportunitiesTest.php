@@ -15,7 +15,9 @@ use Database\Seeders\RolePermissionSeeder;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -30,6 +32,7 @@ use Tests\TestCase;
 class VolunteerOpportunitiesTest extends TestCase
 {
     use RefreshDatabase;
+    use \Tests\Concerns\MakesCvFiles;
 
     private const PUBLIC = '/api/volunteer-opportunities';
     private const ADMIN = '/api/admin/volunteer-opportunities';
@@ -115,6 +118,124 @@ class VolunteerOpportunitiesTest extends TestCase
     private function ids($response): array
     {
         return array_column($response->json('data'), 'id');
+    }
+
+    // ═══ Unified application form: parity with /volunteer/apply ═════════════
+
+    public function test_an_opportunity_application_stores_every_answer_the_general_form_stores(): void
+    {
+        Storage::fake('private');
+        $o = $this->opportunity();
+
+        $r = $this->post(self::PUBLIC.'/'.$o->id.'/applications', $this->applyPayload([
+            'notes' => 'متاحة مساءً فقط.',
+            'cv_file' => $this->pdfCv('cv.pdf', 200),
+            'agree_terms' => '1',
+        ]), ['Accept' => 'application/json'])->assertCreated();
+
+        $row = VolunteerRequest::query()->where('opportunity_id', $o->id)->firstOrFail();
+        foreach (['full_name', 'phone', 'country', 'city', 'gender', 'experience_level', 'skills', 'availability', 'motivation', 'previous_experience', 'notes'] as $field) {
+            $this->assertNotNull($row->{$field}, $field);
+        }
+        $this->assertSame('متاحة مساءً فقط.', $row->notes);
+        $this->assertNotNull($row->desired_department, "the opportunity's own department, filled by the server");
+        $this->assertNotNull($row->cv_file_path);
+        Storage::disk('private')->assertExists($row->cv_file_path);
+        $this->assertStringNotContainsString($row->cv_file_path, json_encode($r->json()), 'the private path never reaches the public response');
+    }
+
+    public function test_the_cv_and_notes_stay_optional_and_the_cv_is_type_and_size_checked(): void
+    {
+        Storage::fake('private');
+        $o = $this->opportunity();
+
+        $this->post(self::PUBLIC.'/'.$o->id.'/applications', $this->applyPayload(['agree_terms' => '1', 'cv_file' => $this->renamedExecutable('cv.exe')]), ['Accept' => 'application/json'])
+            ->assertStatus(422)->assertJsonValidationErrors(['cv_file']);
+        $this->post(self::PUBLIC.'/'.$o->id.'/applications', $this->applyPayload(['agree_terms' => '1', 'cv_file' => $this->pdfCv('cv.pdf', 6000)]), ['Accept' => 'application/json'])
+            ->assertStatus(422)->assertJsonValidationErrors(['cv_file']);
+        $this->assertSame(0, VolunteerRequest::count());
+
+        $this->apply($o)->assertCreated();
+        $this->assertNull(VolunteerRequest::firstOrFail()->cv_file_path);
+    }
+
+    public function test_a_duplicate_application_leaves_no_second_record_and_no_orphan_file(): void
+    {
+        Storage::fake('private');
+        $o = $this->opportunity();
+        $file = fn () => $this->pdfCv('cv.pdf', 50);
+
+        $this->post(self::PUBLIC.'/'.$o->id.'/applications', $this->applyPayload(['agree_terms' => '1', 'cv_file' => $file()]), ['Accept' => 'application/json'])->assertCreated();
+        $this->post(self::PUBLIC.'/'.$o->id.'/applications', $this->applyPayload(['agree_terms' => '1', 'cv_file' => $file()]), ['Accept' => 'application/json'])->assertStatus(409);
+
+        $this->assertSame(1, VolunteerRequest::count());
+        $this->assertCount(1, Storage::disk('private')->allFiles('volunteer-cvs'), 'the refused duplicate stored no file');
+    }
+
+    public function test_hr_sees_which_opportunity_an_application_was_for_and_a_general_application_has_none(): void
+    {
+        $o = $this->opportunity(['title' => 'فرصة تصميم المحتوى']);
+        $this->apply($o)->assertCreated();
+        VolunteerRequest::create([
+            'full_name' => 'عام', 'email' => 'general@example.com', 'phone' => '+31600000001', 'country' => 'هولندا', 'city' => 'أمستردام', 'gender' => 'male',
+            'desired_department' => 'غير محدد', 'experience_level' => 'مبتدئ', 'availability' => '3-5 ساعات أسبوعيًا', 'motivation' => 'أرغب في المساهمة بوقتي وخبرتي.', 'status' => 'pending',
+        ]);
+
+        $json = $this->as('hr_manager')->getJson('/api/admin/volunteer-requests')->assertOk()->json();
+        $rows = collect($json['data']['data'] ?? $json['data']);
+
+        $mine = $rows->firstWhere('email', 'sara.ahmad@example.com');
+        $general = $rows->firstWhere('email', 'general@example.com');
+        $this->assertSame('فرصة تصميم المحتوى', $mine['opportunity_title']);
+        $this->assertNotNull($mine['opportunity_id']);
+        $this->assertNull($general['opportunity_title']);
+        $this->assertNull($general['opportunity_id']);
+    }
+
+    public function test_applicant_details_stay_behind_authentication(): void
+    {
+        $o = $this->opportunity();
+        $this->apply($o)->assertCreated();
+
+        $this->getJson('/api/admin/volunteer-requests')->assertUnauthorized();
+        $this->as('student')->getJson('/api/admin/volunteer-requests')->assertForbidden();
+    }
+
+    public function test_a_duplicate_that_slips_past_the_check_still_leaves_no_orphan_file(): void
+    {
+        Storage::fake('private');
+        $o = $this->opportunity();
+        // A competing submission lands between our duplicate check and our insert: the unique index refuses ours.
+        VolunteerRequest::creating(function (VolunteerRequest $row) use ($o) {
+            if ($row->email === 'race@example.com' && ! VolunteerRequest::where('email', 'race@example.com')->exists()) {
+                DB::table('volunteer_requests')->insert(['opportunity_id' => $o->id, 'full_name' => 'سابق', 'email' => 'race@example.com', 'phone' => '1', 'country' => 'x', 'city' => 'x', 'gender' => 'male', 'desired_department' => 'x', 'experience_level' => 'x', 'availability' => 'x', 'motivation' => str_repeat('x', 25), 'status' => 'pending', 'created_at' => now(), 'updated_at' => now()]);
+            }
+        });
+
+        $this->post(self::PUBLIC.'/'.$o->id.'/applications', $this->applyPayload(['email' => 'race@example.com', 'agree_terms' => '1', 'cv_file' => $this->pdfCv('cv.pdf', 40)]), ['Accept' => 'application/json'])->assertStatus(409);
+
+        // (The simulated competitor shares our transaction here, so it rolls back with us; what matters is the file.)
+        $this->assertSame([], Storage::disk('private')->allFiles(), 'the CV written for the refused application was removed');
+    }
+
+    public function test_an_unexpected_failure_after_the_cv_was_written_removes_the_cv_and_still_fails_loudly(): void
+    {
+        Storage::fake('private');
+        $o = $this->opportunity();
+        VolunteerRequest::creating(function () {
+            throw new \RuntimeException('database went away');
+        });
+
+        $this->withoutExceptionHandling();
+        try {
+            $this->post(self::PUBLIC.'/'.$o->id.'/applications', $this->applyPayload(['agree_terms' => '1', 'cv_file' => $this->pdfCv('cv.pdf', 40)]), ['Accept' => 'application/json']);
+            $this->fail('the failure must not be swallowed');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('database went away', $e->getMessage());
+        }
+
+        $this->assertSame(0, VolunteerRequest::count());
+        $this->assertSame([], Storage::disk('private')->allFiles());
     }
 
     // ═══ Phase 4 — public listing ════════════════════════════════════════════

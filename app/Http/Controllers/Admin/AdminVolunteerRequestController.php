@@ -55,7 +55,7 @@ class AdminVolunteerRequestController extends Controller
         // ── Paginated list (adds status filter on top of base) ──
         $perPage  = min((int) $request->query('per_page', 20), 100);
         $requests = (clone $base)
-            ->with('reviewer')
+            ->with(['reviewer', 'opportunity:id,title'])
             ->when($request->filled('status'), fn ($q) => $q->where('status', $request->status))
             ->latest()
             ->paginate($perPage)

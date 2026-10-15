@@ -16,6 +16,7 @@ use Tests\TestCase;
 class VolunteerRequestTest extends TestCase
 {
     use RefreshDatabase;
+    use \Tests\Concerns\MakesCvFiles;
 
     private function validPayload(array $overrides = []): array
     {
@@ -105,7 +106,7 @@ class VolunteerRequestTest extends TestCase
         Storage::fake('private');
 
         $response = $this->postJson('/api/volunteer-requests', $this->validPayload([
-            'cv_file' => UploadedFile::fake()->create('my_cv.pdf', 500, 'application/pdf'),
+            'cv_file' => $this->pdfCv('my_cv.pdf', 500),
         ]));
 
         $response->assertCreated();

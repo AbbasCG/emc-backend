@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Public;
 
+use App\Rules\PdfCvFile;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\VolunteerRequestResource;
 use App\Mail\VolunteerApplicationConfirmationMail;
@@ -29,15 +30,14 @@ class VolunteerRequestController extends Controller
             'availability'        => 'required|string|max:100',
             'motivation'          => 'required|string|min:20',
             'previous_experience' => 'nullable|string',
-            'cv_file'             => 'nullable|file|mimes:pdf,doc,docx|max:5120',
+            'cv_file'             => ['nullable', 'file', 'max:5120', new PdfCvFile],
             'notes'               => 'nullable|string',
             'agree_terms'         => 'accepted',
         ]);
 
         $cvPath = null;
         if ($request->hasFile('cv_file')) {
-            $ext    = $request->file('cv_file')->getClientOriginalExtension();
-            $safe   = 'cv_' . Str::uuid() . '.' . $ext;
+            $safe   = 'cv_' . Str::uuid() . '.pdf'; // validated as a real PDF; the name never comes from the client
             $cvPath = $request->file('cv_file')->storeAs('volunteer-cvs', $safe, 'private');
         }
 

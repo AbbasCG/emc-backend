@@ -30,6 +30,9 @@ class VolunteerRequestResource extends JsonResource
             'cv_file_url'         => $cvViewUrl,
             'cv_view_url'         => $cvViewUrl,
             'notes'               => $this->notes,
+            // The opportunity this application was made for (null for a general application).
+            'opportunity_id'      => $this->opportunity_id,
+            'opportunity_title'   => $this->opportunity_id ? ($this->relationLoaded('opportunity') ? $this->opportunity?->title : $this->opportunity()->value('title')) : null,
             'status'              => $this->status,
             'admin_notes'         => $this->admin_notes,
             'reviewed_by'         => $this->whenLoaded('reviewer', fn () => $this->reviewer ? [

@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Rules\PdfCvFile;
 use Illuminate\Foundation\Http\FormRequest;
 
 class StoreAmbassadorApplicationRequest extends FormRequest
@@ -86,7 +87,7 @@ class StoreAmbassadorApplicationRequest extends FormRequest
             'certifications.*' => ['string', 'max:80'],
 
             // ── Step 10: Uploads ──────────────────────────────────────────────
-            'cv_file'          => ['required', 'file', 'mimes:pdf', 'max:5120'],
+            'cv_file'          => ['required', 'file', 'max:5120', new PdfCvFile],
             'student_id_file'  => ['nullable', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:5120'],
             'photo_file'       => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'certificate_files'   => ['nullable', 'array', 'max:10'],

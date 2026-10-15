@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Public;
 
+use App\Rules\PdfCvFile;
 use App\Http\Controllers\Controller;
 use App\Models\ConsultantApplication;
 use App\Services\NotificationService;
@@ -27,7 +28,7 @@ class ConsultantApplicationController extends Controller
             'desired_department' => 'nullable|string|max:150',
             'years_experience' => 'nullable|integer|min:0|max:60',
             'linkedin_url'     => 'nullable|url|max:255',
-            'cv_file'          => 'nullable|file|mimes:pdf,doc,docx|max:5120',
+            'cv_file'          => ['nullable', 'file', 'max:5120', new PdfCvFile],
             'motivation'       => 'required|string|min:20',
             'availability'     => 'nullable|string|max:150',
             'agree_terms'      => 'accepted',
@@ -35,8 +36,7 @@ class ConsultantApplicationController extends Controller
 
         $cvPath = null;
         if ($request->hasFile('cv_file')) {
-            $ext    = $request->file('cv_file')->getClientOriginalExtension();
-            $safe   = 'consultant_cv_' . Str::uuid() . '.' . $ext;
+            $safe   = 'consultant_cv_' . Str::uuid() . '.pdf';
             $cvPath = $request->file('cv_file')->storeAs('consultant-cvs', $safe, 'private');
         }
 

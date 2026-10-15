@@ -45,8 +45,7 @@ class VolunteerHrProfileController extends Controller
         $cvPath = $cvOriginalName = $cvMimeType = $cvSize = null;
         if ($request->hasFile('cv_file')) {
             $file = $request->file('cv_file');
-            $ext  = $file->getClientOriginalExtension();
-            $cvPath         = $file->storeAs('volunteer-hr-cvs', Str::random(40) . '.' . $ext, 'private');
+            $cvPath         = $file->storeAs('volunteer-hr-cvs', Str::random(40) . '.pdf', 'private'); // validated PDF
             $cvOriginalName = $file->getClientOriginalName();
             $cvMimeType     = $file->getClientMimeType();
             $cvSize         = $file->getSize();
@@ -127,8 +126,7 @@ class VolunteerHrProfileController extends Controller
 
         if ($request->hasFile('cv_file')) {
             $file = $request->file('cv_file');
-            $ext  = $file->getClientOriginalExtension();
-            $data['cv_path']          = $file->storeAs('volunteer-hr-cvs', Str::random(40) . '.' . $ext, 'private');
+            $data['cv_path']          = $file->storeAs('volunteer-hr-cvs', Str::random(40) . '.pdf', 'private');
             $data['cv_original_name'] = $file->getClientOriginalName();
             $data['cv_mime_type']     = $file->getClientMimeType();
             $data['cv_size']          = $file->getSize();

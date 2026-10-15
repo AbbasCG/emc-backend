@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Public;
 
+use App\Rules\PdfCvFile;
 use App\Http\Controllers\Controller;
 use App\Mail\VolunteerApplicationConfirmationMail;
 use App\Models\Department;
@@ -13,6 +14,8 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
 /**
@@ -108,6 +111,9 @@ class VolunteerOpportunityController extends Controller
             'skills' => ['nullable', 'string', 'max:2000'],
             'previous_experience' => ['nullable', 'string', 'max:3000'],
             'motivation' => ['required', 'string', 'min:20', 'max:3000'],
+            // The same two optional extras the general volunteer form accepts.
+            'notes' => ['nullable', 'string', 'max:3000'],
+            'cv_file' => ['nullable', 'file', 'max:5120', new PdfCvFile],
             'agree_terms' => ['accepted'],
         ], [
             'full_name.required' => 'الاسم الكامل مطلوب.',
@@ -126,9 +132,13 @@ class VolunteerOpportunityController extends Controller
         ]);
 
         $email = mb_strtolower(trim($data['email']));
+        $cvFile = $request->file('cv_file');
+        // The path of the CV once it is on disk: whatever happens after that and does not end in a saved
+        // application must remove it again, so a refused or failed submission never leaves a file behind.
+        $storedCv = null;
 
         try {
-            $application = DB::transaction(function () use ($o, $data, $email) {
+            $application = DB::transaction(function () use ($o, $data, $email, $cvFile, &$storedCv) {
                 // Lock the opportunity so a close/unpublish and a submission cannot interleave.
                 $locked = VolunteerOpportunity::query()->lockForUpdate()->find($o->id);
                 if (! $locked || ! $locked->acceptsApplications()) {
@@ -140,6 +150,10 @@ class VolunteerOpportunityController extends Controller
                 }
 
                 $locked->loadMissing('department:id,name,name_ar');
+
+                // Stored like the general form's CV: private disk, random name. Only after the duplicate and
+                // closed checks above, so a refused application leaves no file behind.
+                $cvPath = $storedCv = $cvFile ? $cvFile->storeAs('volunteer-cvs', 'cv_'.Str::uuid().'.pdf', 'private') : null;
 
                 return VolunteerRequest::create([
                     'opportunity_id' => $locked->id,
@@ -156,12 +170,21 @@ class VolunteerOpportunityController extends Controller
                     'availability' => $data['availability'],
                     'motivation' => $data['motivation'],
                     'previous_experience' => $data['previous_experience'] ?? null,
+                    'cv_file_path' => $cvPath,
+                    'notes' => $data['notes'] ?? null,
                     'status' => 'pending', // explicit review by HR is required; nothing is accepted or assigned here
                 ]);
             });
         } catch (UniqueConstraintViolationException) {
             // Two simultaneous submissions: the unique (opportunity_id, email) index lets exactly one through.
+            $this->discardCv($storedCv);
+
             return $this->duplicate();
+        } catch (\Throwable $e) {
+            // Any other failure after the file was written (the insert, the commit): the file goes too.
+            $this->discardCv($storedCv);
+
+            throw $e;
         }
 
         if ($application === null) {
@@ -262,5 +285,18 @@ class VolunteerOpportunityController extends Controller
     private function duplicate(): JsonResponse
     {
         return response()->json(['success' => false, 'message' => 'لقد قدّمت على هذه الفرصة مسبقًا. سيتواصل معك فريق الموارد البشرية.'], 409);
+    }
+
+    /** Remove a CV that was written for an application that was not saved. Never throws: cleanup must not mask the real outcome. */
+    private function discardCv(?string $path): void
+    {
+        if ($path === null) {
+            return;
+        }
+        try {
+            Storage::disk('private')->delete($path);
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 }

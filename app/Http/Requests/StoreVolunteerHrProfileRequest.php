@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Rules\PdfCvFile;
 use App\Models\VolunteerHrProfile;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -56,7 +57,7 @@ class StoreVolunteerHrProfileRequest extends FormRequest
                 }
             }],
 
-            'cv_file'        => ($existingId ? 'nullable' : 'required') . '|file|mimes:pdf,doc,docx|max:5120',
+            'cv_file'        => [$existingId ? 'nullable' : 'required', 'file', 'max:5120', new PdfCvFile],
             'profile_photo'  => 'nullable|file|image|max:3072',
             'linkedin_url'   => 'nullable|url|max:255',
             'portfolio_url'  => 'nullable|url|max:255',

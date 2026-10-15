@@ -14,6 +14,7 @@ use Tests\TestCase;
 class VolunteerHrProfileWorkflowTest extends TestCase
 {
     use RefreshDatabase;
+    use \Tests\Concerns\MakesCvFiles;
 
     private function department(): Department
     {
@@ -44,7 +45,7 @@ class VolunteerHrProfileWorkflowTest extends TestCase
             'confirmed'   => true,
             'photo_publication_consent'    => true,
             'professional_profile_consent' => true,
-            'cv_file'     => UploadedFile::fake()->create('cv.pdf', 100, 'application/pdf'),
+            'cv_file'     => $this->pdfCv('cv.pdf', 100),
         ], $overrides);
     }
 
@@ -58,6 +59,32 @@ class VolunteerHrProfileWorkflowTest extends TestCase
 
         $response->assertStatus(201)->assertJson(['success' => true]);
         $this->assertDatabaseHas('volunteer_hr_profiles', ['user_id' => $user->id, 'status' => 'submitted']);
+    }
+
+    public function test_cv_must_be_a_real_pdf_word_images_and_renamed_files_are_refused(): void
+    {
+        Storage::fake('private');
+        $user = $this->volunteer();
+        $dept = $this->department();
+
+        foreach ([$this->docxCv('cv.docx'), $this->pngCv('cv.png'), $this->renamedExecutable('cv.pdf')] as $file) {
+            $this->actingAs($user, 'sanctum')->postJson('/api/volunteer/hr-profile', $this->payload($dept, ['cv_file' => $file]))
+                ->assertStatus(422)->assertJsonValidationErrors('cv_file');
+        }
+        $this->assertDatabaseMissing('volunteer_hr_profiles', ['user_id' => $user->id]);
+        $this->assertSame([], Storage::disk('private')->allFiles());
+    }
+
+    public function test_an_accepted_cv_is_stored_privately_as_a_pdf_under_a_server_made_name(): void
+    {
+        Storage::fake('private');
+        $user = $this->volunteer();
+
+        $this->actingAs($user, 'sanctum')->postJson('/api/volunteer/hr-profile', $this->payload($this->department(), ['cv_file' => $this->pdfCv('../x y.pdf')]))->assertStatus(201);
+
+        $path = \App\Models\VolunteerHrProfile::where('user_id', $user->id)->value('cv_path');
+        $this->assertMatchesRegularExpression('#^volunteer-hr-cvs/[A-Za-z0-9]{40}\.pdf$#', $path);
+        Storage::disk('private')->assertExists($path);
     }
 
     public function test_cv_is_required(): void

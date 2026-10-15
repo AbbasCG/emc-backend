@@ -169,6 +169,10 @@ class MeetingParticipationTest extends TestCase
 
     public function test_the_list_filters_upcoming_live_and_past(): void
     {
+        // Fixed clock: the live meeting runs from 30 minutes before to 30 minutes after "now" on ONE date, which only
+        // holds away from midnight. With the real clock this failed in the half hour either side of midnight
+        // (Amsterdam), when that window crossed into another day. The application was behaving correctly.
+        $this->travelTo(\Illuminate\Support\Carbon::parse('2026-10-14 12:00:00', 'Europe/Amsterdam'));
         $today = now('Europe/Amsterdam');
         $past = $this->meeting($this->deptA, ['meeting_date' => $today->copy()->subDays(3)->toDateString()]);
         $future = $this->meeting($this->deptA, ['meeting_date' => $today->copy()->addDays(3)->toDateString()]);

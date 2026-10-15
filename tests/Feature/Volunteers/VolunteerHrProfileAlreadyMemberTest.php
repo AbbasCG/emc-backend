@@ -23,6 +23,7 @@ use Tests\TestCase;
 class VolunteerHrProfileAlreadyMemberTest extends TestCase
 {
     use RefreshDatabase;
+    use \Tests\Concerns\MakesCvFiles;
 
     private function department(): Department
     {
@@ -48,7 +49,7 @@ class VolunteerHrProfileAlreadyMemberTest extends TestCase
             'confirmed'   => true,
             'photo_publication_consent'    => true,
             'professional_profile_consent' => true,
-            'cv_file'     => UploadedFile::fake()->create('cv.pdf', 100, 'application/pdf'),
+            'cv_file'     => $this->pdfCv('cv.pdf', 100),
         ], $overrides);
     }
 
