@@ -118,12 +118,10 @@ class CourseSessionResource extends JsonResource
         if ($user->hasAnyRole(['admin', 'super_admin', 'tech_admin', 'executive_admin', 'instructor', 'teacher', 'programs_manager'])) {
             return true;
         }
-        if ($user->isStudent()) {
-            return $user->registrations()
-                ->where('course_id', $this->course_id)
-                ->whereIn('status', ['active', 'registered', 'enrolled', 'completed'])
-                ->exists();
-        }
-        return false;
+        // Enrolled learners (whatever their role) see the meeting link of what they are enrolled in.
+        return $user->registrations()
+            ->where('course_id', $this->course_id)
+            ->whereIn('status', ['active', 'registered', 'enrolled', 'completed'])
+            ->exists();
     }
 }

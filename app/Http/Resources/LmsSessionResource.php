@@ -101,24 +101,20 @@ class LmsSessionResource extends JsonResource
         if ($user->hasAnyRole(['admin', 'super_admin', 'tech_admin', 'executive_admin', 'instructor', 'teacher', 'programs_manager'])) {
             return true;
         }
-        if ($user->isStudent()) {
-            // Class-scoped session: meeting-link visibility requires active
-            // membership in THAT class group, not just course-wide
-            // registration — otherwise a student in another class within the
-            // same course could see a meeting link that isn't theirs.
-            if ($this->class_group_id !== null) {
-                return \App\Models\ClassGroupStudent::where('class_group_id', $this->class_group_id)
-                    ->where('user_id', $user->id)
-                    ->whereIn('status', \App\Models\ClassGroupStudent::ACTIVE_STATUSES)
-                    ->exists();
-            }
-
-            return $user->registrations()
-                ->where('course_id', $this->course_id)
-                ->whereIn('status', ['active', 'registered', 'enrolled', 'completed'])
+        // Class-scoped session: meeting-link visibility requires active membership in THAT class group, not just course-wide
+        // registration — otherwise a learner in another class within the same course could see a meeting link that isn't theirs.
+        // Applies to every account that learns, whatever its role.
+        if ($this->class_group_id !== null) {
+            return \App\Models\ClassGroupStudent::where('class_group_id', $this->class_group_id)
+                ->where('user_id', $user->id)
+                ->whereIn('status', \App\Models\ClassGroupStudent::ACTIVE_STATUSES)
                 ->exists();
         }
-        return false;
+
+        return $user->registrations()
+            ->where('course_id', $this->course_id)
+            ->whereIn('status', ['active', 'registered', 'enrolled', 'completed'])
+            ->exists();
     }
 
     private function isInstructorViewer(Request $request): bool

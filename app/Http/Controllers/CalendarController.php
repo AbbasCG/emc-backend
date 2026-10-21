@@ -306,77 +306,9 @@ class CalendarController extends Controller
         }
 
         // ── Student: only own enrolled content + own deadlines ────────────────
+        // (every other non-admin role gets the same enrolled content merged in below: learning is not a role)
         elseif ($user->isStudent()) {
-            // Enrolled course IDs (through Registration)
-            $enrolledCourseIds = Registration::where('user_id', $user->id)
-                ->whereNotNull('course_id')
-                ->whereNotIn('status', ['cancelled', 'Cancelled'])
-                ->pluck('course_id')
-                ->unique();
-
-            if ($wants('session')) {
-                $events = $events
-                    ->merge($this->normalizeLmsSessions(
-                        LmsSession::with(['course:id,title,slug'])
-                            ->whereIn('course_id', $enrolledCourseIds)
-                            ->whereIn('status', ['scheduled', 'live'])
-                            ->whereBetween('session_date', [$start->toDateString(), $end->toDateString()])
-                            ->get(),
-                        $user, false,
-                    ))
-                    ->merge($this->normalizeCourseSessions(
-                        CourseSession::with('course:id,title,slug')
-                            ->whereIn('course_id', $enrolledCourseIds)
-                            ->where(fn ($q) => $q->where('is_visible', true)->orWhereNull('is_visible'))
-                            ->whereBetween('start_at', [$start, $end])
-                            ->get(),
-                        $user, false,
-                    ));
-            }
-            if ($wants('workshop')) {
-                // Workshops are enrolled via the parent course (no separate workshop registration)
-                $events = $events->merge($this->normalizeWorkshops(
-                    Workshop::with(['course:id,title,slug', 'instructor.user'])
-                        ->whereIn('course_id', $enrolledCourseIds)
-                        ->whereIn('status', ['published', 'active', 'scheduled'])
-                        ->whereBetween('start_date', [$start->toDateString(), $end->toDateString()])
-                        ->get(),
-                    $user, false,
-                ));
-            }
-            if ($wants('assignment')) {
-                $events = $events->merge($this->normalizeAssignments(
-                    Assignment::with(['course:id,title,slug'])
-                        ->where('status', 'active')
-                        ->whereNotNull('due_date')
-                        ->whereIn('course_id', $enrolledCourseIds)
-                        ->whereBetween('due_date', [$start, $end])
-                        // Only show unsubmitted or graded assignments
-                        ->whereDoesntHave('submissions', fn ($q) =>
-                            $q->where('user_id', $user->id)
-                              ->whereNotNull('submitted_at')
-                        )
-                        ->get(),
-                    $user, false,
-                ));
-            }
-            if ($wants('learning_path')) {
-                $lpEnrollments = LearningPathEnrollment::with('learningPath')
-                    ->where('user_id', $user->id)
-                    ->whereIn('status', ['active', 'enrolled'])
-                    ->get();
-                $events = $events->merge($this->normalizeLearningPaths($lpEnrollments, $user));
-            }
-            if ($wantsProgramType('course') || $wantsProgramType('workshop') || $wantsProgramType('program')) {
-                $courses = $this->queryScheduledPrograms($start, $end)
-                    ->whereIn('id', $enrolledCourseIds)
-                    ->where('status', 'published')
-                    ->get();
-                $events = $events->merge(
-                    $this->normalizePrograms($courses, $user, false)
-                        ->filter(fn ($e) => $wantsProgramType($e['type'])),
-                );
-            }
+            $events = $events->merge($this->learnerEvents($user, $start, $end, $wants, $wantsProgramType));
         }
 
         // ── Department member / Leader / Operations staff / Default ──────────
@@ -420,6 +352,15 @@ class CalendarController extends Controller
                         ->filter(fn ($e) => $wantsProgramType($e['type'])),
                 );
             }
+            // This branch lists what is publicly scheduled. A join link is not public: only people enrolled in that course get it.
+            $events = $this->withoutForeignLinks($events, $this->enrolledCourseIds($user));
+        }
+
+        // ── Anyone who learns sees what they are enrolled in, whatever their role ───────────────────────
+        // Admins already see everything; students got it above; instructors and every other role get it here, merged into what
+        // their role shows. The learner copy wins when the same item is in both (it carries the join link).
+        if (! $user->isAdmin() && ! $user->isStudent()) {
+            $events = $this->learnerEvents($user, $start, $end, $wants, $wantsProgramType)->merge($events)->unique('id')->values();
         }
 
         // ── Meetings: the same rule for every role ───────────────────────────────
@@ -443,6 +384,114 @@ class CalendarController extends Controller
         }
 
         return $events->filter(fn ($e) => ! empty($e['start_at']))->sortBy('start_at')->values();
+    }
+
+    /**
+     * What a LEARNER sees: the sessions, workshops, assignment deadlines, learning paths and programs of what they are enrolled in,
+     * nothing else. The same for every account that learns, whatever its organizational role.
+     *
+     * "Enrolled" is the platform's one definition (LmsEnrollmentService): an enrollment that grants access (not pending payment, not
+     * cancelled), directly or through a learning path. So a meeting link or a deadline is never shown for something unpaid.
+     */
+    private function learnerEvents($user, Carbon $start, Carbon $end, \Closure $wants, \Closure $wantsProgramType): Collection
+    {
+        $events = collect();
+        $enrolledCourseIds = $this->enrolledCourseIds($user);
+
+        if ($wants('session')) {
+            $events = $events
+                ->merge($this->normalizeLmsSessions(
+                    LmsSession::with(['course:id,title,slug'])
+                        ->whereIn('course_id', $enrolledCourseIds)
+                        ->whereIn('status', ['scheduled', 'live'])
+                        ->whereBetween('session_date', [$start->toDateString(), $end->toDateString()])
+                        ->get(),
+                    $user, false,
+                ))
+                ->merge($this->normalizeCourseSessions(
+                    CourseSession::with('course:id,title,slug')
+                        ->whereIn('course_id', $enrolledCourseIds)
+                        ->where(fn ($q) => $q->where('is_visible', true)->orWhereNull('is_visible'))
+                        ->whereBetween('start_at', [$start, $end])
+                        ->get(),
+                    $user, false,
+                ));
+        }
+        if ($wants('workshop')) {
+            // Workshops are enrolled via the parent course (no separate workshop registration)
+            $events = $events->merge($this->normalizeWorkshops(
+                Workshop::with(['course:id,title,slug', 'instructor.user'])
+                    ->whereIn('course_id', $enrolledCourseIds)
+                    ->whereIn('status', ['published', 'active', 'scheduled'])
+                    ->whereBetween('start_date', [$start->toDateString(), $end->toDateString()])
+                    ->get(),
+                $user, false,
+            ));
+        }
+        if ($wants('assignment')) {
+            $events = $events->merge($this->normalizeAssignments(
+                Assignment::with(['course:id,title,slug'])
+                    ->where('status', 'active')
+                    ->whereNotNull('due_date')
+                    ->whereIn('course_id', $enrolledCourseIds)
+                    ->whereBetween('due_date', [$start, $end])
+                    // Only show unsubmitted or graded assignments
+                    ->whereDoesntHave('submissions', fn ($q) =>
+                        $q->where('user_id', $user->id)
+                          ->whereNotNull('submitted_at')
+                    )
+                    ->get(),
+                $user, false,
+            ));
+        }
+        if ($wants('learning_path')) {
+            $lpEnrollments = LearningPathEnrollment::with('learningPath')
+                ->where('user_id', $user->id)
+                ->whereIn('status', ['active', 'enrolled'])
+                ->get();
+            $events = $events->merge($this->normalizeLearningPaths($lpEnrollments, $user));
+        }
+        if ($wantsProgramType('course') || $wantsProgramType('workshop') || $wantsProgramType('program')) {
+            $courses = $this->queryScheduledPrograms($start, $end)
+                ->whereIn('id', $enrolledCourseIds)
+                ->where('status', 'published')
+                ->get();
+            $events = $events->merge(
+                $this->normalizePrograms($courses, $user, false)
+                    ->filter(fn ($e) => $wantsProgramType($e['type'])),
+            );
+        }
+
+
+        return $events;
+    }
+
+    /**
+     * Takes the join link (and the "can join" flag) off course-bound events of courses the user is not enrolled in.
+     *
+     * @param  Collection<int, array<string, mixed>>  $events
+     * @param  Collection<int, int>  $enrolled
+     * @return Collection<int, array<string, mixed>>
+     */
+    private function withoutForeignLinks(Collection $events, Collection $enrolled): Collection
+    {
+        return $events->map(function (array $e) use ($enrolled) {
+            if (! in_array($e['type'] ?? null, ['session', 'course', 'workshop', 'program'], true)) {
+                return $e;
+            }
+            $courseId = $e['course']['id'] ?? null;
+            if ($courseId !== null && $enrolled->contains($courseId)) {
+                return $e;
+            }
+
+            return ['meeting_link' => null, 'can_join' => false] + $e;
+        });
+    }
+
+    /** @return Collection<int, int> */
+    private function enrolledCourseIds($user): Collection
+    {
+        return app(\App\Services\LmsEnrollmentService::class)->enrolledCourseIds($user);
     }
 
     private function departmentAccessIsGlobal($user): bool
