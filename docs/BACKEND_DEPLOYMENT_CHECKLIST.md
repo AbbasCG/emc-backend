@@ -344,3 +344,52 @@ sudo certbot renew --dry-run
 **Deployed by:** ________________  
 **Deploy time:** ________________  
 **Commit SHA:** ________________  
+
+
+---
+
+## Release checklist — Universal Enrollment, Smart Forms V2 (Phases 0–5) and the hardening pass
+
+> **Online payments (Stripe / PayPal) are DEFERRED — OWNER WILL HANDLE ONLINE.** Real credentials, live checkout, provider configuration and
+> online payment verification are not part of this checklist and must be completed and signed off separately before the system is
+> called production-ready. Nothing below changes payment business logic.
+
+This section is documentation only. Run the steps in this order, on staging first.
+
+1. **Backups.** Database backup (Step 1 above) AND an export of `payment_reconciliations` once it exists (it is the only place an open
+   "paid, enrollment withheld" case is recorded; rolling back its migration drops it). Verify the backup restores.
+2. **Repository.** Review `git status` in both repositories and commit in the proposed groups (dependencies → Smart Forms → Universal
+   Enrollment core (including the `PaymentReconciliation` model and its two migrations, which the core references) → calendar → finance
+   reconciliation and payment-review UX → hardening). Never `git add .`; files shared between groups (`routes/api.php`,
+   `bootstrap/app.php`, `docs/deployment.md`, `docs/QUEUE_SETUP.md`) are staged hunk by hunk.
+3. **Dependencies.** `composer install --no-dev --optimize-autoloader` (adds `mpdf/mpdf` for the Smart Forms PDF export; patches
+   `laravel/framework` 13.35, `symfony/http-foundation`, `league/commonmark`), `npm ci && npm run build` (adds `@dnd-kit/*` for the form builder).
+4. **Environment.** Set `QUEUE_CONNECTION` (repository standard: `redis`; fallback `database`). `REDIS_QUEUE_RETRY_AFTER` /
+   `DB_QUEUE_RETRY_AFTER` default to 360 s in `config/queue.php`; keep them above the longest job timeout (300 s). Do NOT touch any Stripe variable.
+5. **Migrations** (`php artisan migrate --force`, after the backup): the Smart Forms migrations `2026_10_16` … `2026_10_22`, then
+   `2026_10_23_100001_create_payment_reconciliations_table` and `2026_10_24_100001_add_refund_state_to_payment_reconciliations`.
+   Both reconciliation migrations are guarded (`hasTable` / `hasColumn`) and safe to re-run.
+6. **Role-default synchronization — one page only.** Dry-run first, then apply for the single page:
+   ```bash
+   php artisan access:sync-role-defaults --page=finance.payment_reconciliations
+   php artisan access:sync-role-defaults --apply --page=finance.payment_reconciliations
+   ```
+   Never run it without `--page` during this release: a full dry-run planned 77 unrelated inserts on a scratch database. Run a full
+   dry-run on production first (read-only) to see what is pending, and decide those separately.
+7. **Queue workers.** Install `docs/supervisor.conf` (workers run `queue:work redis` on `notifications,emails,default,certificates,media,security`;
+   the connection MUST equal `QUEUE_CONNECTION`). `php artisan queue:restart`, `supervisorctl restart emc:*`, then confirm
+   `supervisorctl status`. Without a worker on the right connection, notifications, e-mails, certificate PDFs and Smart Forms exports are
+   queued and never processed (`tests/Feature/QueueConfigurationTest.php` guards the repository files).
+8. **Scheduler.** `* * * * * php artisan schedule:run` (or the `emc-scheduler` Supervisor program). It runs the Smart Forms export purge
+   (`forms:purge-exports`, hourly) and the existing jobs; the cache store must support locks (Redis).
+9. **Notifications.** In-app only for the two reconciliation types (`payment_under_review`, `payment_reconciliation_required`);
+   `docs/architecture/NOTIFICATION_EVENT_MATRIX.md` is the reference. Verify one notification reaches `platform_notifications` through the worker.
+10. **Backend smoke tests.** `php artisan test` (the two `Ticket8*` tests read the now-tracked matrix document), `GET /up`, login, a
+    free-course enrollment, `GET /api/finance/payment-reconciliations` as a finance manager (200) and as a volunteer (403), and a Smart Forms
+    export large enough to go through the queue.
+11. **Frontend smoke tests.** `npm run build`; open «دوراتي», the finance page `/dashboard/finance/payment-reconciliations` (as finance_manager),
+    a course page and a workshop page, and the Institute class form (leave the time empty: it must save).
+12. **Monitoring.** Watch `storage/logs/laravel.log` and `failed_jobs` for the first hour (deadlocks, webhook exceptions, failed exports).
+13. **Rollback precautions.** Code: previous tag + `queue:restart`. Schema: do not roll back `payment_reconciliations` / `refund_status` while
+    cases are open (export them first); the Smart Forms backfill migration `2026_10_18_100003` cannot restore rows created afterwards.
+14. **Deferred:** online payment verification (Stripe test-mode checkout, webhook signatures, iDEAL, retries). The owner will complete it.

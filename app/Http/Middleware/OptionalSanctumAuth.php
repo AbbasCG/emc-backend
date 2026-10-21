@@ -23,6 +23,18 @@ class OptionalSanctumAuth
 
         $accessToken = PersonalAccessToken::findToken($token);
         $user = $accessToken?->tokenable;
+
+        // EnsureUserIsActive ran BEFORE this middleware (it is appended to the whole api group), when no user was resolved yet, so a
+        // suspended account's token would otherwise act as a signed-in user on every optional-auth route (enrolling, submitting a
+        // form). A suspended token browses as a guest on safe requests and is refused on anything that changes data.
+        if ($user && ! $user->is_active) {
+            if (! $request->isMethodSafe()) {
+                return response()->json(['success' => false, 'message' => 'Account is suspended.'], 403);
+            }
+
+            return $next($request);
+        }
+
         if ($user) {
             Auth::guard('sanctum')->setUser($user);
             Auth::shouldUse('sanctum');

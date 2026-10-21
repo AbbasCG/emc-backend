@@ -66,6 +66,8 @@ class SendPlatformNotificationJob implements ShouldQueue
         // still a narrowing rather than a full guarantee — documented as a
         // known remaining hardening opportunity for those callers, not
         // silently claimed as solved.
+        // Three attempts: two workers sending the SAME de-duplicated notification at once can deadlock on the lock-then-insert below
+        // (found by concurrent duplicate Stripe webhooks); the loser retries and then finds the row the winner stored.
         DB::transaction(function () use ($ids, $entityId, $idempotencyKey) {
             $remainingIds = $ids;
 
@@ -135,7 +137,7 @@ class SendPlatformNotificationJob implements ShouldQueue
                 broadcast(new PlatformNotificationCreated($notification));
                 $this->fanOutToExternalChannels($notification);
             }
-        });
+        }, 3);
     }
 
     /**

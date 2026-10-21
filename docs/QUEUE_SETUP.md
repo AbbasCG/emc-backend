@@ -6,21 +6,45 @@ The EMC backend processes these tasks asynchronously via queued jobs:
 
 | Job | Queue | Trigger |
 |-----|-------|---------|
-| `SendEmailJob` | default | Registration, password reset, certificate |
-| `SendNotificationJob` | default | Every user action |
+| `SendPlatformNotificationJob` | default | Every in-app notification written through `NotificationService::send()` (queued `afterCommit`, de-duplicated by `idempotency_key`; retries its transaction 3 times on a deadlock) |
+| `SendLoggedEmailJob` / mailables queued by `EmailService` | emails | Registration, payment confirmation, password reset, resent e-mails |
+| `SendEmailJob` | default | Generic queued e-mail (automation engine, notification dispatcher) |
+| `SendNotificationJob` | default | Legacy notification sender |
 | `SendWhatsAppJob` | default | Registration confirmation |
 | `IssueCertificateJob` | default | Admin issues certificate |
+| `GenerateCertificatePdfJob` and the certificate listeners | certificates | Course / path / workshop completion (unique per certificate) |
+| `SendCertificateReadyNotification`, `NotifyAdminCertificateFailure` | notifications | Certificate lifecycle |
+| `OptimizeMaterialImageJob` | media | Material upload |
+| `ScanMaterialForVirusJob` | security | Material upload |
 | `GenerateReportJob` | default | Admin generates report (up to 5 min) |
-| `ProcessPaymentWebhookJob` | webhooks | Stripe / PayPal webhook received |
-| `DispatchWebhookJob` | webhooks | Outbound webhook delivery |
+| `DispatchWebhookJob` | default | Outbound webhook delivery |
+| `ProcessPaymentWebhookJob` | webhooks (reserved) | Provided but **not used by the Stripe checkout webhook** (`POST /api/webhooks/stripe` is processed inside the request) |
 | `GenerateAiResponseJob` | default (or ai) | AI conversation message |
 | `GenerateEmbeddingJob` | default | Knowledge article published |
 | `GenerateAiInsightsJob` | default | Scheduled AI insight generation |
 | `GenerateMeetingSummaryJob` | default | Meeting saved with AI summary |
 | `GenerateStudentRecommendationsJob` | default | Scheduled recommendation refresh |
+| `GenerateFormExport` | default | Smart Forms: an XLSX / CSV / PDF export of a form's responses too large to build during the request |
 
 All jobs implement `ShouldQueue` and are safe to retry (`$tries` defined per job).
 `ProcessPaymentWebhookJob` uses `WithoutOverlapping` to prevent concurrent payment races.
+
+### The one configuration rule: same connection, every queue, retry_after above every timeout
+
+1. **One connection.** The application dispatches to `QUEUE_CONNECTION`; every Supervisor worker must run `queue:work <that connection>`.
+   The repository standard is **`redis`** (`predis/predis` is a hard dependency, `.env.example` and `docs/supervisor.conf` use it, and the
+   cache/session stores are Redis too). `database` is the documented fallback: change BOTH the `.env` value and the word `redis` in
+   `docs/supervisor.conf`. A worker on a different connection never sees the jobs, so notifications, e-mails, certificate PDFs and Smart Forms
+   exports are queued and silently never processed.
+2. **Every queue.** A worker only processes the queues named in `--queue=`. The code dispatches to `default`, `emails`, `certificates`,
+   `notifications`, `media` and `security` (`webhooks` is reserved: nothing dispatches to it today, but the webhook worker still consumes it);
+   `docs/supervisor.conf` lists them all (priority order, left first).
+3. **`retry_after` above every timeout.** `retry_after` is how long a reserved job may run before the queue hands it to another worker. It
+   must be larger than the longest job `$timeout` (300 s: AI insights, bulk certificates, reports) and larger than every worker
+   `--timeout` (90 s / 60 s). The repository default is **360 s** for both connections (`REDIS_QUEUE_RETRY_AFTER` / `DB_QUEUE_RETRY_AFTER`).
+   A job's own `$timeout` overrides the worker's `--timeout`.
+
+`tests/Feature/QueueConfigurationTest.php` fails if any of the three rules is broken in the repository files.
 
 ---
 
@@ -134,9 +158,9 @@ php artisan tinker
 // Expected: "working"
 ```
 
-Start the worker:
+Start the worker (all queues the application uses):
 ```bash
-php artisan queue:work redis --sleep=3 --tries=3 --timeout=90
+php artisan queue:work redis --queue=notifications,emails,default,certificates,media,security --sleep=3 --tries=3 --timeout=90
 ```
 
 ---
@@ -173,7 +197,7 @@ The production config manages these processes:
 [program:emc-worker]
 process_name    = %(program_name)s_%(process_num)02d
 command         = php /var/www/emc-backend/artisan queue:work redis \
-                      --queue=default \
+                      --queue=notifications,emails,default,certificates,media,security \
                       --sleep=3 \
                       --tries=3 \
                       --timeout=90 \
@@ -195,7 +219,7 @@ stdout_logfile_backups  = 5
 [program:emc-webhook-worker]
 process_name    = %(program_name)s
 command         = php /var/www/emc-backend/artisan queue:work redis \
-                      --queue=webhooks,default \
+                      --queue=webhooks,notifications,default \
                       --sleep=1 \
                       --tries=5 \
                       --timeout=60 \

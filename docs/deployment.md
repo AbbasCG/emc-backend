@@ -138,8 +138,11 @@ sudo supervisorctl status
 ```
 
 The config runs:
-- **emc-worker** (×2) — default queue, `--tries=3 --timeout=90 --max-time=3600`
-- **emc-webhook-worker** (×1) — `webhooks,default` queue, `--tries=5`
+- **emc-worker** (×2) — `queue:work redis` on `notifications,emails,default,certificates,media,security`, `--tries=3 --timeout=90 --max-time=3600`
+- **emc-webhook-worker** (×1) — `webhooks,notifications,default` queue, `--tries=5`
+
+The connection in these commands (`redis`) must equal `QUEUE_CONNECTION` in the server's `.env`, and `REDIS_QUEUE_RETRY_AFTER` (default 360) must
+stay above every job timeout and worker `--timeout`. See `docs/QUEUE_SETUP.md` ("The one configuration rule").
 - **emc-scheduler** (×1) — replaces cron if preferred
 
 After every deployment, restart workers gracefully:
@@ -168,6 +171,21 @@ Scheduled jobs (defined in `routes/console.php`):
 | `sanctum:prune-expired --hours=24` | Daily 03:30 |
 | Log rotation (>100 MB) | Daily 04:00 |
 | `emc:backup --db --prune-days=30` | Daily 01:00 (if `ENABLE_SCHEDULED_BACKUP=true`) |
+| `forms:purge-exports` | Hourly (deletes form-response export files after their 24 h life) |
+
+### Smart Forms exports (`GenerateFormExport`, `forms:purge-exports`)
+
+Needs, besides the generic worker and scheduler above:
+
+- a worker on the **same connection the app dispatches to** (`QUEUE_CONNECTION`), on the `default` queue. `docs/supervisor.conf` and
+  `.env.example` now both use `redis`; if a server is set up with the database queue instead, change the `.env` value and the connection
+  word in `docs/supervisor.conf` together (a mismatch leaves the jobs queued and never run). Small exports (≤ 500 responses and ≤ 5,000 cells) are built during the request and need no worker; larger ones stay
+  "queued" without one.
+- `ext-mbstring`, `ext-gd` and `ext-zip` for the PDF (mPDF) and XLSX writers; `composer install` pulls the library itself.
+- `storage/` writable by the worker user (exports go to `storage/app/private/form-exports`, mPDF's cache to `storage/framework/cache/mpdf`).
+- the connection's `retry_after` must stay above the job's 80 s timeout (the repository default is now 360 s, above every job timeout).
+- the scheduler (`schedule:run` cron or the `emc-scheduler` Supervisor program) running, with a cache store that supports locks (the
+  entry uses `withoutOverlapping`, like the others).
 
 ---
 

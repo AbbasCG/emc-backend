@@ -32,6 +32,19 @@ return Application::configure(basePath: dirname(__DIR__))
             'placement.required' => \App\Http\Middleware\PlacementTestRequired::class,
         ]);
 
+        // Authorization BEFORE route-model binding. SubstituteBindings (in the api group) turns {param} into a record and answers 404 when
+        // none exists; if the role/permission gates run after it, an account outside the role list gets 404 for a missing id and 403 for
+        // an existing one and can enumerate which records exist (manual payments, reconciliation cases, orders...). Putting the gates
+        // ahead of it makes the answer 403 either way (tests/Feature/AuthorizationBeforeBindingTest.php sweeps every role-protected route).
+        foreach ([
+            \App\Http\Middleware\RoleMiddleware::class,
+            \App\Http\Middleware\DepartmentLeaderOrRoleMiddleware::class,
+            \App\Http\Middleware\PermissionMiddleware::class,
+            \App\Http\Middleware\EnsureLearnerAccess::class,
+        ] as $gate) {
+            $middleware->prependToPriorityList(before: \Illuminate\Routing\Middleware\SubstituteBindings::class, prepend: $gate);
+        }
+
         // Run on every api/* request — detects impersonation tokens and annotates
         // the request with is_impersonating + impersonator_id attributes.
         // No-op for unauthenticated requests or normal tokens.
