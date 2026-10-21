@@ -13,9 +13,21 @@ use Illuminate\Support\Facades\DB;
 
 class LearningPathEnrollmentService
 {
+    public function __construct(private readonly LearnerEnrollmentGuard $guard)
+    {
+    }
+
     public function enrollFree(User $user, LearningPath $path): LearningPathEnrollment
     {
-        return DB::transaction(function () use ($user, $path) {
+        // Early, cheap answer; the decisive check is the one under the lock below.
+        $this->guard->assertCanEnrollInPath($user, $path);
+        $courseIds = $this->guard->pathCourseIds($path->id);
+
+        return DB::transaction(function () use ($user, $path, $courseIds) {
+            // First statement: the same locks an instructor assignment takes, so the two cannot both succeed.
+            $this->guard->lockForEnrollment($courseIds, $path->id);
+            $this->guard->assertCanEnrollInPath($user, LearningPath::query()->findOrFail($path->id));
+
             $enrollment = LearningPathEnrollment::query()
                 ->where('learning_path_id', $path->id)
                 ->where('user_id', $user->id)
@@ -45,6 +57,8 @@ class LearningPathEnrollmentService
 
     public function createPendingPayment(User $user, LearningPath $path, Order $order): LearningPathEnrollment
     {
+        $this->guard->assertCanEnrollInPath($user, $path);
+
         return DB::transaction(function () use ($user, $path, $order) {
             $enrollment = LearningPathEnrollment::query()
                 ->where('learning_path_id', $path->id)

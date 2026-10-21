@@ -13,6 +13,7 @@ class EvaluationPolicy
 
     public function create(User $user): bool
     {
-        return $user->isStudent() || $user->isAdmin();
+        // Any account may review a course it is enrolled in (the controller checks the enrollment); learning is not a role.
+        return true;
     }
 }

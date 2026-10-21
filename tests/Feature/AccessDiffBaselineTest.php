@@ -348,7 +348,7 @@ class AccessDiffBaselineTest extends TestCase
         );
 
         $this->assertFileExists($dir.'/baseline.json');
-        $this->assertCount(136, $catalog);
+        $this->assertCount(137, $catalog);
         $this->assertNotEmpty($unseeded);
         $this->assertNotEmpty($seeded);
     }
@@ -375,7 +375,7 @@ class AccessDiffBaselineTest extends TestCase
             array_filter(PageAccessCatalog::all(), fn (PageAccessEntry $e) => $e->authenticatedBaseline)
         ));
         sort($expected);
-        $this->assertCount(6, $expected);
+        $this->assertCount(7, $expected);
 
         $ordinary = $this->makeUser('finance_manager');
         $ordinaryKeys = $this->resolver()->allowedKeys($ordinary);

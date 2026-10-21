@@ -12,6 +12,16 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class LmsSession extends Model
 {
+    use \App\Models\Concerns\GuardsInstructorAssignment;
+
+    protected function instructorConflictScope(): array
+    {
+        // A session belongs to a course directly, or through its workshop.
+        $courseId = $this->course_id ?: ($this->workshop_id ? Workshop::query()->whereKey($this->workshop_id)->value('course_id') : null);
+
+        return ['courses' => $courseId ? [(int) $courseId] : [], 'path' => null];
+    }
+
     use BelongsToClassGroup;
 
     protected $table = 'lms_sessions';

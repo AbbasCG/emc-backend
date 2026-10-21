@@ -55,13 +55,16 @@ class CourseResource extends JsonResource
             // Capacity
             'capacity'              => $this->capacity,
             'seats_count'           => $this->capacity,
+            // Every registration row, whatever its status (admin screens read this one).
             'registrations_count'        => $this->registrations_count ?? 0,
-            // Public course listings exclude LP-owned courses (publiclyVisible scope),
-            // so effective_enrollment_count equals registrations_count here.
-            // It exists so the frontend can use one unified field across admin and public.
-            'effective_enrollment_count' => $this->registrations_count ?? 0,
+            // The seat indicators below are the CANONICAL ones: the same definition registration enforces (an enrollment that grants
+            // access or a payment in progress hold a seat; cancelled rows hold none). `seats_taken` falls back to the raw count only
+            // where the query did not load it.
+            'seats_taken'                => $this->seats_taken_count ?? ($this->registrations_count ?? 0),
+            'seats_remaining'            => $this->capacity !== null && (int) $this->capacity > 0 ? max(0, (int) $this->capacity - (int) ($this->seats_taken_count ?? ($this->registrations_count ?? 0))) : null,
+            'effective_enrollment_count' => $this->seats_taken_count ?? ($this->registrations_count ?? 0),
             // true when capacity is set and all seats are taken
-            'is_full'               => $this->capacity !== null && ($this->registrations_count ?? 0) >= $this->capacity,
+            'is_full'               => $this->capacity !== null && (int) $this->capacity > 0 && (int) ($this->seats_taken_count ?? ($this->registrations_count ?? 0)) >= (int) $this->capacity,
             'registration_open'     => (bool) ($this->registration_open ?? true),
             'registration_status'   => $this->registration_status ?? 'open',
             'requires_registration_code' => (bool) ($this->requires_registration_code ?? false),
@@ -138,13 +141,11 @@ class CourseResource extends JsonResource
             return true;
         }
         // Students only if enrolled in this course
-        if ($user->isStudent()) {
-            return $user->registrations()
-                ->where('course_id', $this->id)
-                ->whereIn('status', ['active', 'registered', 'enrolled', 'completed'])
-                ->exists();
-        }
-        return false;
+        // Enrolled learners (whatever their role) see the meeting link of what they are enrolled in.
+        return $user->registrations()
+            ->where('course_id', $this->id)
+            ->whereIn('status', ['active', 'registered', 'enrolled', 'completed'])
+            ->exists();
     }
 
     private function buildInstructor(): ?array

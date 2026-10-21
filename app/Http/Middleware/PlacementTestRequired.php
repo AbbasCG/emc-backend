@@ -90,6 +90,7 @@ class PlacementTestRequired
     private function messageForBlockReason(string $reason): string
     {
         return match ($reason) {
+            'payment_under_review' => 'تم استلام دفعتك وهي قيد المراجعة المالية. لا حاجة لدفع مرة أخرى، وسنتواصل معك.',
             'payment_pending' => 'يلزم إكمال الدفع أولاً. عملية الدفع الخاصة بك قيد المراجعة.',
             'payment_failed' => 'تعذر تأكيد عملية الدفع. يرجى إعادة المحاولة للوصول إلى محتوى الدورة.',
             'registration_cancelled' => 'تسجيلك في هذه الدورة ملغى.',

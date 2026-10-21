@@ -539,14 +539,23 @@ class AdminLearningPathController extends Controller
         foreach ($courseIds as $i => $id) {
             $sync[(int) $id] = ['sort_order' => $i];
         }
-        $path->courses()->sync($sync);
 
-        // Push LP instructor to newly-linked courses that have no instructor
-        if ($path->instructor_id && ! empty($courseIds)) {
-            Course::whereIn('id', array_map('intval', $courseIds))
-                ->whereNull('instructor_id')
-                ->update(['instructor_id' => $path->instructor_id]);
-        }
+        DB::transaction(function () use ($path, $sync, $courseIds) {
+            // Adding a course puts the path's instructor in front of that course's learners (and the mass update below hands the
+            // course to them), so the instructor is checked against the FINAL membership first, under the course/path locks.
+            if ($path->instructor_id && $path->exists) {
+                app(\App\Services\LearnerEnrollmentGuard::class)->assertMayTeach((int) $path->instructor_id, array_map('intval', $courseIds), (int) $path->id);
+            }
+
+            $path->courses()->sync($sync);
+
+            // Push LP instructor to newly-linked courses that have no instructor
+            if ($path->instructor_id && ! empty($courseIds)) {
+                Course::whereIn('id', array_map('intval', $courseIds))
+                    ->whereNull('instructor_id')
+                    ->update(['instructor_id' => $path->instructor_id]);
+            }
+        });
     }
 
     /**

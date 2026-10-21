@@ -17,6 +17,7 @@ class CourseController extends Controller
 
         $query = Course::with(['instructor.user', 'features', 'track'])
             ->withCount('registrations')
+            ->withSeatsTaken()
             // "active" is the legacy published value. Keep existing catalog
             // records visible while all new editorial flows use "published".
             ->whereIn('status', ['published', 'active'])
@@ -65,6 +66,7 @@ class CourseController extends Controller
     {
         $course = Course::with(['instructor.user', 'features', 'track'])
             ->withCount('registrations')
+            ->withSeatsTaken()
             ->where('slug', $slug)
             ->whereIn('status', ['published', 'active'])
             ->financeApprovedForPublic()

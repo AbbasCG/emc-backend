@@ -106,6 +106,7 @@ class PublicProgramsController extends Controller
 
         $courseQuery = Course::with(['instructor.user', 'features', 'track'])
             ->withCount('registrations')
+            ->withSeatsTaken()
             ->whereIn('status', self::COURSE_STATUSES)
             ->financeApprovedForPublic()
             ->where(function ($q) {
@@ -163,6 +164,7 @@ class PublicProgramsController extends Controller
 
         $latestCourses = Course::with(['instructor.user'])
             ->withCount('registrations')
+            ->withSeatsTaken()
             ->whereIn('status', self::COURSE_STATUSES)
             ->financeApprovedForPublic()
             ->where(function ($q) {

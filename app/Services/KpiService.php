@@ -40,7 +40,8 @@ class KpiService
 
     private function computeOverview(): array
     {
-        $totalStudents      = User::where('role', 'student')->count();
+        // Learners, not just accounts with the student role: anyone actually enrolled counts (see LearnerCounts).
+        $totalStudents      = app(LearnerCounts::class)->total();
         $totalInstructors   = Instructor::count();
         $totalVolunteers    = VolunteerProfile::whereIn('status', ['active', 'accepted'])->count();
         $totalWorkshops     = Workshop::count();

@@ -194,6 +194,8 @@ class ManualPaymentController extends Controller
                     'transaction_id'  => $result['transaction']->id,
                 ],
             ]);
+        } catch (\App\Exceptions\InstructorEnrollmentConflictException $e) {
+            return $e->render();
         } catch (\RuntimeException $e) {
             return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
         }
@@ -405,7 +407,6 @@ class ManualPaymentController extends Controller
                       ->orWhere('email', 'like', $escaped)
                       ->orWhere('phone', 'like', $escaped);
             })
-            ->where('role', 'student')
             ->select(['id', 'name', 'email', 'phone', 'is_active', 'avatar'])
             ->orderBy('name')
             ->limit(10)

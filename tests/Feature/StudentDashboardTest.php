@@ -31,22 +31,24 @@ class StudentDashboardTest extends TestCase
             ->assertStatus(401);
     }
 
-    public function test_admin_cannot_access_student_dashboard(): void
+    // Learning is not a role (see EnsureLearnerAccess): any signed-in account reaches the learner dashboard, and it shows only that
+    // account's own enrollments. Role-by-role coverage lives in UniversalLearnerEnrollmentTest.
+    public function test_admin_reaches_the_learner_dashboard_with_only_their_own_data(): void
     {
         $admin = User::factory()->admin()->create();
 
         $this->actingAs($admin, 'sanctum')
             ->getJson('/api/student/dashboard')
-            ->assertStatus(403);
+            ->assertOk();
     }
 
-    public function test_instructor_cannot_access_student_dashboard(): void
+    public function test_instructor_reaches_the_learner_dashboard_with_only_their_own_data(): void
     {
         $instructor = User::factory()->create(['role' => 'instructor']);
 
         $this->actingAs($instructor, 'sanctum')
             ->getJson('/api/student/dashboard')
-            ->assertStatus(403);
+            ->assertOk();
     }
 
     // ─── Registrations ────────────────────────────────────────────────────────
@@ -248,13 +250,14 @@ class StudentDashboardTest extends TestCase
             ->assertStatus(401);
     }
 
-    public function test_instructor_cannot_access_student_reviews(): void
+    public function test_instructor_reaches_own_reviews_which_are_empty(): void
     {
         $instructor = User::factory()->create(['role' => 'instructor']);
 
         $this->actingAs($instructor, 'sanctum')
             ->getJson('/api/student/reviews')
-            ->assertStatus(403);
+            ->assertOk()
+            ->assertJsonPath('data', []);
     }
 
     // ─── Progress & Assignments ───────────────────────────────────────────────

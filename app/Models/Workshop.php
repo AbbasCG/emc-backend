@@ -10,6 +10,14 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Workshop extends Model
 {
+    use \App\Models\Concerns\GuardsInstructorAssignment;
+
+    protected function instructorConflictScope(): array
+    {
+        // A scheduled workshop is taught inside its course: that course's learners cannot teach it.
+        return ['courses' => $this->course_id ? [(int) $this->course_id] : [], 'path' => null];
+    }
+
     use HasFactory, SoftDeletes;
     protected $fillable = [
         'course_id',

@@ -190,6 +190,7 @@ final class RoleDefaultMap
             'finance.invoices',
             'finance.manual_payments',
             'finance.orders',
+            'finance.payment_reconciliations',
             'finance.payments',
             'finance.program_approvals',
             'finance.revenues',
@@ -298,7 +299,6 @@ final class RoleDefaultMap
         ],
         'student' => [
             'operations.meeting_lounge',
-            'personal.student_learning',
         ],
         'support_agent' => [
             'operations.impact_points',

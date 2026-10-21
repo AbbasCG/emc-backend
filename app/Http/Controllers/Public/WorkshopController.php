@@ -24,6 +24,7 @@ class WorkshopController extends Controller
     {
         $query = Course::with(['instructor.user'])
             ->withCount('registrations')
+            ->withSeatsTaken()
             ->where('program_type', 'workshop')
             ->where('status', 'published')
             ->financeApprovedForPublic();
@@ -92,13 +93,14 @@ class WorkshopController extends Controller
     {
         $course = Course::with(['instructor.user', 'features'])
             ->withCount('registrations')
+            ->withSeatsTaken()
             ->where('slug', $slug)
             ->where('program_type', 'workshop')
             ->where('status', 'published')
             ->financeApprovedForPublic()
             ->firstOrFail();
 
-        $enrollCount = $course->registrations_count ?? 0;
+        $enrollCount = (int) ($course->seats_taken_count ?? $course->registrations_count ?? 0);
 
         // Enrollment status for authenticated users
         $enrollmentStatus = null;
@@ -144,7 +146,7 @@ class WorkshopController extends Controller
                       || $c->location_type === null;
 
         $capacity        = (int) ($c->capacity ?? 0);
-        $enrolledCount   = (int) ($c->registrations_count ?? 0);
+        $enrolledCount   = (int) ($c->seats_taken_count ?? $c->registrations_count ?? 0);
         $spotsRemaining  = max(0, $capacity - $enrolledCount);
 
         return [
@@ -187,7 +189,10 @@ class WorkshopController extends Controller
             'seats'           => $capacity ?: null,
             'total_spots'     => $capacity ?: 0,
             'enrolled_count'  => $enrolledCount,
-            'spots_remaining' => $spotsRemaining,
+            // No capacity means no limit: no number of seats left (it used to read as "0 left", i.e. full).
+            'spots_remaining' => $capacity > 0 ? $spotsRemaining : null,
+            'seats_remaining' => $capacity > 0 ? $spotsRemaining : null,
+            'is_full'         => $capacity > 0 && $enrolledCount >= $capacity,
 
             // Level / language
             'level'    => $c->level,

@@ -9,6 +9,19 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class ClassGroup extends Model
 {
+    use \App\Models\Concerns\GuardsInstructorAssignment;
+
+    protected function instructorConflictScope(): array
+    {
+        $ids = $this->course_id ? [(int) $this->course_id] : [];
+        if ($this->exists) {
+            // A class group can serve several courses (the pivot): each one's learners are excluded.
+            $ids = array_merge($ids, $this->courses()->pluck('courses.id')->map(fn ($id) => (int) $id)->all());
+        }
+
+        return ['courses' => $ids, 'path' => null];
+    }
+
     protected $fillable = [
         'course_id',
         'instructor_id',

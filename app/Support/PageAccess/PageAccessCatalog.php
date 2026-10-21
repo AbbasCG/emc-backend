@@ -151,6 +151,11 @@ final class PageAccessCatalog
             ['finance.manual_payments', '/dashboard/finance/manual-payments', 'الدفعات اليدوية', $C::Finance, $R::AdminOnly, false, P::MANAGE_PAYMENTS, false, [
                 '/dashboard/admin/finance/manual-payments',
             ]],
+            // Confirmed payments whose enrollment was withheld (the payer teaches what they paid for): list and settle by hand. Page access
+            // only; the API behind it independently requires finance_manager or the admin tier, and it never moves money.
+            ['finance.payment_reconciliations', '/dashboard/finance/payment-reconciliations', 'تسوية المدفوعات', $C::Finance, $R::AdminOnly, false, P::MANAGE_PAYMENTS, false, [
+                '/dashboard/admin/finance/payment-reconciliations',
+            ]],
             ['finance.coupons', '/dashboard/admin/coupons', 'الكوبونات', $C::Finance, $R::AdminOnly, false, P::MANAGE_COUPONS, false, []],
             ['finance.scholarships', '/dashboard/admin/scholarships', 'المنح الدراسية', $C::Finance, $R::AdminOnly, false, P::MANAGE_SCHOLARSHIPS, false, []],
             ['finance.orders', '/dashboard/finance/orders', 'طلبات الشراء', $C::Finance, $R::AdminOnly, false, P::VIEW_PAYMENTS, false, [
@@ -349,7 +354,10 @@ final class PageAccessCatalog
             ['personal.notification_preferences', '/dashboard/settings/notifications', 'تفضيلات الإشعارات', $C::Personal, $R::SafeDelegatable, false, null, false, [], true],
             ['personal.volunteer_hr_profile', '/dashboard/volunteer/hr-profile', 'ملف المتطوع', $C::Personal, $R::SafeDelegatable, false, null, false, [], true],
             ['personal.resource_center_courses', '/dashboard/resources/courses', 'مركز الموارد', $C::Personal, $R::SafeDelegatable, false, null, false, []],
-            ['personal.student_learning', '/dashboard/student', 'مساحة الطالب التعليمية', $C::Personal, $R::SafeDelegatable, false, null, false, [
+            // The learner space (دوراتي and everything behind it). Learning is not a role: every authenticated account opens it, and
+            // a role added later inherits it. Page access only; each learner endpoint reads the caller's own registrations,
+            // progress and certificates, and management features keep their own permissions.
+            ['personal.student_learning', '/dashboard/student', 'مساحة التعلّم (دوراتي)', $C::Personal, $R::SafeDelegatable, false, null, false, [
                 '/dashboard/student/learning-paths', '/dashboard/student/learning-paths/:id', '/dashboard/student/courses', '/dashboard/student/learn/:courseId',
                 '/dashboard/student/registrations', '/dashboard/student/available-courses', '/dashboard/student/exams',
                 '/dashboard/student/classes/:groupId/announcements', '/dashboard/student/calendar', '/dashboard/student/sessions/:sessionId',
@@ -358,7 +366,7 @@ final class PageAccessCatalog
                 '/dashboard/student/institute', '/dashboard/student/sessions', '/dashboard/student/attendance', '/dashboard/student/materials',
                 '/dashboard/student/assignments/:submissionId?', '/dashboard/student/progress',
                 '/dashboard/certificates', '/dashboard/student/my-certificates', '/dashboard/learning',
-            ]],
+            ], true],
             ['personal.instructor_workspace', '/dashboard/instructor', 'مساحة عمل المدرب', $C::Personal, $R::SafeDelegatable, false, null, false, [
                 '/dashboard/instructor/learning-paths', '/dashboard/instructor/learning-paths/:id', '/dashboard/instructor/courses',
                 '/dashboard/instructor/courses/:courseId/content', '/dashboard/instructor/courses/:courseId/placement-students',

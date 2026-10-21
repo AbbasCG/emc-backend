@@ -47,9 +47,9 @@ class EffectivePageAccessTest extends TestCase
     private const PROTECTED_PAGE = 'administration.roles';
 
     /**
-     * Phase 2G.2 — every authenticated account receives these six from
+     * Phase 2G.2 — every authenticated account receives these seven from
      * PageAccessCatalog, with no stored row anywhere. Assertions below add them
-     * explicitly rather than loosening to "contains", so an unexpected SEVENTH
+     * explicitly rather than loosening to "contains", so an unexpected EIGHTH
      * baseline entry would still fail the suite.
      */
     private const AUTHENTICATED_BASELINE = [
@@ -59,6 +59,7 @@ class EffectivePageAccessTest extends TestCase
         'personal.notifications',
         'personal.notification_preferences',
         'personal.volunteer_hr_profile',
+        'personal.student_learning',
     ];
 
     /** @param array<int,string> $extra */
@@ -931,7 +932,7 @@ class EffectivePageAccessTest extends TestCase
     {
         $svc = app(RolePageDefaultService::class);
 
-        $this->assertCount(127, $svc->eligibleKeys());
+        $this->assertCount(128, $svc->eligibleKeys());
         $this->assertNotContains(self::PROTECTED_PAGE, $svc->eligibleKeys());
     }
 
@@ -950,7 +951,7 @@ class EffectivePageAccessTest extends TestCase
         $svc = app(UserPageAccessOverrideService::class);
         $target = $this->ordinaryUser();
 
-        $this->assertCount(127, $svc->eligibleKeys());
+        $this->assertCount(128, $svc->eligibleKeys());
         $this->assertSame([], $svc->getOverrides($target));
 
         $svc->setOverride($this->superAdmin(), $target, self::MEMBER_PAGE, UserPageAccessState::Allow);
@@ -967,7 +968,7 @@ class EffectivePageAccessTest extends TestCase
     {
         $all = PageAccessCatalog::all();
 
-        $this->assertCount(136, $all);
+        $this->assertCount(137, $all);
         $this->assertTrue(PageAccessCatalog::find(self::PROTECTED_PAGE)->isProtected());
         $this->assertFalse(PageAccessCatalog::find(self::MEMBER_PAGE)->isProtected());
     }

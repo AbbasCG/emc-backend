@@ -100,35 +100,35 @@ class AdminCourseStudentsController extends Controller
             ], 422);
         }
 
-        // Promote to student if no privileged role
-        if (! in_array($user->role, ['instructor', 'teacher', 'admin', 'super_admin', 'executive_admin', 'student'], true)) {
-            $user->update(['role' => 'student']);
-        }
+        // Learning is not a role: the account keeps the role it has (a volunteer stays a volunteer). The one refusal is enrolling
+        // someone in a course or workshop they teach.
+        $guard = app(\App\Services\LearnerEnrollmentGuard::class);
+        $guard->assertCanEnroll($user, $course); // early, cheap answer; the decisive check is the one under the lock below
 
         $enrollStatus = $data['status'] ?? RegistrationStatus::REGISTERED->value;
 
-        // Check existing registration
-        $existing = Registration::where('course_id', $course->id)
-            ->where('user_id', $user->id)
-            ->first();
+        // The enrollment is written under the same course lock an instructor assignment takes (first statement of the transaction),
+        // and the teaching check is repeated under it, so an assignment racing with this enrollment cannot both succeed.
+        $outcome = DB::transaction(function () use ($guard, $course, $user, $data, $enrollStatus) {
+            $guard->lockForEnrollment([$course->id]);
+            $guard->assertCanEnroll($user, Course::query()->findOrFail($course->id));
 
-        if ($existing) {
-            if ($existing->status === RegistrationStatus::CANCELLED->value) {
-                // Re-enroll
-                $existing->update(['status' => $enrollStatus]);
-                $registration = $existing->fresh(['user']);
-            } else {
-                $progressMap = StudentProgress::where('course_id', $course->id)
-                    ->where('user_id', $user->id)
-                    ->get()->keyBy('user_id');
+            $existing = Registration::where('course_id', $course->id)
+                ->where('user_id', $user->id)
+                ->lockForUpdate()
+                ->first();
 
-                return response()->json([
-                    'success' => false,
-                    'message' => 'الطالب مسجل في هذه الدورة بالفعل.',
-                    'data'    => $this->formatParticipant($existing->load('user'), $progressMap),
-                ], 409);
+            if ($existing) {
+                if ($existing->status === RegistrationStatus::CANCELLED->value) {
+                    // Re-enroll
+                    $existing->update(['status' => $enrollStatus]);
+
+                    return ['registration' => $existing->fresh(['user'])];
+                }
+
+                return ['existing' => $existing];
             }
-        } else {
+
             $registration = Registration::create([
                 'course_id' => $course->id,
                 'user_id'   => $user->id,
@@ -138,7 +138,23 @@ class AdminCourseStudentsController extends Controller
                 'status'    => $enrollStatus,
             ]);
             $registration->load('user');
+
+            return ['registration' => $registration];
+        });
+
+        if (isset($outcome['existing'])) {
+            $progressMap = StudentProgress::where('course_id', $course->id)
+                ->where('user_id', $user->id)
+                ->get()->keyBy('user_id');
+
+            return response()->json([
+                'success' => false,
+                'message' => 'الطالب مسجل في هذه الدورة بالفعل.',
+                'data'    => $this->formatParticipant($outcome['existing']->load('user'), $progressMap),
+            ], 409);
         }
+
+        $registration = $outcome['registration'];
 
         // Ensure student_progress record — total_sessions must never be null
         $totalSessions = $course->sessions()->count();

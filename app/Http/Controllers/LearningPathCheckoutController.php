@@ -31,6 +31,19 @@ class LearningPathCheckoutController extends Controller
             ->where('status', 'published')
             ->firstOrFail();
 
+        // A payment already received and under financial review is answered first and is never paid a second time.
+        if (\App\Models\PaymentReconciliation::query()->where('user_id', $user->id)->where('learning_path_id', $path->id)
+            ->where('status', \App\Models\PaymentReconciliation::STATUS_OPEN)->exists()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'تم استلام دفعتك وهي قيد المراجعة المالية. لا حاجة لدفع مرة أخرى، وسنتواصل معك.',
+                'code'    => 'payment_under_review',
+            ], 409);
+        }
+
+        // Learning is open to every account; teaching this path (or a course in it) is the one thing that rules it out.
+        app(\App\Services\LearnerEnrollmentGuard::class)->assertCanEnrollInPath($user, $path);
+
         if (! $path->enrollment_open) {
             return response()->json([
                 'success' => false,

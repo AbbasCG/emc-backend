@@ -74,7 +74,9 @@ class StudentAssignmentController extends Controller
             $accessible = $myClassGroupIds->get($assignment->course_id) === $assignment->class_group_id;
         }
 
-        if (! $accessible && ! $user->isAdmin() && ! $user->isSuperAdmin()) {
+        // Participation needs an enrollment, whatever the account's administrative role. Administrators manage assignments through the
+        // admin and instructor endpoints, never by acting as a learner of a course they are not enrolled in.
+        if (! $accessible) {
             return response()->json(['success' => false, 'message' => 'You are not enrolled in this course.'], 403);
         }
 
@@ -111,7 +113,7 @@ class StudentAssignmentController extends Controller
         $accessible = ($assignment->course_id && $courseIds->contains($assignment->course_id))
             || ($assignment->workshop_id && $assignment->workshop && $courseIds->contains($assignment->workshop->course_id));
 
-        if (! $accessible && ! $user->isAdmin() && ! $user->isSuperAdmin()) {
+        if (! $accessible) {
             return response()->json(['success' => false, 'message' => 'You are not enrolled in this course.'], 403);
         }
 
@@ -169,7 +171,9 @@ class StudentAssignmentController extends Controller
             $accessible = $myClassGroupIds->get($courseId) === $assignment->class_group_id;
         }
 
-        if (! $accessible && ! $user->isAdmin() && ! $user->isSuperAdmin()) {
+        // Submitting is something a LEARNER does: it needs an enrollment in the assignment's course, for every account, administrators
+        // included (they have no learner standing in a course they are not enrolled in).
+        if (! $accessible) {
             return response()->json([
                 'success' => false,
                 'message' => 'غير مصرح لك بالوصول إلى هذا المسار.',

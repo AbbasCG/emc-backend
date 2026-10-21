@@ -27,6 +27,8 @@ return Application::configure(basePath: dirname(__DIR__))
             'permission'         => \App\Http\Middleware\PermissionMiddleware::class,
             'optional.sanctum'   => \App\Http\Middleware\OptionalSanctumAuth::class,
             'active'             => \App\Http\Middleware\EnsureUserIsActive::class,
+            // Entry to the learner experience for ANY authenticated, active account (replaces role:student).
+            'learner'            => \App\Http\Middleware\EnsureLearnerAccess::class,
             'placement.required' => \App\Http\Middleware\PlacementTestRequired::class,
         ]);
 

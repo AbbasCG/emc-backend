@@ -10,10 +10,20 @@ use App\Models\User;
 use App\Models\Registration;
 use App\Models\ClassGroupStudent;
 use App\Models\PlacementTest;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class InstituteAdminController extends Controller
 {
+    /** The evening class slot the institute uses by default is 18:00-20:00; only its start fits the TIME column. */
+    private const DEFAULT_SCHEDULE_TIME = '18:00';
+
+    /** Wall-clock start time as the browser's time input sends it (HH:MM) or as the TIME column returns it (HH:MM:SS). No timezone conversion. */
+    private const SCHEDULE_TIME_RULES = ['nullable', 'regex:/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/'];
+
+    /** `schedule_day` is a varchar(20): longer text would fail the insert on a strict database. */
+    private const SCHEDULE_DAY_RULES = ['nullable', 'string', 'max:20'];
+
     // List Levels / Bundles
     public function index()
     {
@@ -175,21 +185,31 @@ class InstituteAdminController extends Controller
             'capacity' => 'required|integer',
             'course_ids' => 'required|array',
             'course_ids.*' => 'integer|exists:courses,id',
-            'schedule_day' => 'nullable|string',
-            'schedule_time' => 'nullable|string',
+            'schedule_day' => self::SCHEDULE_DAY_RULES,
+            'schedule_time' => self::SCHEDULE_TIME_RULES,
         ]);
 
-        $class = ClassGroup::create([
-            'name' => $validated['name'],
-            'instructor_id' => $validated['instructor_id'],
-            'capacity' => $validated['capacity'],
-            'schedule_day' => $validated['schedule_day'] ?? 'Mon-Wed-Fri',
-            'schedule_time' => $validated['schedule_time'] ?? '18:00 - 20:00',
-            'status' => 'active',
-            'is_institute' => true,
-        ]);
+        // The group is created with its instructor BEFORE its courses are attached, so the model-level guard sees no courses yet:
+        // the instructor and the courses are checked together here, under the course locks, before anything is written.
+        $class = DB::transaction(function () use ($validated) {
+            app(\App\Services\LearnerEnrollmentGuard::class)->assertMayTeach((int) $validated['instructor_id'], $validated['course_ids']);
 
-        $class->courses()->attach($validated['course_ids']);
+            $class = ClassGroup::create([
+                'name' => $validated['name'],
+                'instructor_id' => $validated['instructor_id'],
+                'capacity' => $validated['capacity'],
+                'schedule_day' => $validated['schedule_day'] ?? 'Mon-Wed-Fri',
+                // `schedule_time` is a TIME column: the START of the class. The previous default, the text '18:00 - 20:00', is not a time and
+                // made the insert fail (HTTP 500) whenever the field was left empty, which is what the form does by default.
+                'schedule_time' => $validated['schedule_time'] ?? self::DEFAULT_SCHEDULE_TIME,
+                'status' => 'active',
+                'is_institute' => true,
+            ]);
+
+            $class->courses()->attach($validated['course_ids']);
+
+            return $class;
+        });
 
         return response()->json([
             'message' => 'Class created successfully',
@@ -213,15 +233,28 @@ class InstituteAdminController extends Controller
             'capacity' => 'sometimes|integer',
             'course_ids' => 'sometimes|array',
             'course_ids.*' => 'integer|exists:courses,id',
-            'schedule_day' => 'nullable|string',
-            'schedule_time' => 'nullable|string',
+            'schedule_day' => self::SCHEDULE_DAY_RULES,
+            'schedule_time' => self::SCHEDULE_TIME_RULES,
         ]);
 
-        $class->update($validated);
+        // A change of instructor AND a change of the served courses are both checked against the FINAL pairing, under the course
+        // locks (the pivot is written after the row, which the model-level guard cannot see).
+        DB::transaction(function () use ($class, $validated) {
+            $instructorId = array_key_exists('instructor_id', $validated) ? (int) $validated['instructor_id'] : (int) $class->instructor_id;
+            $courseIds = isset($validated['course_ids'])
+                ? array_map('intval', $validated['course_ids'])
+                : $class->courses()->pluck('courses.id')->map(fn ($id) => (int) $id)->all();
 
-        if (isset($validated['course_ids'])) {
-            $class->courses()->sync($validated['course_ids']);
-        }
+            if ($instructorId > 0) {
+                app(\App\Services\LearnerEnrollmentGuard::class)->assertMayTeach($instructorId, $courseIds);
+            }
+
+            $class->update($validated);
+
+            if (isset($validated['course_ids'])) {
+                $class->courses()->sync($validated['course_ids']);
+            }
+        });
 
         return response()->json([
             'message' => 'Class updated successfully',

@@ -134,10 +134,6 @@ class LmsSessionPolicy
      */
     private function studentCanView(User $user, LmsSession $session): bool
     {
-        if (! $user->isStudent()) {
-            return false;
-        }
-
         if ($session->class_group_id !== null) {
             return ClassGroupStudent::where('class_group_id', $session->class_group_id)
                 ->where('user_id', $user->id)

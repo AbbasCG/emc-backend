@@ -581,11 +581,8 @@ class CertificateController extends Controller
             return $this->index($request);
         }
 
-        if (($user->role ?? '') === 'student') {
-            return app(\App\Http\Controllers\Student\StudentCertificateController::class)->index($request);
-        }
-
-        return response()->json(['success' => false, 'message' => 'Use /api/student/certificates or /api/admin/certificates'], 400);
+        // Everyone else sees their OWN certificates; learning is not a role.
+        return app(\App\Http\Controllers\Student\StudentCertificateController::class)->index($request);
     }
 
     // ── Approvals ─────────────────────────────────────────────────────────────

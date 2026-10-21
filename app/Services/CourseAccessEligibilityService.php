@@ -6,6 +6,7 @@ use App\Enums\RegistrationStatus;
 use App\Models\Course;
 use App\Models\ManualPayment;
 use App\Models\OralAssessmentBooking;
+use App\Models\PaymentReconciliation;
 use App\Models\PlacementTestAttempt;
 use App\Models\Registration;
 use App\Models\User;
@@ -40,6 +41,7 @@ class CourseAccessEligibilityService
      *   payment_required: bool,
      *   payment_status: string|null,
      *   payment_completed: bool,
+     *   payment_under_review: bool,
      *   payment_url: string|null,
      *   enrollment_active: bool,
      *   can_start_placement_test: bool,
@@ -79,6 +81,11 @@ class CourseAccessEligibilityService
 
         $lastPayment = $registration?->payments?->last();
 
+        // Money received, enrollment withheld for a financial reconciliation (the payer teaches what they paid for): NOT a payment
+        // to complete, and never a reason to pay again. See PaymentReconciliation.
+        $underReview = ! $enrollmentActive && $registration !== null
+            && PaymentReconciliation::query()->where('registration_id', $registration->id)->where('status', PaymentReconciliation::STATUS_OPEN)->exists();
+
         // A manual payment submitted for admin review (bank transfer, etc.) has
         // no Payment row yet — ManualPaymentConfirmationService only creates one
         // once an admin confirms it (see ManualPaymentController::confirm()).
@@ -103,6 +110,7 @@ class CourseAccessEligibilityService
 
         if (! $enrollmentActive && ! $viaLearningPath) {
             $blockReason = match (true) {
+                $underReview => 'payment_under_review',
                 $registration === null => 'no_registration',
                 $paymentStatus === RegistrationStatus::PENDING_PAYMENT->value => 'payment_pending',
                 $paymentStatus === 'pending_review' => 'payment_pending',
@@ -113,10 +121,11 @@ class CourseAccessEligibilityService
 
             return [
                 'is_paid_course'           => $isPaidCourse,
-                'payment_required'         => $isPaidCourse,
+                'payment_required'         => $isPaidCourse && ! $underReview,
                 'payment_status'           => $paymentStatus,
-                'payment_completed'        => false,
-                'payment_url'              => $isPaidCourse ? $lastPayment?->checkout_url : null,
+                'payment_completed'        => $underReview,
+                'payment_under_review'     => $underReview,
+                'payment_url'              => $isPaidCourse && ! $underReview ? $lastPayment?->checkout_url : null,
                 'enrollment_active'        => false,
                 'can_start_placement_test' => false,
                 'placement_test_required'  => (bool) $course->requires_placement_test,
@@ -137,6 +146,7 @@ class CourseAccessEligibilityService
                 'payment_required'         => $isPaidCourse,
                 'payment_status'           => $paymentStatus,
                 'payment_completed'        => $paymentCompleted,
+                'payment_under_review'     => false,
                 'payment_url'              => null,
                 'enrollment_active'        => true,
                 'can_start_placement_test' => false,
@@ -171,6 +181,7 @@ class CourseAccessEligibilityService
             'payment_required'         => $isPaidCourse,
             'payment_status'           => $paymentStatus,
             'payment_completed'        => $paymentCompleted,
+            'payment_under_review'     => false,
             'payment_url'              => null,
             'enrollment_active'        => true,
             'can_start_placement_test' => in_array($status, [

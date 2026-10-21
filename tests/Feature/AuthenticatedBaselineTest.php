@@ -40,7 +40,10 @@ class AuthenticatedBaselineTest extends TestCase
 {
     use RefreshDatabase;
 
-    /** The six approved in Phase 2G.1B and re-verified against current code in 2G.2. */
+    /**
+     * The six approved in Phase 2G.1B and re-verified against current code in 2G.2, plus the learner space (دوراتي), added when
+     * learning stopped being tied to the student role: every authenticated account can learn, and a new role inherits it.
+     */
     private const BASELINE = [
         'personal.profile',
         'personal.notifications',
@@ -48,6 +51,7 @@ class AuthenticatedBaselineTest extends TestCase
         'operations.tickets',
         'hr.my_requests',
         'personal.volunteer_hr_profile',
+        'personal.student_learning',
     ];
 
     /** Deliberately excluded — see the excluded-regression section. */
@@ -80,7 +84,7 @@ class AuthenticatedBaselineTest extends TestCase
         }
     }
 
-    public function test_the_baseline_set_is_exactly_these_six(): void
+    public function test_the_baseline_set_is_exactly_these_seven(): void
     {
         $flagged = array_values(array_map(
             fn (PageAccessEntry $e) => $e->key,
@@ -91,7 +95,7 @@ class AuthenticatedBaselineTest extends TestCase
         $expected = self::BASELINE;
         sort($expected);
 
-        $this->assertSame($expected, $flagged, 'Only the six approved capabilities may be baseline.');
+        $this->assertSame($expected, $flagged, 'Only the seven approved capabilities may be baseline.');
     }
 
     public function test_every_other_capability_defaults_to_false(): void
@@ -448,7 +452,7 @@ class AuthenticatedBaselineTest extends TestCase
         $svc = $this->resolver();
         $all = $svc->resolveAll($user);
 
-        $this->assertCount(136, $all);
+        $this->assertCount(137, $all);
 
         foreach ($all as $key => $row) {
             $this->assertSame($row->allowed, $svc->canAccess($user, $key), "canAccess disagreed for [{$key}].");

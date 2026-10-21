@@ -21,7 +21,18 @@ class ManualPaymentConfirmationService
 {
     public function confirm(ManualPayment $manualPayment, User $reviewer): array
     {
-        $result = DB::transaction(function () use ($manualPayment, $reviewer) {
+        // What to lock is worked out BEFORE the transaction (a plain read inside it would fix the snapshot ahead of the locks), so the
+        // course rows can be the first thing the transaction takes: the same order an instructor assignment uses.
+        $guard = app(\App\Services\LearnerEnrollmentGuard::class);
+        $scope = ['courses' => [], 'path' => null];
+        $preview = ManualPayment::query()->find($manualPayment->id)?->purchasable()->first();
+        if ($preview) {
+            $scope = $guard->lockScopeFor($preview);
+        }
+
+        $result = DB::transaction(function () use ($manualPayment, $reviewer, $guard, $scope) {
+            $guard->lockForEnrollment($scope['courses'], $scope['path']);
+
             // 1. Lock and verify status (idempotent guard)
             $mp = ManualPayment::lockForUpdate()->findOrFail($manualPayment->id);
 
@@ -100,7 +111,22 @@ class ManualPaymentConfirmationService
             //    Previous code created Payment first with registration_id = null, causing NOT NULL violation.
             $registration = $this->findRegistration($student->id, $isCourse, $isWorkshop, $isLearningPath, $purchasableId);
 
+            // A payment can be recorded for any account; granting learner access to a program the account teaches is still refused.
+            // That includes activating a registration that already exists but has not been granted access yet (pending payment),
+            // which is the case an instructor assigned after paying ends up in. Checked under the locks taken above.
+            $alreadyGranted = $registration !== null && in_array($registration->status, \App\Enums\RegistrationStatus::activeEnrollment(), true);
+            if (! $alreadyGranted) {
+                if ($isCourse) {
+                    $guard->assertCanEnroll($student, Course::query()->findOrFail($purchasableId));
+                } elseif ($isWorkshop) {
+                    $guard->assertCanEnrollInWorkshop($student, \App\Models\Workshop::query()->findOrFail($purchasableId));
+                } elseif ($isLearningPath) {
+                    $guard->assertCanEnrollInPath($student, \App\Models\LearningPath::query()->findOrFail($purchasableId));
+                }
+            }
+
             if (! $registration) {
+
                 $regData = [
                     'user_id'   => $student->id,
                     'full_name' => $student->name,

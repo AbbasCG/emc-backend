@@ -27,7 +27,8 @@ class CertificatePolicy
             return true;
         }
 
-        return $user->isStudent() && $certificate->user_id === $user->id;
+        // A certificate is its owner's, whatever role the owner holds.
+        return $certificate->user_id === $user->id;
     }
 
     // ── Create / Generate ─────────────────────────────────────────────────────
@@ -50,9 +51,8 @@ class CertificatePolicy
             return true;
         }
 
-        // Students may only download their own issued certificates
-        return $user->isStudent()
-            && $certificate->user_id === $user->id
+        // A learner may only download their own issued certificates, whatever role they hold
+        return $certificate->user_id === $user->id
             && $certificate->status === 'issued';
     }
 

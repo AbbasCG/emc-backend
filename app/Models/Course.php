@@ -19,6 +19,34 @@ class Course extends Model
 {
     use Auditable, HasFactory, SoftDeletes;
 
+    use \App\Models\Concerns\GuardsInstructorAssignment;
+
+    /**
+     * Adds `seats_taken_count`: the registrations that hold a seat (see EnrollmentAvailability::seatStatuses). Every public seat
+     * indicator reads it, one query, the same definition enforcement uses.
+     */
+    public function scopeWithSeatsTaken($query)
+    {
+        return $query->withCount(['registrations as seats_taken_count' => fn ($r) => $r->whereIn('status', \App\Services\EnrollmentAvailability::seatStatuses())]);
+    }
+
+    /** Seats held, from `withSeatsTaken()` when it was loaded, otherwise counted now with the same definition. */
+    public function seatsTaken(): int
+    {
+        return (int) ($this->seats_taken_count ?? app(\App\Services\EnrollmentAvailability::class)->seatsTaken($this));
+    }
+
+    public function seatsRemaining(): ?int
+    {
+        return $this->capacity !== null && (int) $this->capacity > 0 ? max(0, (int) $this->capacity - $this->seatsTaken()) : null;
+    }
+
+    protected function instructorConflictScope(): array
+    {
+        // A new course has no learners yet.
+        return ['courses' => $this->exists ? [(int) $this->id] : [], 'path' => null];
+    }
+
     protected $fillable = [
         'track_id',
         'instructor_id',

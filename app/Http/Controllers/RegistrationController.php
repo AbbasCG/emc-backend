@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Enums\RegistrationStatus;
 use App\Events\StudentRegisteredEvent;
+use App\Exceptions\EnrollmentUnavailableException;
+use App\Exceptions\InstructorEnrollmentConflictException;
 use App\Http\Requests\StoreRegistrationRequest;
 use App\Http\Resources\CourseResource;
 use App\Http\Resources\PaymentResource;
@@ -13,6 +15,8 @@ use App\Models\Payment;
 use App\Models\Registration;
 use App\Models\StudentProgress;
 use App\Services\AuditLogService;
+use App\Services\EnrollmentAvailability;
+use App\Services\LearnerEnrollmentGuard;
 use App\Services\NotificationService;
 use App\Services\PaymentGatewayService;
 use App\Support\CourseComputedStatus;
@@ -45,14 +49,9 @@ class RegistrationController extends Controller
             $course = Course::findOrFail($validated['course_id']);
             $course->loadMissing(['track', 'instructor.user', 'features']);
 
-            // Ended courses: block public enrollment unless admin keeps registration_open (override).
-            if (CourseComputedStatus::blocksPublicEnrollment($course)) {
-                return response()->json([
-                    'success'    => false,
-                    'message'    => 'This course has ended and enrollment is no longer available.',
-                    'message_ar' => 'انتهت هذه الدورة ولا يمكن التسجيل فيها حالياً.',
-                ], 422);
-            }
+            // Anyone may learn, whatever their role; the one refusal is a person who TEACHES this course or workshop. A guest
+            // registration is matched to an account by e-mail, so signing out is not a way around it.
+            app(LearnerEnrollmentGuard::class)->assertCanEnroll($authUser, $course, $validated['email'] ?? null);
 
             // Path-owned courses can only be reached via Learning Path enrollment
             // (see StudentLearningPathController::enroll, which creates Registration rows
@@ -112,12 +111,23 @@ class RegistrationController extends Controller
                 ], 409);
             }
 
+            // A NEW registration needs an open, published, not-ended, not-full program: the same rules for free and paid enrollment
+            // (checked again under a lock below, so two requests for the last seat cannot both win). Someone who is already
+            // registered got their answer above, whatever has happened to the program since.
+            $availability = app(EnrollmentAvailability::class);
+            $availability->assertOpen($course, $authUser?->id);
+
             $receiptPath = null;
             if ($request->hasFile('receipt') && $request->file('receipt')->isValid()) {
                 $receiptPath = $request->file('receipt')->store('receipts', 'public');
             }
 
-            $result = DB::transaction(function () use ($validated, $course, $paymentGatewayService, $receiptPath, $authUser, $courseIsPaid) {
+            $result = DB::transaction(function () use ($validated, $course, $paymentGatewayService, $receiptPath, $authUser, $courseIsPaid, $availability) {
+                $locked = $availability->lockAndAssertOpen($course, $authUser?->id);
+                // Re-checked now that the course row is locked: an instructor assigned a moment ago is seen, and an assignment that
+                // arrives next waits for this registration (see GuardsInstructorAssignment).
+                app(LearnerEnrollmentGuard::class)->assertCanEnroll($authUser, $locked, $validated['email'] ?? null);
+
                 $registration = Registration::create([
                     'course_id'          => $validated['course_id'],
                     'user_id'            => $authUser?->id,
@@ -266,6 +276,8 @@ class RegistrationController extends Controller
                 'registration'   => new RegistrationResource($freeRegistration),
                 'course'         => new CourseResource($course),
             ], 201);
+        } catch (InstructorEnrollmentConflictException|EnrollmentUnavailableException $exception) {
+            return $exception->render();
         } catch (StripeApiException $exception) {
             Log::error('Stripe API error during registration', [
                 'course_id' => $validated['course_id'] ?? null,

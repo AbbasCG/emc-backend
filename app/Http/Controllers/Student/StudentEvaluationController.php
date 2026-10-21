@@ -47,20 +47,24 @@ class StudentEvaluationController extends Controller
             'comment'             => ['nullable', 'string', 'max:5000'],
         ]);
 
-        // Guard: student must be enrolled in the course they are reviewing.
-        $courseId = $validated['course_id'] ?? null;
-        if ($courseId && ! $request->user()->isAdmin() && ! $request->user()->isSuperAdmin()) {
-            $enrolled = Registration::where('user_id', $request->user()->id)
-                ->where('course_id', $courseId)
-                ->whereIn('status', RegistrationStatus::activeEnrollment())
-                ->exists();
+        // A review is a learner's act: it needs the course (or the workshop's course) and an enrollment in it, for every account,
+        // administrators included. Without a course there is nothing to review.
+        $courseId = $validated['course_id']
+            ?? (isset($validated['workshop_id']) ? \App\Models\Workshop::query()->whereKey($validated['workshop_id'])->value('course_id') : null);
+        if (! $courseId) {
+            return response()->json(['success' => false, 'message' => 'حدد الدورة أو الورشة التي تريد تقييمها.'], 422);
+        }
 
-            if (! $enrolled) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'You must be enrolled in this course to submit a review.',
-                ], 403);
-            }
+        $enrolled = Registration::where('user_id', $request->user()->id)
+            ->where('course_id', $courseId)
+            ->whereIn('status', RegistrationStatus::activeEnrollment())
+            ->exists();
+
+        if (! $enrolled) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You must be enrolled in this course to submit a review.',
+            ], 403);
         }
 
         $evaluation = Evaluation::query()->create(array_merge(

@@ -98,6 +98,12 @@ class InstituteStudentController extends Controller
         $user = $request->user();
         $course = Course::findOrFail($request->course_id);
 
+        // This module stays student-only (its own flow), but it still creates registrations, so the one enrollment rule applies:
+        // nobody enrolls in a course they teach.
+        app(\App\Services\LearnerEnrollmentGuard::class)->assertCanEnroll($user, $course);
+        // Published and open like every other program; capacity does not apply, because this flow IS the waitlist.
+        app(\App\Services\EnrollmentAvailability::class)->assertOpen($course, $user->id, checkCapacity: false);
+
         // Check if already registered
         $existing = Registration::where('user_id', $user->id)->where('course_id', $request->course_id)->first();
         if ($existing) {

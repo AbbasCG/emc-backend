@@ -367,10 +367,12 @@ class AdminUserController extends Controller
         $newThisMonth  = User::where('created_at', '>=', $thisMonthStart)->count();
         $newLastMonth  = User::whereBetween('created_at', [$prevMonthStart, $prevMonthEnd])->count();
 
-        $totalStudents    = User::where('role', 'student')->count();
-        $activeStudents   = User::where('role', 'student')->where('is_active', true)->count();
-        $studNewThisMonth = User::where('role', 'student')->where('created_at', '>=', $thisMonthStart)->count();
-        $studNewLastMonth = User::where('role', 'student')->whereBetween('created_at', [$prevMonthStart, $prevMonthEnd])->count();
+        // «الطلاب» here means people LEARNING on the platform (students plus anyone actually enrolled, whatever their role).
+        $learners         = app(\App\Services\LearnerCounts::class);
+        $totalStudents    = $learners->total();
+        $activeStudents   = $learners->active();
+        $studNewThisMonth = $learners->newBetween($thisMonthStart, $now);
+        $studNewLastMonth = $learners->newBetween($prevMonthStart, $prevMonthEnd);
 
         $totalRegs    = Registration::count();
         $pendingRegs  = Registration::where(function ($q) {
@@ -430,8 +432,7 @@ class AdminUserController extends Controller
             $months[] = [
                 'key'           => $d->format('Y-m'),
                 'label'         => $d->locale('ar')->isoFormat('MMM'),
-                'students'      => User::where('role', 'student')
-                                    ->whereBetween('created_at', [$start, $end])->count(),
+                'students'      => app(\App\Services\LearnerCounts::class)->newBetween($start, $end),
                 'registrations' => Registration::whereBetween('created_at', [$start, $end])->count(),
             ];
         }

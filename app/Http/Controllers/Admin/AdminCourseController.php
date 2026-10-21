@@ -38,7 +38,8 @@ class AdminCourseController extends Controller
     public function index(Request $request): JsonResponse
     {
         $query = Course::with(['instructor.user', 'track', 'department'])
-            ->withCount(['registrations', 'activeRegistrations']);
+            ->withCount(['registrations', 'activeRegistrations'])
+            ->withSeatsTaken();
 
         if ($request->filled('status')) {
             $query->where('status', $request->query('status'));
@@ -953,6 +954,11 @@ class AdminCourseController extends Controller
                 ? $this->formatFinanceApproval($course->financeApproval)
                 : null,
             'registrations_count'      => $course->registrations_count ?? 0,
+            // The CANONICAL capacity figures (the same definition enrollment enforces and every public indicator uses): access-granting
+            // registrations plus pending-payment reservations, cancelled rows excluded. Use these, not the counts above, for "seats".
+            'seats_taken'              => $course->seatsTaken(),
+            'seats_remaining'          => $course->seatsRemaining(),
+            'is_full'                  => $course->seatsRemaining() !== null && $course->seatsRemaining() <= 0,
             // Registrations that genuinely count as enrolled (Registration::scopeActiveEnrollment):
             // excludes pending_payment, cancelled, and no_show rows. This — not the raw
             // registrations_count above — is the correct "تسجيلات" figure for a paid course,
@@ -1104,6 +1110,13 @@ class AdminCourseController extends Controller
     private function assignCourseToPath(int $learningPathId, int $courseId): void
     {
         DB::transaction(function () use ($learningPathId, $courseId) {
+            // The path's instructor is about to be put in front of this course's learners (and inherited as the course's instructor):
+            // checked first, under the course and path locks.
+            $pathInstructor = \App\Models\LearningPath::query()->whereKey($learningPathId)->value('instructor_id');
+            if ($pathInstructor) {
+                app(\App\Services\LearnerEnrollmentGuard::class)->assertMayTeach((int) $pathInstructor, [$courseId], $learningPathId);
+            }
+
             // Remove existing membership (a course belongs to one path at a time)
             LearningPathItem::where('course_id', $courseId)
                 ->where('learning_path_id', '!=', $learningPathId)

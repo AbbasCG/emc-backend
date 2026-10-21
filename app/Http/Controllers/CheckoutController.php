@@ -12,6 +12,7 @@ use App\Models\Registration;
 use App\Models\StudentProgress;
 use App\Services\AuditLogService;
 use App\Services\CouponValidationService;
+use App\Services\LearnerEnrollmentGuard;
 use App\Support\PaymentStatuses;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
@@ -32,20 +33,26 @@ class CheckoutController extends Controller
     {
         $user = $request->user();
 
+        // A payment already received and under financial review is answered first, and is never paid a second time: the person paid
+        // and must not be told off (an instructor conflict) or asked to pay again.
+        if (\App\Models\PaymentReconciliation::query()->where('user_id', $user->id)->where('course_id', $course->id)
+            ->where('status', \App\Models\PaymentReconciliation::STATUS_OPEN)->exists()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'تم استلام دفعتك وهي قيد المراجعة المالية. لا حاجة لدفع مرة أخرى، وسنتواصل معك.',
+                'code'    => 'payment_under_review',
+            ], 409);
+        }
+
+        // Learning is open to every account; teaching the course is the one thing that rules it out.
+        app(LearnerEnrollmentGuard::class)->assertCanEnroll($user, $course);
+
         $courseIsPaid = ($course->is_paid ?? false) || $course->type === 'paid';
         if (! $courseIsPaid) {
             return response()->json([
                 'success' => false,
                 'message' => 'هذه الدورة مجانية ولا تتطلب دفعًا.',
                 'code'    => 'course_not_paid',
-            ], 422);
-        }
-
-        if (! $course->registration_open) {
-            return response()->json([
-                'success' => false,
-                'message' => 'التسجيل مغلق لهذه الدورة.',
-                'code'    => 'registration_closed',
             ], 422);
         }
 
@@ -95,6 +102,11 @@ class CheckoutController extends Controller
             ], 422);
         }
 
+        // A NEW paid enrollment needs the same open / published / not-ended / not-full program as a free one (and is checked again
+        // under a lock below). Someone already enrolled got their answer above, whatever has happened to the program since.
+        $availability = app(\App\Services\EnrollmentAvailability::class);
+        $availability->assertOpen($course, $user->id);
+
         // The frontend may only ever send a code — never an amount, a
         // percentage, or a finance account. Every price in this method is
         // computed server-side from the coupon row itself.
@@ -128,7 +140,12 @@ class CheckoutController extends Controller
         try {
             $couponRaceLost = false;
 
-            $result = DB::transaction(function () use ($user, $course, $coupon, $pricing, $existingRegistration, &$couponRaceLost) {
+            $result = DB::transaction(function () use ($user, $course, $coupon, $pricing, $existingRegistration, $availability, &$couponRaceLost) {
+                $locked = $availability->lockAndAssertOpen($course, $user->id);
+                // Re-checked under the course lock: an instructor assigned a moment ago is seen, and an assignment that arrives
+                // next waits for this registration (see GuardsInstructorAssignment).
+                app(LearnerEnrollmentGuard::class)->assertCanEnroll($user, $locked);
+
                 // Re-check the coupon's usage limit under a row lock, inside
                 // the same transaction that will create the reservation —
                 // this is what makes the "last remaining use, two concurrent
@@ -351,6 +368,9 @@ class CheckoutController extends Controller
                 'free'         => $result['free'],
                 'code'         => $result['free'] ? 'enrollment_completed' : 'checkout_session_created',
             ], $result['free'] ? 200 : 200);
+        } catch (\App\Exceptions\EnrollmentUnavailableException $e) {
+            // The program filled up, closed or ended between the check above and the locked re-check: a clean refusal, not a failure.
+            return $e->render();
         } catch (StripeApiException $e) {
             Log::error('Stripe API error during checkout', [
                 'course_id' => $course->id,

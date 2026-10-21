@@ -205,8 +205,8 @@ Route::get('/team', [\App\Http\Controllers\TeamController::class, 'index'])->mid
 // ─── Public: Expert & Instructor Application ──────────────────────────────────
 Route::post('/expert-applications', [\App\Http\Controllers\Public\PublicExpertApplicationController::class, 'store'])->middleware('throttle:api');
 
-// ─── Student LMS (auth:sanctum + role:student) ─────────────────────────────────
-Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(function () {
+// ─── Student LMS (auth:sanctum + learner: any authenticated active account, learning is not a role) ─────────────────────────────────
+Route::prefix('student')->middleware(['auth:sanctum', 'learner'])->group(function () {
     Route::get('/dashboard',     StudentDashboardController::class);
     Route::get('/sessions',      [StudentSessionController::class, 'index']);
     Route::get('/sessions/calendar', [StudentSessionController::class, 'calendar']);
@@ -282,8 +282,8 @@ Route::prefix('student')->middleware(['auth:sanctum', 'role:student'])->group(fu
 
 // ─── Generic dashboard alias: GET /api/dashboard ─────────────────────────────
 // Serves the student dashboard. Authenticated students only.
-// The student frontend calls this URL; role check is enforced via auth:sanctum + role:student.
-Route::middleware(['auth:sanctum', 'role:student'])
+// The learner frontend calls this URL; entry is auth:sanctum + learner (no role required).
+Route::middleware(['auth:sanctum', 'learner'])
     ->get('/dashboard', \App\Http\Controllers\Student\StudentDashboardController::class);
 
 // ─── Protected material delivery (auth:sanctum, policy-guarded) ──────────────
@@ -619,14 +619,14 @@ Route::post('/register', [RegistrationController::class, 'store'])
 Route::post('/courses/{course}/register', [RegistrationController::class, 'storeForCourse'])
     ->middleware(['throttle:registration', 'optional.sanctum']);
 
-// Paid course checkout — student only
+// Paid course checkout — any authenticated learner; an instructor of the course is refused inside the controller
 Route::post('/courses/{course}/checkout', [CheckoutController::class, 'checkout'])
-    ->middleware(['auth:sanctum', 'role:student', 'throttle:payments']);
+    ->middleware(['auth:sanctum', 'learner', 'throttle:payments']);
 
 // Coupon preview — validates and previews pricing only, never consumes usage.
 // throttle:payments (10/min/user) reused to blunt brute-force code enumeration.
 Route::post('/courses/{course}/coupon/validate', [\App\Http\Controllers\Student\CouponController::class, 'validate'])
-    ->middleware(['auth:sanctum', 'role:student', 'throttle:payments']);
+    ->middleware(['auth:sanctum', 'learner', 'throttle:payments']);
 
 // ─── Workshop Request Submission (throttle:workshop — 5 req/min per IP) ──────
 Route::post('/workshop-requests', [WorkshopRequestController::class, 'store'])
@@ -2042,8 +2042,8 @@ Route::middleware(['throttle:api', 'optional.sanctum'])->group(function () {
     Route::get('/learning-paths/{slug}', [\App\Http\Controllers\Admin\AdminLearningPathController::class, 'publicShow']);
 });
 
-// ─── Learning Path enrollment & status (auth:sanctum + role:student) ─────────
-Route::middleware(['auth:sanctum', 'role:student'])->group(function () {
+// ─── Learning Path enrollment & status (auth:sanctum + learner) ─────────
+Route::middleware(['auth:sanctum', 'learner'])->group(function () {
     Route::post('/learning-paths/{slug}/enroll',             [\App\Http\Controllers\Student\StudentLearningPathController::class, 'enroll']);
     Route::post('/learning-paths/{slug}/checkout',           [\App\Http\Controllers\LearningPathCheckoutController::class, 'checkout'])
         ->middleware('throttle:payments');

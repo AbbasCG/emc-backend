@@ -13,6 +13,18 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class LearningPath extends Model
 {
+    use \App\Models\Concerns\GuardsInstructorAssignment;
+
+    protected function instructorConflictScope(): array
+    {
+        if (! $this->exists) {
+            return ['courses' => [], 'path' => null];
+        }
+
+        // The learners of the path itself, and of any course in it.
+        return ['courses' => $this->courses()->pluck('courses.id')->map(fn ($id) => (int) $id)->all(), 'path' => (int) $this->id];
+    }
+
     use Auditable, HasFactory, SoftDeletes;
 
     protected $fillable = [
