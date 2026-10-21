@@ -21,6 +21,8 @@ class OrderResource extends JsonResource
             'payment_provider'            => $this->payment_provider,
             'provider_payment_intent_id'  => $this->provider_payment_intent_id,
             'paid_at'                     => $this->paid_at?->toDateTimeString(),
+            // Only where the endpoint computed it (the learner's own orders): paid, but the enrollment awaits a financial review.
+            'payment_under_review'        => $this->when(array_key_exists('payment_under_review', $this->resource->getAttributes()), fn () => (bool) $this->payment_under_review),
             'created_at'                  => $this->created_at?->toDateTimeString(),
             'course' => $this->whenLoaded('course', fn () => [
                 'id'    => $this->course?->id,

@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\OrderResource;
 use App\Models\Invoice;
 use App\Models\Order;
+use App\Models\PaymentReconciliation;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -15,7 +16,16 @@ class StudentOrderController extends Controller
     public function index(Request $request): JsonResponse
     {
         $orders = Order::with(['course', 'invoice'])
+            // `payment_under_review`: the money arrived but the enrollment is withheld for a financial review. The checkout return page
+            // must say so instead of "you are enrolled".
+            ->withExists(['reconciliations as payment_under_review' => fn ($q) => $q->where('status', PaymentReconciliation::STATUS_OPEN)])
             ->where('user_id', $request->user()->id)
+            // The checkout return page asks about ITS session only (it used to read whatever order happened to be paid).
+            ->when($request->filled('session_id'), function ($q) use ($request) {
+                $sid = (string) $request->query('session_id');
+                $q->where(fn ($w) => $w->where('provider_session_id', $sid)
+                    ->orWhereHas('payments', fn ($p) => $p->where('provider_payment_id', $sid)));
+            })
             ->latest()
             ->get();
 
@@ -31,7 +41,8 @@ class StudentOrderController extends Controller
             return response()->json(['success' => false, 'message' => 'غير مصرح.'], 403);
         }
 
-        $order->load(['course', 'invoice', 'payments']);
+        $order->load(['course', 'invoice', 'payments'])
+            ->loadExists(['reconciliations as payment_under_review' => fn ($q) => $q->where('status', PaymentReconciliation::STATUS_OPEN)]);
 
         return response()->json([
             'success' => true,

@@ -1494,6 +1494,9 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
 // ─── Finance aliases (frontend uses /finance/*, backend uses /admin/finance/*) ─
 // finance_manager role has full finance permissions (VIEW_PAYMENTS, MANAGE_PAYMENTS, etc.)
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_manager'])->prefix('finance')->group(function () {
+    // Confirmed payments whose enrollment was withheld (the payer teaches what they paid for): list and settle. Never moves money.
+    Route::get('payment-reconciliations',                           [\App\Http\Controllers\Admin\PaymentReconciliationController::class, 'index']);
+    Route::post('payment-reconciliations/{reconciliation}/resolve', [\App\Http\Controllers\Admin\PaymentReconciliationController::class, 'resolve']);
     Route::get('dashboard',               [FinanceController::class,    'overview']);
     Route::get('payments',                [FinanceController::class,    'payments']);
     Route::get('transactions',            [FinanceController::class,    'transactions']);

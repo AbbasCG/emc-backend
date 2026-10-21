@@ -67,6 +67,12 @@ class Order extends Model
         return $this->hasMany(Payment::class);
     }
 
+    /** Open items waiting for a financial decision on this order (money received, enrollment withheld). */
+    public function reconciliations(): HasMany
+    {
+        return $this->hasMany(PaymentReconciliation::class);
+    }
+
     public function invoice(): HasOne
     {
         return $this->hasOne(Invoice::class);

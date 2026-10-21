@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Enums\RegistrationStatus;
 use App\Mail\PaymentConfirmedMail;
 use App\Models\Coupon;
+use App\Models\Course;
 use App\Models\CouponUsage;
 use App\Models\FinanceAccount;
 use App\Models\FinanceAccountTransaction;
@@ -12,10 +13,14 @@ use App\Models\Invoice;
 use App\Models\LearningPathEnrollment;
 use App\Models\Order;
 use App\Models\Payment;
+use App\Models\PaymentReconciliation;
+use App\Models\PlatformNotification;
 use App\Models\Registration;
 use App\Models\StudentProgress;
+use App\Models\User;
 use App\Services\AuditLogService;
 use App\Services\EmailService;
+use App\Services\LearnerEnrollmentGuard;
 use App\Services\LearningPathEnrollmentService;
 use App\Services\NotificationService;
 use App\Services\Payments\StripePaymentMethodResolver;
@@ -187,11 +192,31 @@ class StripeWebhookController extends Controller
         $pathActivated = false;
         $payment      = null;
         $shouldMail   = false;
+        $held         = null; // PaymentReconciliation, when the money is kept but the enrollment cannot be granted
+        $redelivered  = null; // an open PaymentReconciliation found on a redelivery (its notifications are re-announced)
+
+        // What to lock is worked out BEFORE the transaction: a plain read inside it would fix the snapshot ahead of the locks (MariaDB
+        // REPEATABLE READ) and the conflict check below would then read the world as it was before a concurrent assignment committed.
+        $lockIds  = $courseId > 0 ? [$courseId] : [];
+        $lockPath = null;
+        if ($pathEnrollmentId > 0) {
+            $lockPath = LearningPathEnrollment::query()->whereKey($pathEnrollmentId)->value('learning_path_id');
+            if ($lockPath !== null) {
+                $lockPath = (int) $lockPath;
+                $lockIds = array_merge($lockIds, app(LearnerEnrollmentGuard::class)->pathCourseIds($lockPath));
+            }
+        }
 
         DB::transaction(function () use (
-            $session, $sessionId, $orderId, $registrationId, $pathEnrollmentId,
-            &$order, &$registration, &$pathEnrollment, &$pathActivated, &$payment, &$shouldMail
+            $session, $sessionId, $orderId, $registrationId, $pathEnrollmentId, $lockIds, $lockPath,
+            &$order, &$registration, &$pathEnrollment, &$pathActivated, &$payment, &$shouldMail, &$held, &$redelivered
         ) {
+            // ── Serialize with instructor assignments ─────────────────────────
+            // Lock the course rows FIRST (ascending id), then the path row, before the order and the registration: the same order
+            // every other writer uses, so the assignment of an instructor and this confirmation cannot both succeed. Whichever
+            // commits second sees the other's result (see GuardsInstructorAssignment).
+            app(LearnerEnrollmentGuard::class)->lockForEnrollment($lockIds, $lockPath);
+
             // ── Primary lookup: metadata IDs are the canonical source ─────────
             if ($orderId > 0) {
                 $order = Order::lockForUpdate()->find($orderId);
@@ -225,19 +250,19 @@ class StripeWebhookController extends Controller
                     'order_id'   => $order->id,
                     'session_id' => $sessionId,
                 ]);
+                // A redelivery of a payment that was held for review: nothing is changed, but if the first delivery died before its
+                // notifications were stored they are sent now (they are de-duplicated by idempotency key, so this never doubles them).
+                $redelivered = PaymentReconciliation::query()->where('order_id', $order->id)->where('status', PaymentReconciliation::STATUS_OPEN)->first();
                 return;
             }
 
-            // ── Locate payment: order_id → registration_id → session id ───────
-            $payment = Payment::where(function ($q) use ($orderId, $registrationId, $sessionId) {
-                if ($orderId > 0) {
-                    $q->orWhere('order_id', $orderId);
-                }
-                if ($registrationId > 0) {
-                    $q->orWhere('registration_id', $registrationId);
-                }
-                $q->orWhere('provider_payment_id', $sessionId);
-            })->lockForUpdate()->first();
+            // ── Locate payment: the exact session first, then the order, then the registration ───────────
+            // Most specific first, and the NEWEST row of the broader matches: after a failed attempt and a retry, one registration has
+            // several payments, and picking the old failed one would give it the new session id (a unique-key violation, a 500, and a
+            // customer who paid but is not enrolled).
+            $payment = Payment::where('provider_payment_id', $sessionId)->lockForUpdate()->first()
+                ?? ($orderId > 0 ? Payment::where('order_id', $orderId)->latest('id')->lockForUpdate()->first() : null)
+                ?? ($registrationId > 0 ? Payment::where('registration_id', $registrationId)->latest('id')->lockForUpdate()->first() : null);
 
             Log::info('Stripe payment found', [
                 'payment'        => $payment?->id,
@@ -259,8 +284,16 @@ class StripeWebhookController extends Controller
                     'payment_id' => $payment->id,
                     'session_id' => $sessionId,
                 ]);
+                $redelivered = PaymentReconciliation::query()->where('payment_id', $payment->id)->where('status', PaymentReconciliation::STATUS_OPEN)->first();
                 return;
             }
+
+            // ── Can the payer still be enrolled? ──────────────────────────────
+            // Checkout refuses an instructor of the program, but an account can be ASSIGNED to teach it after it started paying. The
+            // money is real and is recorded below exactly as for any payment; what is withheld is the enrollment, so a person never
+            // gets learner access to what they teach. The open item is recorded for somebody to settle (PaymentReconciliation).
+            // Nothing is refunded or cancelled here.
+            $conflict = $this->instructorConflict($registration, $pathEnrollment);
 
             // ── Resolve the ACTUAL payment method used (never the frontend's
             //    selection, never the session's offered `payment_method_types`
@@ -313,7 +346,7 @@ class StripeWebhookController extends Controller
             }
 
             // ── Update registration ───────────────────────────────────────────
-            if ($registration) {
+            if ($registration && $conflict === null) {
                 $registration->update(['status' => RegistrationStatus::REGISTERED->value]);
                 $registration->load('course.instructor', 'course.features', 'course.track');
 
@@ -331,7 +364,7 @@ class StripeWebhookController extends Controller
                 }
             }
 
-            if ($pathEnrollment && $order?->type === 'learning_path') {
+            if ($pathEnrollment && $order?->type === 'learning_path' && $conflict === null) {
                 $pathActivated = ! in_array($pathEnrollment->status, ['active', 'completed'], true);
                 $pathEnrollment = $this->learningPathEnrollments->activate($pathEnrollment);
             }
@@ -396,7 +429,24 @@ class StripeWebhookController extends Controller
                 }
             }
 
-            $shouldMail = true;
+            if ($conflict !== null) {
+                $held = PaymentReconciliation::firstOrCreate(
+                    ['payment_id' => $payment->id],
+                    [
+                        'order_id'                    => $order?->id,
+                        'registration_id'             => $registration?->id,
+                        'learning_path_enrollment_id' => $pathEnrollment?->id,
+                        'user_id'                     => $conflict['user_id'],
+                        'course_id'                   => $conflict['course_id'],
+                        'learning_path_id'            => $conflict['learning_path_id'],
+                        'reason'                      => PaymentReconciliation::REASON_INSTRUCTOR_CONFLICT,
+                        'status'                      => PaymentReconciliation::STATUS_OPEN,
+                        'details'                     => ['session_id' => $sessionId, 'amount' => (float) $payment->amount, 'currency' => $order?->currency],
+                    ],
+                );
+            }
+
+            $shouldMail = $conflict === null;
 
             Log::info('Stripe payment processed', [
                 'order'        => $order?->id,
@@ -405,6 +455,22 @@ class StripeWebhookController extends Controller
                 'session_id'   => $sessionId,
             ]);
         });
+
+        if ($held !== null && $payment) {
+            $this->announceHold($held, $payment, recorded: true);
+
+            return;
+        }
+
+        if ($redelivered !== null && $this->notificationsMissing($redelivered)) {
+            $this->announceHold($redelivered, $redelivered->payment()->first() ?? $payment, recorded: false);
+
+            return;
+        }
+
+        if ($redelivered !== null) {
+            return;
+        }
 
         if (! $shouldMail || ! $payment) {
             return;
@@ -447,17 +513,89 @@ class StripeWebhookController extends Controller
 
     // ─────────────────────────────────────────────────────────────────────────
 
+    /**
+     * @return array{user_id: int, course_id: ?int, learning_path_id: ?int}|null set when the payer teaches what they paid for
+     */
+    private function instructorConflict(?Registration $registration, ?LearningPathEnrollment $pathEnrollment): ?array
+    {
+        $guard = app(LearnerEnrollmentGuard::class);
+
+        if ($registration && $registration->user_id && $registration->course_id) {
+            $user = User::find($registration->user_id);
+            $course = Course::find($registration->course_id);
+            if ($user && $course && $guard->teachesCourse($user, $course)) {
+                return ['user_id' => $user->id, 'course_id' => $course->id, 'learning_path_id' => null];
+            }
+        }
+
+        if ($pathEnrollment && $pathEnrollment->user_id) {
+            $user = User::find($pathEnrollment->user_id);
+            $path = $pathEnrollment->learningPath()->first();
+            if ($user && $path && $guard->teachesLearningPath($user, $path)) {
+                return ['user_id' => $user->id, 'course_id' => null, 'learning_path_id' => $path->id];
+            }
+        }
+
+        return null;
+    }
+
+    /** Tells the payer their payment arrived and is being reviewed, and the people who settle it that there is an open item. */
+    /**
+     * Whether a redelivery should re-send the two reconciliation notifications: only for a case old enough that its own first
+     * delivery has long finished announcing (deliveries arriving together must not all announce at once: they would race to insert
+     * the same de-duplicated rows) and only when one of the two is actually missing.
+     */
+    private function notificationsMissing(PaymentReconciliation $held): bool
+    {
+        if ($held->created_at === null || $held->created_at->gt(now()->subMinute())) {
+            return false;
+        }
+
+        $payerKey = 'payment_under_review:'.$held->payment_id;
+        $staffKey = 'payment_reconciliation:'.$held->id;
+
+        return ! PlatformNotification::query()->where('type', 'payment_under_review')->where('idempotency_key', $payerKey)->exists()
+            || ! PlatformNotification::query()->where('type', 'payment_reconciliation_required')->where('idempotency_key', $staffKey)->exists();
+    }
+
+    /**
+     * @param  bool  $recorded  true on the delivery that opened the case (audit + log once); false on a redelivery, which only re-sends
+     *                          the notifications (idempotency keys make that a no-op when they already exist).
+     */
+    private function announceHold(PaymentReconciliation $held, ?Payment $payment, bool $recorded): void
+    {
+        if ($payment === null) {
+            return;
+        }
+
+        if ($recorded) {
+            AuditLogService::log('payment_held_for_reconciliation', 'Payment', $payment->id, null, null, [
+                'reconciliation_id' => $held->id,
+                'reason'            => $held->reason,
+                'course_id'         => $held->course_id,
+                'user_id'           => $held->user_id,
+            ]);
+            Log::warning('Stripe payment confirmed but enrollment withheld (instructor conflict)', ['payment' => $payment->id, 'reconciliation' => $held->id]);
+        }
+
+        $staff = User::whereIn('role', ['admin', 'super_admin', 'finance_manager'])->where('is_active', true)->pluck('id')->all();
+        NotificationService::send($staff, 'payment_reconciliation_required', 'دفعة تحتاج مراجعة',
+            'وصلت دفعة مؤكَّدة لبرنامج يُدرّسه الدافع نفسه، فلم يُفعَّل التسجيل. راجع بند التسوية.',
+            ['entity_type' => 'payment_reconciliation', 'entity_id' => $held->id, 'idempotency_key' => 'payment_reconciliation:'.$held->id, 'icon' => 'alert-triangle', 'color' => 'amber']);
+
+        NotificationService::send($held->user_id, 'payment_under_review', 'تم استلام دفعتك',
+            'استلمنا دفعتك وهي قيد المراجعة من فريق المالية. سنتواصل معك بخصوصها.',
+            ['entity_type' => 'payment', 'entity_id' => $payment->id, 'idempotency_key' => 'payment_under_review:'.$payment->id]);
+    }
+
     private function handleFailed(string $sessionId, array $meta): void
     {
         $orderId = (int) ($meta['order_id'] ?? 0);
 
         DB::transaction(function () use ($sessionId, $orderId) {
-            $payment = Payment::where(function ($q) use ($sessionId, $orderId) {
-                $q->where('provider_payment_id', $sessionId);
-                if ($orderId > 0) {
-                    $q->orWhere('order_id', $orderId);
-                }
-            })->lockForUpdate()->first();
+            // The exact session first (a late event for an old attempt must not touch the newer one), then the order's latest payment.
+            $payment = Payment::where('provider_payment_id', $sessionId)->lockForUpdate()->first()
+                ?? ($orderId > 0 ? Payment::where('order_id', $orderId)->latest('id')->lockForUpdate()->first() : null);
 
             if (! $payment || $payment->status === PaymentStatuses::CONFIRMED) {
                 return;
