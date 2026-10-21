@@ -37,7 +37,10 @@ Thumbs.db
 
 /..gitattributes
 
-docs/
+# docs/ stays ignored except the notification architecture documents: Ticket8ChannelPolicyTest / Ticket8CompletionTest read
+# docs/architecture/NOTIFICATION_EVENT_MATRIX.md, so it must exist on a clean clone.
+docs/*
+!docs/architecture/
 
 database/schema/mysql-schema.sql.bak
 database/schema/mysql-schema.sql
