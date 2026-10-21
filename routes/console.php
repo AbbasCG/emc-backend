@@ -17,6 +17,12 @@ Schedule::command('emc:prune-notifications --days=90')
     ->runInBackground()
     ->appendOutputTo(storage_path('logs/scheduler.log'));
 
+// Delete the private files of expired form-response exports (kept 24 hours) — hourly
+Schedule::command('forms:purge-exports')
+    ->hourly()
+    ->withoutOverlapping()
+    ->appendOutputTo(storage_path('logs/scheduler.log'));
+
 // Prune failed jobs older than 7 days — runs every Sunday at 03:00
 Schedule::command('queue:prune-failed --hours=168')
     ->weeklyOn(0, '03:00')

@@ -190,6 +190,9 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(\App\Models\ManualExpense::class, \App\Policies\ManualExpensePolicy::class);
         Gate::policy(\App\Models\ManualRevenue::class, \App\Policies\ManualRevenuePolicy::class);
         Gate::policy(ProductUpdate::class, ProductUpdatePolicy::class);
+
+        // Dynamic forms: form-level and department-level authorization.
+        Gate::policy(DynamicForm::class, \App\Policies\DynamicFormPolicy::class);
     }
 
     /**
@@ -241,6 +244,15 @@ class AppServiceProvider extends ServiceProvider
         // Workshop request submissions (legacy named limiter kept for backward compat)
         RateLimiter::for('workshop', function (Request $request) {
             return Limit::perMinute(5)->by($request->ip());
+        });
+
+        // Public form submissions — per form per IP, plus an hourly ceiling per IP. Separate from the general api
+        // bucket so reading forms never uses up the submission allowance (and a flood of submissions never blocks reads).
+        RateLimiter::for('form_submissions', function (Request $request) {
+            return [
+                Limit::perMinute(10)->by('form-submit:'.$request->route('slug').'|'.$request->ip()),
+                Limit::perHour(60)->by('form-submit-ip:'.$request->ip()),
+            ];
         });
 
         // Contact form — 3 req/min per IP

@@ -48,6 +48,12 @@ use App\Http\Controllers\Admin\DepartmentController;
 use App\Http\Controllers\Admin\EmailLogsController;
 use App\Http\Controllers\Admin\EmailSettingsController;
 use App\Http\Controllers\Admin\DynamicFormController;
+use App\Http\Controllers\Admin\FormCollaboratorController;
+use App\Http\Controllers\Admin\FormLifecycleController;
+use App\Http\Controllers\Admin\FormSharingController;
+use App\Http\Controllers\Admin\FormResponseController;
+use App\Http\Controllers\Admin\FormExportController;
+use App\Http\Controllers\Admin\FormVersionController;
 use App\Http\Controllers\Admin\MarketingItemController;
 use App\Http\Controllers\Admin\MeetingController;
 use App\Http\Controllers\Admin\PartnerController;
@@ -715,10 +721,13 @@ Route::middleware(['auth:sanctum', 'role:admin,teacher'])->group(function () {
 });
 
 // ─── Public: Forms (any visitor can view active forms and submit) ─────────────
-Route::middleware('throttle:api')->group(function () {
-    Route::get('/forms/{slug}',        [PublicFormController::class, 'show']);
-    Route::post('/forms/{slug}/submit', [PublicFormController::class, 'submit']);
+Route::middleware(['optional.sanctum', 'throttle:api'])->group(function () {
+    Route::get('/forms/{slug}', [PublicFormController::class, 'show']);
 });
+// Submissions have their own limiter (per form + address, plus an hourly ceiling) so reading a form never uses up
+// the submission allowance. optional.sanctum signs the submission to the user when a valid token is sent.
+Route::post('/forms/{slug}/submit', [PublicFormController::class, 'submit'])
+    ->middleware(['optional.sanctum', 'throttle:form_submissions']);
 
 // ─── Public: Partnership requests (throttle:workshop recycled — 5 req/min) ────
 Route::post('/partnership-requests', [PublicPartnershipRequestController::class, 'store'])
@@ -938,14 +947,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     Route::post('meetings/{meeting}/action-items/{actionItem}/convert-to-task', [MeetingController::class, 'convertActionItemToTask']);
     Route::post('meetings/{meeting}/report',                             [MeetingController::class, 'storeReport']);
 
-    // Dynamic Forms (admin management)
-    Route::apiResource('forms', DynamicFormController::class);
-    Route::get('forms/{form}/questions',          [DynamicFormController::class, 'indexQuestions']);
-    Route::post('forms/{form}/questions',         [DynamicFormController::class, 'storeQuestion']);
-    Route::put('forms/{form}/questions/{question}', [DynamicFormController::class, 'updateQuestion']);
-    Route::delete('forms/{form}/questions/{question}', [DynamicFormController::class, 'destroyQuestion']);
-    Route::get('forms/{form}/submissions',        [DynamicFormController::class, 'submissions']);
-    Route::put('forms/{form}/submissions/{submission}/status', [DynamicFormController::class, 'updateSubmissionStatus']);
+    // Dynamic Forms: moved to their own route group below (see "Dynamic Forms"), which names the forms roles in one place.
 
     // Volunteers / HR
     Route::get('volunteers',                        [VolunteerController::class, 'index']);
@@ -1359,12 +1361,84 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     Route::post('tasks/{task}/comments',                               [TaskController::class,                    'storeComment']);
     Route::get('meetings',                                             [MeetingController::class,                 'index']);
     Route::get('meetings/{meeting}',                                   [MeetingController::class,                 'show']);
-    Route::get('forms',                                                [DynamicFormController::class,             'index']);
-    Route::get('forms/{form}',                                         [DynamicFormController::class,             'show']);
-    Route::get('forms/{form}/submissions',                             [DynamicFormController::class,             'submissions']);
-    Route::post('forms',                                               [DynamicFormController::class,             'store']);
-    Route::put('forms/{form}',                                         [DynamicFormController::class,             'update']);
+    // forms: moved to their own route group (see "Dynamic Forms"); this group's roles are unchanged for everything else.
     Route::patch('volunteers/{volunteer}',                             [VolunteerController::class,               'update']);
+});
+
+// ─── Dynamic Forms ───────────────────────────────────────────────────────────
+// The roles that may reach the forms screens are named ONCE (FormAccessService::ROLES) and only for forms: tasks, meetings and
+// the rest of the groups above keep their own lists. What a role may then do with a particular form is decided per form by
+// DynamicFormPolicy / FormAccessService (owner, collaborators, visibility, department), never by the role alone.
+Route::middleware(['auth:sanctum', 'role:'.implode(',', \App\Services\Forms\FormAccessService::ROLES)])->group(function () {
+    // Legacy admin-prefixed surface (Phase 0).
+    Route::prefix('admin')->group(function () {
+        Route::apiResource('forms', DynamicFormController::class);
+        Route::get('forms/{form}/questions',          [DynamicFormController::class, 'indexQuestions']);
+        Route::post('forms/{form}/questions',         [DynamicFormController::class, 'storeQuestion']);
+        Route::put('forms/{form}/questions/{question}', [DynamicFormController::class, 'updateQuestion']);
+        Route::delete('forms/{form}/questions/{question}', [DynamicFormController::class, 'destroyQuestion']);
+        Route::get('forms/{form}/submissions',        [FormResponseController::class, 'index']);
+        Route::put('forms/{form}/submissions/{submission}/status', [FormResponseController::class, 'updateStatus']);
+        Route::get('forms/{form}/submissions/{submission}/answers/{answer}/file', [DynamicFormController::class, 'downloadAnswerFile']);
+    });
+
+    // The surface the forms screens use.
+    Route::prefix('operations')->group(function () {
+        Route::get('forms',                    [DynamicFormController::class, 'index']);
+        Route::post('forms',                   [DynamicFormController::class, 'store']);
+        Route::get('forms/{form}',             [DynamicFormController::class, 'show']);
+        Route::put('forms/{form}',             [DynamicFormController::class, 'update']);
+        Route::get('forms/{form}/submissions', [FormResponseController::class, 'index']);
+        Route::get('forms/{form}/submissions/{submission}/answers/{answer}/file', [DynamicFormController::class, 'downloadAnswerFile']);
+
+        // Responses: detail, review workflow (status, assignment, internal notes, history), corrections
+        Route::get('forms/{form}/response-options',                              [FormResponseController::class, 'options']);
+        Route::get('forms/{form}/submissions/{submission}',                      [FormResponseController::class, 'show']);
+        Route::put('forms/{form}/submissions/{submission}/status',               [FormResponseController::class, 'updateStatus']);
+        Route::put('forms/{form}/submissions/{submission}/assignment',           [FormResponseController::class, 'assign']);
+        Route::get('forms/{form}/submissions/{submission}/notes',                [FormResponseController::class, 'notes']);
+        Route::post('forms/{form}/submissions/{submission}/notes',               [FormResponseController::class, 'addNote'])->middleware('throttle:60,1');
+        Route::get('forms/{form}/submissions/{submission}/history',              [FormResponseController::class, 'history']);
+        Route::put('forms/{form}/submissions/{submission}/answers',              [FormResponseController::class, 'correct'])->middleware('throttle:60,1');
+
+        // Exports of the responses (XLSX, CSV, PDF): allowed to whoever may read those responses, nobody else
+        Route::post('forms/{form}/exports',                                      [FormExportController::class, 'store'])->middleware('throttle:10,1');
+        Route::get('forms/{form}/exports/{export}',                              [FormExportController::class, 'show']);
+        Route::get('forms/{form}/exports/{export}/download',                     [FormExportController::class, 'download']);
+
+        // Publishing, availability, ownership
+        Route::post('forms/{form}/publish',     [FormLifecycleController::class, 'publish']);
+        Route::post('forms/{form}/close',       [FormLifecycleController::class, 'close']);
+        Route::post('forms/{form}/reopen',      [FormLifecycleController::class, 'reopen']);
+        Route::post('forms/{form}/unpublish',   [FormLifecycleController::class, 'unpublish']);
+        Route::post('forms/{form}/archive',     [FormLifecycleController::class, 'archive']);
+        Route::post('forms/{form}/unarchive',   [FormLifecycleController::class, 'unarchive']);
+        Route::get('forms/{form}/preview',      [FormLifecycleController::class, 'preview']);
+        Route::put('forms/{form}/settings',     [FormLifecycleController::class, 'settings']);
+        Route::post('forms/{form}/ownership',   [FormLifecycleController::class, 'ownership']);
+
+        // Versions
+        Route::get('forms/{form}/versions',                         [FormVersionController::class, 'index']);
+        Route::get('forms/{form}/versions/{version}',               [FormVersionController::class, 'show']);
+        Route::post('forms/{form}/versions/{version}/restore',      [FormVersionController::class, 'restore']);
+
+        // Sharing: links, access mode, invitations (reading: whoever may edit; changing: owner and platform admins)
+        Route::get('forms/{form}/sharing',                                  [FormSharingController::class, 'show']);
+        Route::put('forms/{form}/sharing',                                  [FormSharingController::class, 'updateAccess']);
+        Route::post('forms/{form}/share-links',                             [FormSharingController::class, 'storeLink'])->middleware('throttle:30,1');
+        Route::post('forms/{form}/share-links/{link}/revoke',               [FormSharingController::class, 'revokeLink']);
+        Route::get('forms/{form}/invitation-candidates',                    [FormSharingController::class, 'invitationCandidates'])->middleware('throttle:30,1');
+        Route::post('forms/{form}/invitations',                             [FormSharingController::class, 'invite']);
+        Route::post('forms/{form}/invitations/{invitation}/revoke',         [FormSharingController::class, 'revokeInvitation']);
+
+        // Collaborators and history
+        Route::get('forms/{form}/collaborator-candidates',          [FormCollaboratorController::class, 'candidates']);
+        Route::get('forms/{form}/collaborators',                    [FormCollaboratorController::class, 'index']);
+        Route::post('forms/{form}/collaborators',                   [FormCollaboratorController::class, 'store']);
+        Route::put('forms/{form}/collaborators/{collaborator}',     [FormCollaboratorController::class, 'update']);
+        Route::delete('forms/{form}/collaborators/{collaborator}',  [FormCollaboratorController::class, 'destroy']);
+        Route::get('forms/{form}/activity',                         [FormCollaboratorController::class, 'activity']);
+    });
 });
 
 
