@@ -118,6 +118,26 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->role === 'volunteer';
     }
 
+    public function isDepartmentMember(): bool
+    {
+        return $this->role === 'department_member';
+    }
+
+    public function isDepartmentManager(): bool
+    {
+        return in_array($this->role, [
+            'department_manager',
+            'ai_manager',
+            'strategy_planning_manager',
+            'digital_ambassadors_manager',
+            'advisors_manager',
+            'programs_manager',
+            'operations_manager',
+            'partnerships_manager',
+            'community_manager',
+        ], true);
+    }
+
     /**
      * Check if the user has one of the given role names.
      *

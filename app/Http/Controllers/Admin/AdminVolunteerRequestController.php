@@ -5,10 +5,14 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\VolunteerRequestResource;
 use App\Models\Department;
+use App\Models\TeamMember;
 use App\Models\TeamProfile;
+use App\Models\User;
 use App\Models\VolunteerRequest;
 use App\Services\AuditLogService;
 use App\Services\NotificationService;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -287,12 +291,35 @@ class AdminVolunteerRequestController extends Controller
                 ? (TeamProfile::where('department_id', $dept->id)->max('sort_order') ?? 0)
                 : (TeamProfile::whereNull('department_id')->max('sort_order') ?? 0);
 
-            // 5. Create team_profiles row with full data mapping.
+            // 5. Ensure user account exists and assign department_member role
+            $account = User::where('email', $volunteerRequest->email)->first();
+            if (! $account) {
+                $account = User::create([
+                    'name'       => $volunteerRequest->full_name,
+                    'email'      => $volunteerRequest->email,
+                    'password'   => Hash::make(Str::random(16)),
+                    'role'       => 'department_member',
+                    'phone'      => $volunteerRequest->phone,
+                    'country'    => $volunteerRequest->country,
+                    'city'       => $volunteerRequest->city,
+                    'gender'     => $volunteerRequest->gender,
+                    'department' => $dept ? ($dept->name_ar ?? $dept->name) : null,
+                    'is_active'  => true,
+                ]);
+            } elseif (in_array($account->role, ['student', 'volunteer'], true)) {
+                $account->update([
+                    'role'       => 'department_member',
+                    'department' => $dept ? ($dept->name_ar ?? $dept->name) : $account->department,
+                ]);
+            }
+
+            // 6. Create team_profiles row with full data mapping.
             $member = TeamProfile::create([
                 'department_id' => $dept?->id,
+                'user_id'       => $account->id,
                 'name_ar'       => $volunteerRequest->full_name,
-                'position_ar'   => 'متطوع',
-                'role_key'      => 'volunteer',
+                'position_ar'   => 'عضو إدارة',
+                'role_key'      => 'department_member',
                 'phone'         => $volunteerRequest->phone,
                 'email'         => $volunteerRequest->email,
                 'country'       => $volunteerRequest->country,
@@ -311,7 +338,23 @@ class AdminVolunteerRequestController extends Controller
                 'joined_at'     => now(),
             ]);
 
-            // 6. Stamp the volunteer request with conversion metadata.
+            // 7. Register membership & place in unassigned queue for department manager
+            if ($dept) {
+                $account->departments()->syncWithoutDetaching([$dept->id => ['is_primary' => true]]);
+                TeamMember::updateOrCreate(
+                    ['team_profile_id' => $member->id],
+                    [
+                        'user_id'       => $account->id,
+                        'department_id' => $dept->id,
+                        'section_id'    => null, // unassigned, waiting for manager to seat them
+                        'role_title'    => 'عضو إدارة',
+                        'status'        => 'active',
+                        'joined_at'     => now(),
+                    ]
+                );
+            }
+
+            // 8. Stamp the volunteer request with conversion metadata.
             $volunteerRequest->update([
                 'status'                 => 'converted_to_member',
                 'converted_to_member_at' => now(),
@@ -319,7 +362,7 @@ class AdminVolunteerRequestController extends Controller
                 'converted_by'           => $request->user()->id,
             ]);
 
-            // 7. Notify admins and department leader.
+            // 9. Notify admins and department leader.
             NotificationService::volunteerConvertedToMember(
                 $volunteerRequest->id,
                 $member->id,

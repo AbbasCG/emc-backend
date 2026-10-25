@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Department;
+use App\Models\TeamMember;
 use App\Models\TeamProfile;
 use App\Models\User;
 use App\Models\VolunteerHrProfile;
@@ -186,6 +187,25 @@ class VolunteerApprovalService
                 'team_profile_id' => $teamProfile->id,
                 'rejection_reason' => null,
             ]);
+
+            $targetUser = $user ?? ($locked->user_id ? User::find($locked->user_id) : null);
+            if ($targetUser && $department) {
+                if (in_array($targetUser->role, ['student', 'volunteer'], true)) {
+                    $targetUser->update(['role' => 'department_member']);
+                }
+                $targetUser->departments()->syncWithoutDetaching([$department->id => ['is_primary' => true]]);
+                TeamMember::updateOrCreate(
+                    ['team_profile_id' => $teamProfile->id],
+                    [
+                        'user_id'       => $targetUser->id,
+                        'department_id' => $department->id,
+                        'section_id'    => null, // unassigned, waiting for manager to seat them
+                        'role_title'    => $locked->job_title ?: 'عضو إدارة',
+                        'status'        => 'active',
+                        'joined_at'     => now(),
+                    ]
+                );
+            }
 
             return ['profile' => $locked->fresh(), 'team_profile' => $teamProfile];
         });

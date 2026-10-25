@@ -1556,6 +1556,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_ma
     ->group(function () {
         Route::get('chart-of-accounts',               [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'tree']);
         Route::get('chart-of-accounts/suggest-code',  [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'suggestCode']);
+        Route::get('accounts/defaults',              [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'defaults']);
         Route::get('accounts',                        [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'index']);
         Route::post('accounts',                       [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'store']);
         Route::put('accounts/{id}',                   [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'update']);
@@ -1570,6 +1571,9 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_ma
 
         // Manual Revenues (سندات القبض والإيرادات اليدوية)
         Route::get('revenues/suggest-receipt-no',     [\App\Http\Controllers\Admin\RevenueController::class, 'suggestReceiptNo']);
+        Route::get('revenues/paid-courses',           [\App\Http\Controllers\Admin\RevenueController::class, 'getPaidCourses']);
+        Route::get('revenues/cashbox-balance',        [\App\Http\Controllers\Admin\RevenueController::class, 'getCashboxBalance']);
+        Route::get('revenues/course-students/{courseId}', [\App\Http\Controllers\Admin\RevenueController::class, 'getCourseStudentsPendingPayment']);
         Route::apiResource('revenues',                 \App\Http\Controllers\Admin\RevenueController::class);
         Route::get('revenues/{revenue}/attachment',         [\App\Http\Controllers\Admin\RevenueController::class, 'downloadAttachment'])->name('revenues.attachment.download');
         Route::get('revenues/{revenue}/attachment/preview', [\App\Http\Controllers\Admin\RevenueController::class, 'previewAttachment'])->name('revenues.attachment.preview');
@@ -1797,7 +1801,7 @@ Route::middleware(['auth:sanctum'])->get('job-titles', [\App\Http\Controllers\Jo
 // endpoint (role:hr_manager,admin,super_admin,tech_admin) — the volunteer
 // applicant filling out this form is ordinarily none of those roles, and
 // reusing that endpoint here silently 403'd their department dropdown.
-Route::middleware(['auth:sanctum'])->get('departments/options', function () {
+Route::get('departments/options', function () {
     return response()->json([
         'success' => true,
         'data' => \App\Models\Department::active()->where('is_active', true)->orderBy('sort_order')->orderBy('id')->get(['id', 'name_ar', 'name']),

@@ -10,16 +10,35 @@ class UserResource extends JsonResource
     public function toArray(Request $request): array
     {
         $departmentId = null;
+        $departmentName = null;
         if ($this->relationLoaded('departments') && $this->departments->count() > 0) {
-            $departmentId = $this->departments->where('pivot.is_primary', true)->first()->id ?? $this->departments->first()->id;
+            $primary = $this->departments->where('pivot.is_primary', true)->first() ?? $this->departments->first();
+            $departmentId = $primary->id;
+            $departmentName = $primary->name_ar ?? $primary->name;
         } elseif ($this->department) {
             if (is_numeric($this->department)) {
                 $departmentId = (int) $this->department;
+                $d = \App\Models\Department::find($departmentId);
+                $departmentName = $d?->name_ar ?? $d?->name;
             } else {
-                $dept = \App\Models\Department::where('slug', $this->department)->first();
-                if ($dept) $departmentId = $dept->id;
+                $dept = \App\Models\Department::where('slug', $this->department)->orWhere('name_ar', $this->department)->first();
+                if ($dept) {
+                    $departmentId = $dept->id;
+                    $departmentName = $dept->name_ar ?? $dept->name;
+                } else {
+                    $departmentName = $this->department;
+                }
             }
         }
+
+        $hasEnrolledCourses = \App\Models\Registration::where('user_id', $this->id)
+            ->whereIn('status', ['confirmed', 'active', 'completed', 'enrolled'])
+            ->exists() || \App\Models\ClassGroupStudent::where('user_id', $this->id)->exists();
+
+        $impactPointsBalance = (int) (
+            \App\Models\VolunteerPointAward::where('user_id', $this->id)->sum('points') -
+            \App\Models\VolunteerPointRedemption::where('user_id', $this->id)->sum('points')
+        );
 
         return [
             'id'                         => $this->id,
@@ -30,6 +49,9 @@ class UserResource extends JsonResource
             'role'                       => $this->effectiveRole(),
             'department'                 => $this->department,
             'department_id'              => $departmentId,
+            'department_name'            => $departmentName,
+            'has_enrolled_courses'       => $hasEnrolledCourses,
+            'impact_points_balance'      => $impactPointsBalance,
             'is_active'                  => $this->is_active ?? true,
             'city'                       => $this->city,
             'gender'                     => $this->gender,

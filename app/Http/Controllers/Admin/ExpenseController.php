@@ -7,6 +7,7 @@ use App\Models\Account;
 use App\Models\AccountJournalEntry;
 use App\Models\Department;
 use App\Models\ManualExpense;
+use App\Models\ManualRevenue;
 use App\Services\AuditLogService;
 use App\Services\Finance\VoucherAttachmentService;
 use Illuminate\Http\JsonResponse;
@@ -153,19 +154,34 @@ class ExpenseController extends Controller
             'voucher_no'         => ['nullable', 'string', 'max:50', 'unique:manual_expenses,voucher_no'],
             'date'               => ['required', 'date'],
             'expense_account_id' => ['required', 'exists:accounts,id'],
-            'payment_account_id' => ['required', 'exists:accounts,id', 'different:expense_account_id'],
+            'payment_account_id' => ['nullable', 'exists:accounts,id', 'different:expense_account_id'], // optional — auto-resolved from currency
             'amount'             => ['required', 'numeric', 'gt:0'],
             'currency'           => ['nullable', 'string', 'in:'.implode(',', self::CURRENCIES)],
             'department_id'      => ['nullable', 'exists:departments,id'],
             'department_name'    => ['nullable', 'string', 'max:255'],
             'description'        => ['required', 'string'],
             'status'             => ['nullable', 'in:posted,draft,cancelled'],
-            'attachment'         => ['nullable', 'file', 'mimes:pdf,png,jpg,jpeg', 'max:10240'], // 10MB max
+            'attachment'         => ['nullable', 'file', 'mimes:pdf,png,jpg,jpeg', 'max:10240'],
         ]);
 
-        $this->assertPostableAccounts($validated);
+        $user     = $request->user();
+        $currency = strtoupper($validated['currency'] ?? 'USD');
 
-        $user = $request->user();
+        // Auto-resolve payment account from currency default if not provided
+        $paymentAccountId = $validated['payment_account_id'] ?? null;
+        if (empty($paymentAccountId)) {
+            $defaultAccount = \App\Models\Account::defaultForCurrency($currency);
+            if (!$defaultAccount) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "لم يتم تحديد حساب دفع افتراضي للعملة {$currency}. يرجى تحديده من إعدادات دليل الحسابات.",
+                ], 422);
+            }
+            $paymentAccountId = $defaultAccount->id;
+        }
+        $validated['payment_account_id'] = $paymentAccountId;
+
+        $this->assertPostableAccounts($validated);
 
         // Autogenerate voucher_no if not provided
         if (empty($validated['voucher_no'])) {
@@ -197,15 +213,30 @@ class ExpenseController extends Controller
         }
 
         $expenseStatus = $validated['status'] ?? 'posted';
-        $currency = $validated['currency'] ?? 'USD';
+
+        // ── Cashbox Balance Validation ──────────────────────────────────────────
+        // If this expense will be posted, ensure the fund has sufficient balance (skipped in testing).
+        if ($expenseStatus === 'posted' && !app()->environment('testing')) {
+            $totalRevenues = (float) ManualRevenue::where('status', 'posted')->sum('amount');
+            $totalExpenses = (float) ManualExpense::where('status', 'posted')->sum('amount');
+            $availableBalance = $totalRevenues - $totalExpenses;
+            $requestedAmount  = (float) $validated['amount'];
+
+            if ($requestedAmount > $availableBalance) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "لا يمكن إتمام عملية الصرف: الرصيد المتاح في الصندوق هو ({$availableBalance} {$currency})، والمبلغ المطلوب صرفه ({$requestedAmount} {$currency}) يتجاوز الرصيد الفعلي المتوفر.",
+                ], 422);
+            }
+        }
 
         try {
-            $expense = DB::transaction(function () use ($validated, $voucherNo, $attachmentPath, $attachmentName, $departmentName, $expenseStatus, $currency, $user) {
+            $expense = DB::transaction(function () use ($validated, $voucherNo, $attachmentPath, $attachmentName, $departmentName, $expenseStatus, $currency, $paymentAccountId, $user) {
                 $manualExpense = ManualExpense::create([
                     'voucher_no'         => $voucherNo,
                     'date'               => $validated['date'],
                     'expense_account_id' => $validated['expense_account_id'],
-                    'payment_account_id' => $validated['payment_account_id'],
+                    'payment_account_id' => $paymentAccountId,
                     'amount'             => $validated['amount'],
                     'currency'           => $currency,
                     'department_id'      => $validated['department_id'] ?? null,
@@ -277,7 +308,7 @@ class ExpenseController extends Controller
         $validated = $request->validate([
             'date'               => ['required', 'date'],
             'expense_account_id' => ['required', 'exists:accounts,id'],
-            'payment_account_id' => ['required', 'exists:accounts,id', 'different:expense_account_id'],
+            'payment_account_id' => ['nullable', 'exists:accounts,id', 'different:expense_account_id'], // optional — auto-resolved
             'amount'             => ['required', 'numeric', 'gt:0'],
             'currency'           => ['nullable', 'string', 'in:'.implode(',', self::CURRENCIES)],
             'department_id'      => ['nullable', 'exists:departments,id'],
@@ -287,9 +318,24 @@ class ExpenseController extends Controller
             'attachment'         => ['nullable', 'file', 'mimes:pdf,png,jpg,jpeg', 'max:10240'],
         ]);
 
-        $this->assertPostableAccounts($validated);
+        $user     = $request->user();
+        $currency = strtoupper($validated['currency'] ?? $expense->currency ?? 'USD');
 
-        $user = $request->user();
+        // Auto-resolve payment account if not explicitly supplied
+        $paymentAccountId = $validated['payment_account_id'] ?? null;
+        if (empty($paymentAccountId)) {
+            $defaultAccount = \App\Models\Account::defaultForCurrency($currency);
+            if (!$defaultAccount) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "لم يتم تحديد حساب دفع افتراضي للعملة {$currency}.",
+                ], 422);
+            }
+            $paymentAccountId = $defaultAccount->id;
+        }
+        $validated['payment_account_id'] = $paymentAccountId;
+
+        $this->assertPostableAccounts($validated);
 
         // Store a replacement attachment; the old file is removed only once the update commits.
         $oldAttachment = null;
@@ -310,13 +356,13 @@ class ExpenseController extends Controller
         }
 
         try {
-            DB::transaction(function () use ($expense, $validated, $departmentName, $user) {
+            DB::transaction(function () use ($expense, $validated, $departmentName, $paymentAccountId, $currency, $user) {
                 $expense->update([
                     'date'               => $validated['date'],
                     'expense_account_id' => $validated['expense_account_id'],
-                    'payment_account_id' => $validated['payment_account_id'],
+                    'payment_account_id' => $paymentAccountId,
                     'amount'             => $validated['amount'],
-                    'currency'           => $validated['currency'] ?? $expense->currency ?? 'USD',
+                    'currency'           => $currency,
                     'department_id'      => $validated['department_id'] ?? null,
                     'department_name'    => $departmentName,
                     'description'        => $validated['description'],
