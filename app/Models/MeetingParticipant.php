@@ -16,7 +16,14 @@ class MeetingParticipant extends Model
     public const STATUS_ATTENDED = 'attended';
     public const STATUS_ABSENT = 'absent';
 
-    protected $fillable = ['meeting_id', 'user_id', 'source', 'status', 'joined_at', 'confirmed_at', 'marked_by'];
+    public const EXCUSE_WITH = 'with_excuse';
+    public const EXCUSE_WITHOUT = 'without_excuse';
+
+    protected $fillable = [
+        'meeting_id', 'user_id', 'source', 'status',
+        'excuse_status', 'excuse_reason',
+        'joined_at', 'confirmed_at', 'marked_by',
+    ];
 
     protected $casts = [
         'joined_at'    => 'datetime',

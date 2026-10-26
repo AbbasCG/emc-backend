@@ -48,6 +48,8 @@ class LearningPath extends Model
         'finance_approval_status',
         'submitted_for_finance_at',
         'status',
+        'start_date',
+        'end_date',
         'is_featured',
         'enrollment_open',
         'learning_outcomes',
@@ -61,6 +63,8 @@ class LearningPath extends Model
     protected $casts = [
         'is_featured'      => 'boolean',
         'enrollment_open'  => 'boolean',
+        'start_date'       => 'date',
+        'end_date'         => 'date',
         'price'            => 'decimal:2',
         'discount_price'   => 'decimal:2',
         'learning_outcomes'        => 'array',
@@ -68,6 +72,15 @@ class LearningPath extends Model
         'study_days'               => 'array',
         'submitted_for_finance_at' => 'datetime',
     ];
+
+    public function isEnded(): bool
+    {
+        if (! $this->end_date) {
+            return false;
+        }
+
+        return \Carbon\Carbon::parse($this->end_date)->endOfDay()->isPast();
+    }
 
     public function instructor(): BelongsTo
     {

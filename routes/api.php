@@ -204,6 +204,7 @@ Route::get('/team', [\App\Http\Controllers\TeamController::class, 'index'])->mid
 
 // ─── Public: Expert & Instructor Application ──────────────────────────────────
 Route::post('/expert-applications', [\App\Http\Controllers\Public\PublicExpertApplicationController::class, 'store'])->middleware('throttle:api');
+Route::post('/trainer-applications', [\App\Http\Controllers\Public\PublicTrainerApplicationController::class, 'store'])->middleware('throttle:api');
 
 // ─── Student LMS (auth:sanctum + learner: any authenticated active account, learning is not a role) ─────────────────────────────────
 Route::prefix('student')->middleware(['auth:sanctum', 'learner'])->group(function () {
@@ -816,6 +817,14 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,ai_manager
     Route::put('/{id}/status', [\App\Http\Controllers\Admin\AdminExpertApplicationController::class, 'updateStatus']);
 });
 
+// Trainer applications: reviewed by admin tier, AI department manager, and academy manager
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,ai_manager,academy_manager'])->prefix('admin/trainer-applications')->group(function () {
+    Route::get('/', [\App\Http\Controllers\Admin\AdminTrainerApplicationController::class, 'index']);
+    Route::get('/{id}', [\App\Http\Controllers\Admin\AdminTrainerApplicationController::class, 'show']);
+    Route::put('/{id}/status', [\App\Http\Controllers\Admin\AdminTrainerApplicationController::class, 'updateStatus']);
+    Route::put('/{id}/notes', [\App\Http\Controllers\Admin\AdminTrainerApplicationController::class, 'updateNotes']);
+});
+
 // ─── Public: Support tickets ─────────────────────────────────────────────────
 Route::post('/support-tickets', [PublicSupportTicketController::class, 'store'])
     ->middleware('throttle:workshop');
@@ -946,6 +955,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     Route::post('meetings/{meeting}/action-items',                       [MeetingController::class, 'storeActionItem']);
     Route::post('meetings/{meeting}/action-items/{actionItem}/convert-to-task', [MeetingController::class, 'convertActionItemToTask']);
     Route::post('meetings/{meeting}/report',                             [MeetingController::class, 'storeReport']);
+    Route::post('meetings/{meeting}/close-lounge',                        [MeetingController::class, 'closeLounge']);
 
     // Dynamic Forms: moved to their own route group below (see "Dynamic Forms"), which names the forms roles in one place.
 
@@ -1472,6 +1482,7 @@ Route::middleware(['auth:sanctum'])->prefix('department')->group(function () {
     Route::patch('meetings/{meeting}/action-items/{actionItem}',  [MeetingController::class, 'updateActionItem']);
     Route::post('meetings/{meeting}/action-items',                [MeetingController::class, 'storeActionItem']);
     Route::post('meetings/{meeting}/report',                      [MeetingController::class, 'storeReport']);
+    Route::post('meetings/{meeting}/close-lounge',                [MeetingController::class, 'closeLounge']);
     Route::get('meeting-participants',                            [MeetingController::class, 'candidates']);
     Route::get('meetings/{meeting}/participants',                 [MeetingController::class, 'participantPool']);
     Route::post('meetings/{meeting}/join',                        [MeetingController::class, 'join']);

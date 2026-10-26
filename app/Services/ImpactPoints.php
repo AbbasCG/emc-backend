@@ -120,4 +120,27 @@ class ImpactPoints
 
         return $points;
     }
+
+    public const TOP_INTERACTIVE_POINTS   = 100;
+
+    /** مكافأة العضو الأكثر تفاعلاً في الاجتماع (+100 نقطة أثر). */
+    public static function awardTopInteractiveBonus(
+        int $userId,
+        string $meetingTitle,
+        ?int $awardedBy,
+        string $sourceType,
+        int $sourceId,
+    ): int {
+        self::award(
+            $userId,
+            'engagement_bonus',
+            self::TOP_INTERACTIVE_POINTS,
+            "العضو الأكثر تفاعلاً في اجتماع: {$meetingTitle}",
+            $awardedBy,
+            $sourceType,
+            $sourceId,
+        );
+
+        return self::TOP_INTERACTIVE_POINTS;
+    }
 }

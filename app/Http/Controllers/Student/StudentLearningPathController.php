@@ -49,6 +49,14 @@ class StudentLearningPathController extends Controller
             ->where('enrollment_open', true)
             ->firstOrFail();
 
+        if ($path->isEnded()) {
+            return response()->json([
+                'success' => false,
+                'code'    => 'program_ended',
+                'message' => 'انتهى هذا المسار التعليمي ولا يمكن التسجيل فيه حالياً.',
+            ], 422);
+        }
+
         $userId = Auth::id();
 
         // A payment already received and under financial review is answered first: the person paid, so they are neither told off

@@ -10,15 +10,17 @@ class Meeting extends Model
 {
     protected $fillable = [
         'title', 'description', 'type', 'department_id', 'organizer_id',
+        'moderator_id', 'top_interactive_user_id', 'discipline_rate',
         'meeting_date', 'start_time', 'end_time', 'meeting_url', 'status',
         'agenda', 'minutes', 'attendees', 'files', 'recording_url',
     ];
 
     protected $casts = [
-        'meeting_date' => 'date',
-        'agenda'       => 'array',
-        'attendees'    => 'array',
-        'files'        => 'array',
+        'meeting_date'    => 'date',
+        'discipline_rate' => 'float',
+        'agenda'          => 'array',
+        'attendees'       => 'array',
+        'files'           => 'array',
     ];
 
     public function department(): BelongsTo
@@ -29,6 +31,16 @@ class Meeting extends Model
     public function organizer(): BelongsTo
     {
         return $this->belongsTo(User::class, 'organizer_id');
+    }
+
+    public function moderator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'moderator_id');
+    }
+
+    public function topInteractiveUser(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'top_interactive_user_id');
     }
 
     public function decisions(): HasMany

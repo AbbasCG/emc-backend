@@ -44,6 +44,14 @@ class LearningPathCheckoutController extends Controller
         // Learning is open to every account; teaching this path (or a course in it) is the one thing that rules it out.
         app(\App\Services\LearnerEnrollmentGuard::class)->assertCanEnrollInPath($user, $path);
 
+        if ($path->isEnded()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'انتهى هذا المسار التعليمي ولا يمكن التسجيل فيه حالياً.',
+                'code'    => 'program_ended',
+            ], 422);
+        }
+
         if (! $path->enrollment_open) {
             return response()->json([
                 'success' => false,
