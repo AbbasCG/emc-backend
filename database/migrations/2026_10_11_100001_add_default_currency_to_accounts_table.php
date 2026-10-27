@@ -20,29 +20,39 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('accounts', function (Blueprint $table) {
-            // e.g. 'USD', 'YER', 'SAR', 'EUR' — or NULL (not a default)
-            $table->string('default_for_currency', 10)
-                  ->nullable()
-                  ->after('is_selectable')
-                  ->comment('If set, this account is the system default deposit/payment account for this currency.');
-        });
+        // Re-runnable: on MariaDB/MySQL DDL is not transactional, so a previous failed attempt may have added the column while
+        // the migration was never recorded.
+        if (! Schema::hasColumn('accounts', 'default_for_currency')) {
+            Schema::table('accounts', function (Blueprint $table) {
+                // e.g. 'USD', 'YER', 'SAR', 'EUR' — or NULL (not a default)
+                $table->string('default_for_currency', 10)
+                    ->nullable()
+                    ->after('is_selectable')
+                    ->comment('If set, this account is the system default deposit/payment account for this currency.');
+            });
+        }
 
-        // SQLite does not support partial unique indexes via Blueprint,
-        // so we use a raw statement that works on both SQLite and MySQL/Postgres.
-        // The unique constraint prevents two accounts from being the default
-        // for the same currency at the same time.
-        DB::statement(
-            'CREATE UNIQUE INDEX accounts_default_for_currency_unique
-             ON accounts (default_for_currency)
-             WHERE default_for_currency IS NOT NULL'
-        );
+        // "Two accounts can never be the default of the same currency". MySQL/MariaDB have no PARTIAL unique index
+        // (`... WHERE col IS NOT NULL` is a syntax error there), but a plain unique index gives the same guarantee on every
+        // supported database: MySQL, MariaDB, SQLite and PostgreSQL all allow any number of NULLs in a unique index.
+        if (! Schema::hasIndex('accounts', 'accounts_default_for_currency_unique')) {
+            Schema::table('accounts', function (Blueprint $table) {
+                $table->unique('default_for_currency', 'accounts_default_for_currency_unique');
+            });
+        }
     }
 
     public function down(): void
     {
-        Schema::table('accounts', function (Blueprint $table) {
-            $table->dropColumn('default_for_currency');
-        });
+        if (Schema::hasIndex('accounts', 'accounts_default_for_currency_unique')) {
+            Schema::table('accounts', function (Blueprint $table) {
+                $table->dropUnique('accounts_default_for_currency_unique');
+            });
+        }
+        if (Schema::hasColumn('accounts', 'default_for_currency')) {
+            Schema::table('accounts', function (Blueprint $table) {
+                $table->dropColumn('default_for_currency');
+            });
+        }
     }
 };
