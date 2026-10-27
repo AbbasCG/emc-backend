@@ -47,6 +47,8 @@ final class DepartmentMergeService
         'knowledge_categories' => 'department_id',
         'knowledge_articles' => 'department_id',
         'dynamic_forms' => 'department_id',
+        // Smart Forms templates shared with a department follow it, like its forms do.
+        'form_templates' => 'department_id',
         'volunteer_hr_profiles' => 'department_id',
         'volunteer_profiles' => 'department_id',
         'user_departments' => 'department_id',

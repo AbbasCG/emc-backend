@@ -8,8 +8,10 @@ use App\Models\Department;
 use App\Models\TeamProfile;
 use App\Models\User;
 use App\Services\DepartmentLeadershipService;
+use App\Services\VolunteerProfileSyncService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -150,43 +152,22 @@ class AdminTeamProfileController extends Controller
         $positionChanging = array_key_exists('position_ar', $data)
             && $data['position_ar'] !== $teamProfile->position_ar;
 
-        $teamProfile->update($data);
+        DB::transaction(function () use ($teamProfile, $data, $departmentChanging, $positionChanging) {
+            $teamProfile->fill($data);
+            $changed = array_keys($teamProfile->getDirty());
+            $teamProfile->save();
 
-        if (array_key_exists('is_leader', $data)) {
-            $this->leadership->syncFromTeamProfile($teamProfile);
-        }
-
-        // Keep the operational team_members row (if any) from silently
-        // drifting away from this canonical profile — see the architecture
-        // audit. department_id/role_title are still duplicated on
-        // team_members for now (Stage 1 of the non-destructive migration),
-        // so they must be kept in sync here rather than left stale.
-        if ($departmentChanging || $positionChanging) {
-            $member = \App\Models\TeamMember::where('team_profile_id', $teamProfile->id)->first();
-            if ($member) {
-                $updates = [];
-                if ($departmentChanging) {
-                    $updates['department_id'] = $teamProfile->department_id;
-                    // The old unit certainly no longer belongs to the new
-                    // department (or department_id is now null) — a member
-                    // cannot remain placed in a unit from another department.
-                    if (
-                        $member->unit_id && (
-                            ! $teamProfile->department_id
-                            || ! \App\Models\DepartmentalUnit::where('id', $member->unit_id)
-                                ->where('department_id', $teamProfile->department_id)
-                                ->exists()
-                        )
-                    ) {
-                        $updates['unit_id'] = null;
-                    }
-                }
-                if ($positionChanging) {
-                    $updates['role_title'] = $teamProfile->position_ar;
-                }
-                $member->update($updates);
+            if (array_key_exists('is_leader', $data)) {
+                $this->leadership->syncFromTeamProfile($teamProfile);
             }
-        }
+
+            // Keep the operational team_members row (if any) from silently drifting away from this canonical profile — see the
+            // architecture audit. department_id/role_title are still duplicated on team_members for now.
+            VolunteerProfileSyncService::followOperationalMember($teamProfile, $departmentChanging, $positionChanging);
+
+            // A row made from a volunteer's HR profile shares some fields with it: write those back so the two never disagree.
+            app(VolunteerProfileSyncService::class)->pullFromTeam($teamProfile, $changed);
+        });
 
         $this->loadRelations($teamProfile);
 

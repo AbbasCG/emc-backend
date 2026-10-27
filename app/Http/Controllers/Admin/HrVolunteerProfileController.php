@@ -3,20 +3,26 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Hr\UpdateVolunteerHrProfileRequest;
 use App\Http\Resources\VolunteerHrProfileResource;
 use App\Models\Department;
 use App\Models\VolunteerHrProfile;
 use App\Services\AuditLogService;
 use App\Services\NotificationService;
 use App\Services\VolunteerApprovalService;
+use App\Services\VolunteerProfileSyncService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class HrVolunteerProfileController extends Controller
 {
+    /** Statuses HR may edit: the profile is with HR (submitted / under review) or the person is an accepted volunteer. */
+    private const HR_EDITABLE_STATUSES = ['submitted', 'under_review', 'approved'];
+
     public function __construct(private readonly VolunteerApprovalService $approval)
     {
     }
@@ -96,6 +102,89 @@ class HrVolunteerProfileController extends Controller
         return response()->json([
             'success' => true,
             'data'    => new VolunteerHrProfileResource($volunteerHrProfile->load(['department', 'reviewer', 'approver', 'user:id,name,email'])),
+        ]);
+    }
+
+    /**
+     * PUT /api/hr/volunteer-hr-profiles/{volunteerHrProfile} — HR edits a volunteer's profile.
+     *
+     * Only the whitelisted fields of UpdateVolunteerHrProfileRequest; never the review status, the account, the team link, the
+     * volunteer's consents or files. Draft and rejected profiles belong to the volunteer (they edit and resubmit them), archived
+     * ones are frozen. The shared fields follow to the linked team record (VolunteerProfileSyncService); nothing is created.
+     */
+    public function update(UpdateVolunteerHrProfileRequest $request, VolunteerHrProfile $volunteerHrProfile, VolunteerProfileSyncService $sync): JsonResponse
+    {
+        $this->authorize('hrUpdate', $volunteerHrProfile);
+
+        if (! in_array($volunteerHrProfile->status, self::HR_EDITABLE_STATUSES, true)) {
+            return response()->json([
+                'success' => false,
+                'message' => match ($volunteerHrProfile->status) {
+                    'draft', 'rejected' => 'هذا الطلب لدى المتطوع لاستكماله أو إعادة إرساله، ولا يُعدَّل من الموارد البشرية في هذه الحالة.',
+                    default             => 'لا يمكن تعديل ملف مؤرشف.',
+                },
+            ], 422);
+        }
+
+        $data = $request->validated();
+        $expected = $data['expected_updated_at'] ?? null;
+        unset($data['expected_updated_at']);
+
+        $result = DB::transaction(function () use ($volunteerHrProfile, $data, $expected, $sync) {
+            $locked = VolunteerHrProfile::query()->whereKey($volunteerHrProfile->id)->lockForUpdate()->firstOrFail();
+
+            // Someone (HR or the volunteer) saved after this editor loaded the profile: refuse rather than overwrite.
+            if ($expected !== null && $locked->updated_at?->toIso8601String() !== $expected) {
+                return ['conflict' => true];
+            }
+
+            if (array_key_exists('email', $data)) {
+                $data['normalized_email'] = VolunteerHrProfile::normalizeEmail($data['email']);
+                $taken = VolunteerHrProfile::query()
+                    ->where('normalized_email', $data['normalized_email'])
+                    ->whereKeyNot($locked->id)
+                    ->whereIn('status', ['approved', ...VolunteerHrProfile::OPEN_STATUSES])
+                    ->exists();
+                if ($taken) {
+                    throw ValidationException::withMessages(['email' => 'هذا البريد الإلكتروني مستخدم في ملف متطوع آخر.']);
+                }
+            }
+            if (array_key_exists('professional_bio', $data) && $data['professional_bio'] !== null) {
+                $data['professional_bio'] = strip_tags($data['professional_bio']);
+            }
+
+            $locked->fill($data);
+            $changed = array_values(array_diff(array_keys($locked->getDirty()), ['normalized_email']));
+            if ($changed === []) {
+                return ['conflict' => false, 'profile' => $locked, 'changed' => [], 'team' => []];
+            }
+            $locked->save();
+            $team = $sync->pushToTeam($locked, $changed);
+
+            return ['conflict' => false, 'profile' => $locked, 'changed' => $changed, 'team' => $team];
+        });
+
+        if ($result['conflict']) {
+            return response()->json([
+                'success' => false,
+                'code'    => 'profile_conflict',
+                'message' => 'تم تعديل ملف المتطوع بعد أن فتحته. أعد تحميل البيانات ثم عدّل مرة أخرى.',
+                'data'    => new VolunteerHrProfileResource($volunteerHrProfile->fresh(['department', 'reviewer', 'approver', 'user:id,name,email'])),
+            ], 409);
+        }
+
+        if ($result['changed'] !== []) {
+            // Field names only: the history says what was changed and by whom, never the personal values themselves.
+            AuditLogService::logAction('UPDATE', $result['profile'], 'HR edited a volunteer profile', [
+                'changed_fields'      => $result['changed'],
+                'team_profile_fields' => $result['team'],
+            ], $request);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => $result['changed'] === [] ? 'لا توجد تغييرات للحفظ.' : 'تم حفظ بيانات المتطوع.',
+            'data'    => new VolunteerHrProfileResource($result['profile']->fresh(['department', 'reviewer', 'approver', 'user:id,name,email'])),
         ]);
     }
 

@@ -1838,6 +1838,7 @@ Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin
     Route::get('volunteer-hr-profiles',                                [HrVolunteerProfileController::class, 'index']);
     Route::get('volunteer-hr-profiles/filter-options',                 [HrVolunteerProfileController::class, 'filterOptions']);
     Route::get('volunteer-hr-profiles/{volunteerHrProfile}',            [HrVolunteerProfileController::class, 'show']);
+    Route::put('volunteer-hr-profiles/{volunteerHrProfile}',            [HrVolunteerProfileController::class, 'update'])->middleware('throttle:30,1');
     Route::patch('volunteer-hr-profiles/{volunteerHrProfile}/review',   [HrVolunteerProfileController::class, 'review']);
     Route::post('volunteer-hr-profiles/{volunteerHrProfile}/approve',   [HrVolunteerProfileController::class, 'approve']);
     Route::post('volunteer-hr-profiles/{volunteerHrProfile}/reject',    [HrVolunteerProfileController::class, 'reject']);

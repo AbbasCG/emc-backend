@@ -193,6 +193,7 @@ class AppServiceProvider extends ServiceProvider
 
         // Dynamic forms: form-level and department-level authorization.
         Gate::policy(DynamicForm::class, \App\Policies\DynamicFormPolicy::class);
+        Gate::policy(\App\Models\VolunteerHrProfile::class, \App\Policies\VolunteerHrProfilePolicy::class);
     }
 
     /**
