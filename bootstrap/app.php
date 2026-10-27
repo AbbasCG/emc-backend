@@ -18,29 +18,9 @@ return Application::configure(basePath: dirname(__DIR__))
         // supported by auth:sanctum as a compatibility fallback.
         $middleware->statefulApi();
 
-        // Exempt public guest intake endpoints from CSRF verification
-        $middleware->validateCsrfTokens(except: [
-            'api/trainer-applications',
-            'api/expert-applications',
-            'api/support-tickets',
-            'api/workshop-requests',
-            'api/volunteer-requests',
-            'api/ambassador-applications',
-            'api/partnerships/*',
-            'api/consultant-applications',
-            'api/contact',
-            'api/forms/*',
-            'trainer-applications',
-            'expert-applications',
-            'support-tickets',
-            'workshop-requests',
-            'volunteer-requests',
-            'ambassador-applications',
-            'partnerships/*',
-            'consultant-applications',
-            'contact',
-            'forms/*',
-        ]);
+        // Public guest intake forms have no CSRF cookie to present; see App\Support\PublicIntakePaths for why that is safe and
+        // how the list is kept honest.
+        $middleware->validateCsrfTokens(except: \App\Support\PublicIntakePaths::CSRF_EXEMPT);
 
         $middleware->alias([
             'role'               => \App\Http\Middleware\RoleMiddleware::class,

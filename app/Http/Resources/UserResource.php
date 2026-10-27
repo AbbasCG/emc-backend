@@ -7,6 +7,17 @@ use Illuminate\Http\Resources\Json\JsonResource;
 
 class UserResource extends JsonResource
 {
+    /** Set by forSelf(): the payload describes the caller's own account (login / register, where no user is authenticated yet). */
+    private bool $selfScope = false;
+
+    public static function forSelf(mixed $user): static
+    {
+        $resource = new static($user);
+        $resource->selfScope = true;
+
+        return $resource;
+    }
+
     public function toArray(Request $request): array
     {
         $departmentId = null;
@@ -50,14 +61,9 @@ class UserResource extends JsonResource
             ? $this->resource->getDepartmentSpecializedRole()
             : null;
 
-        $hasEnrolledCourses = \App\Models\Registration::where('user_id', $this->id)
-            ->whereIn('status', ['confirmed', 'active', 'completed', 'enrolled'])
-            ->exists() || \App\Models\ClassGroupStudent::where('user_id', $this->id)->exists();
-
-        $impactPointsBalance = (int) (
-            \App\Models\VolunteerPointAward::where('user_id', $this->id)->sum('points') -
-            \App\Models\VolunteerPointRedemption::where('user_id', $this->id)->sum('points')
-        );
+        // Learning / impact-points summaries cost several queries and belong to the account holder alone. This resource is also
+        // nested in lists (submissions, attendance), where they would be an N+1 and would show other people's balances.
+        $isSelf = $this->selfScope || ($request->user() !== null && $request->user()->is($this->resource));
 
         return [
             'id'                         => $this->id,
@@ -72,8 +78,13 @@ class UserResource extends JsonResource
             'department_id'              => $departmentId,
             'department_slug'            => $departmentSlug,
             'department_name'            => $departmentName,
-            'has_enrolled_courses'       => $hasEnrolledCourses,
-            'impact_points_balance'      => $impactPointsBalance,
+            'has_enrolled_courses'       => $this->when($isSelf, fn () => \App\Models\Registration::where('user_id', $this->id)
+                ->whereIn('status', ['confirmed', 'active', 'completed', 'enrolled'])
+                ->exists() || \App\Models\ClassGroupStudent::where('user_id', $this->id)->exists()),
+            'impact_points_balance'      => $this->when($isSelf, fn () => (int) (
+                \App\Models\VolunteerPointAward::where('user_id', $this->id)->sum('points') -
+                \App\Models\VolunteerPointRedemption::where('user_id', $this->id)->sum('points')
+            )),
             'is_active'                  => $this->is_active ?? true,
             'city'                       => $this->city,
             'gender'                     => $this->gender,
