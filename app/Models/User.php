@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\DepartmentRoleMap;
 use App\Support\Permissions;
 use App\Traits\Auditable;
 use Database\Factories\UserFactory;
@@ -52,6 +53,9 @@ class User extends Authenticatable implements MustVerifyEmail
      * Per-instance permission cache — avoids repeat DB queries within one request.
      */
     private ?array $permissionCache = null;
+
+    /** @var array{key: string, role: ?string}|null */
+    private ?array $specializedRoleCache = null;
 
     protected function casts(): array
     {
@@ -138,50 +142,37 @@ class User extends Authenticatable implements MustVerifyEmail
         ], true);
     }
 
+    /**
+     * The specialised manager role a department_manager acts with, or null.
+     *
+     * ONLY the recorded leader (departments.leader_id) of an ACTIVE department qualifies — the same canonical leadership
+     * DepartmentAccessService uses. Being a member of a department, a deputy, the free-text `users.department` value or the
+     * department's name never confer a role. The slug → role map lives in config/department_roles.php and can never yield a
+     * privileged role (tech_admin, executive_admin, …) — see App\Support\DepartmentRoleMap.
+     */
     public function getDepartmentSpecializedRole(): ?string
     {
-        if ($this->role !== 'department_manager') {
+        if ($this->role !== 'department_manager' || ! $this->id) {
             return null;
         }
 
-        $dept = null;
-        if ($this->relationLoaded('departments') && $this->departments->isNotEmpty()) {
-            $dept = $this->departments->where('pivot.is_primary', true)->first() ?? $this->departments->first();
-        }
-        if (! $dept && $this->id) {
-            $dept = Department::where('leader_id', $this->id)->first()
-                ?? $this->departments()->first();
-        }
-        if (! $dept && ! empty($this->department)) {
-            $dept = is_numeric($this->department)
-                ? Department::find((int) $this->department)
-                : Department::where('slug', $this->department)
-                    ->orWhere('name_ar', $this->department)
-                    ->orWhere('name', $this->department)
-                    ->first();
+        $cacheKey = $this->id.'|'.$this->role;
+        if ($this->specializedRoleCache !== null && $this->specializedRoleCache['key'] === $cacheKey) {
+            return $this->specializedRoleCache['role'];
         }
 
-        if (! $dept || empty($dept->slug)) {
-            return null;
+        $role = null;
+        $slugs = Department::query()->active()->where('leader_id', $this->id)->orderBy('id')->pluck('slug');
+        foreach ($slugs as $slug) {
+            $role = DepartmentRoleMap::roleForSlug($slug);
+            if ($role !== null) {
+                break;
+            }
         }
 
-        return match ($dept->slug) {
-            'finance'                   => 'finance_manager',
-            'human-resources'           => 'hr_manager',
-            'marketing-media'           => 'marketing_manager',
-            'quality-governance'        => 'quality_manager',
-            'programs-tracks'           => 'programs_manager',
-            'operations'                => 'operations_manager',
-            'ai-transformation'         => 'ai_manager',
-            'community-health'          => 'community_manager',
-            'partnerships'              => 'partnerships_manager',
-            'strategy-planning'         => 'strategy_planning_manager',
-            'digital-ambassadors'       => 'digital_ambassadors_manager',
-            'advisors'                  => 'advisors_manager',
-            'executive-management'      => 'executive_admin',
-            'technology'                => 'tech_admin',
-            default                     => null,
-        };
+        $this->specializedRoleCache = ['key' => $cacheKey, 'role' => $role];
+
+        return $role;
     }
 
     /**
@@ -235,13 +226,14 @@ class User extends Authenticatable implements MustVerifyEmail
             return array_values(array_unique(array_merge($base, $extra)));
         }
 
+        $ownRole = $this->role === 'teacher' ? 'instructor' : $this->role;
         $dbRole = Role::with('permissions')
-            ->where('name', $this->role)
+            ->where('name', $ownRole)
             ->first();
 
         $perms = $dbRole
             ? $dbRole->permissions->pluck('name')->toArray()
-            : Permissions::forRole($this->role);
+            : Permissions::forRole($ownRole);
 
         // If department manager has a specialized department role, merge those permissions
         if ($this->role === 'department_manager') {
@@ -279,6 +271,7 @@ class User extends Authenticatable implements MustVerifyEmail
     public function flushPermissionCache(): void
     {
         $this->permissionCache = null;
+        $this->specializedRoleCache = null;
     }
 
     public function permissionAssignments(): HasMany
