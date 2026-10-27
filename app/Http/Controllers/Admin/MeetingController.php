@@ -283,6 +283,7 @@ class MeetingController extends Controller
             'meeting_url'   => 'nullable|url',
             'status'        => 'nullable|in:scheduled,in_progress,completed,cancelled',
             'agenda'        => 'nullable',
+            'moderator_id'  => 'nullable|exists:users,id',
             'participant_ids'   => 'nullable|array|max:300',
             'participant_ids.*' => 'integer',
             'minutes'       => 'nullable|string',
@@ -382,6 +383,7 @@ class MeetingController extends Controller
             'meeting_url'   => 'nullable|url',
             'status'        => 'in:scheduled,in_progress,completed,cancelled',
             'agenda'        => 'nullable',
+            'moderator_id'  => 'nullable|exists:users,id',
             'participant_ids'   => 'nullable|array|max:300',
             'participant_ids.*' => 'integer',
             'minutes'       => 'nullable|string',
@@ -797,6 +799,148 @@ class MeetingController extends Controller
         return response()->json([
             'success' => true,
             'data'    => new MeetingActionItemResource($actionItem->fresh()->load('assignedTo')),
+        ]);
+    }
+
+    /**
+     * Close the meeting from the lounge: marks attendance & excuses, calculates discipline rate automatically,
+     * awards attendance points to attendees, awards 100 points to top interactive member,
+     * and saves decisions & action items without requiring a manual meeting report.
+     */
+    public function closeLounge(Request $request, Meeting $meeting): JsonResponse
+    {
+        $user = $request->user();
+
+        if (! $this->acc()->canView($user, $meeting)) {
+            return $this->forbidden('غير مصرح لك باستعراض اجتماع خاص بإدارة أخرى');
+        }
+        if (! $this->acc()->canManage($user, $meeting)) {
+            return $this->forbidden('ليست لديك صلاحية إغلاق هذا الاجتماع.');
+        }
+
+        $data = $request->validate([
+            'attendance'                  => 'required|array|min:1|max:300',
+            'attendance.*.user_id'        => 'required|integer|exists:users,id',
+            'attendance.*.attended'       => 'required|boolean',
+            'attendance.*.excuse_status'  => 'nullable|string|in:with_excuse,without_excuse',
+            'attendance.*.excuse_reason'  => 'nullable|string|max:1000',
+            'top_interactive_user_id'     => 'nullable|integer|exists:users,id',
+            'minutes'                     => 'nullable|string|max:10000',
+            'decisions'                   => 'nullable|array|max:50',
+            'decisions.*.title'           => 'required|string|max:255',
+            'decisions.*.description'     => 'nullable|string|max:2000',
+            'action_items'                => 'nullable|array|max:50',
+            'action_items.*.title'        => 'required|string|max:255',
+            'action_items.*.assigned_to'  => 'nullable|integer|exists:users,id',
+            'action_items.*.due_date'     => 'nullable|date',
+        ]);
+
+        $pool = $this->participants->poolForMeeting($meeting->loadMissing('department'), $user)->keyBy('id');
+        $attendance = collect($data['attendance'])->unique('user_id')->values();
+
+        if ($attendance->contains(fn ($a) => ! $pool->has((int) $a['user_id']))) {
+            throw $this->refuse('attendance', 'لا يمكن تسجيل حضور مستخدم ليس من المشاركين في هذا الاجتماع.');
+        }
+
+        $totalCount = $attendance->count();
+        $attendedItems = $attendance->filter(fn ($a) => (bool) $a['attended']);
+        $attendedCount = $attendedItems->count();
+
+        // Automatic attendance discipline rate percentage (0.00% to 100.00%)
+        $disciplineRate = $totalCount > 0 ? round(($attendedCount / $totalCount) * 100, 2) : 100.00;
+
+        $topUserId = ! empty($data['top_interactive_user_id']) ? (int) $data['top_interactive_user_id'] : null;
+        if ($topUserId !== null && ! $pool->has($topUserId)) {
+            throw $this->refuse('top_interactive_user_id', 'العضو الأكثر تفاعلاً يجب أن يكون من المشاركين في الاجتماع.');
+        }
+
+        DB::transaction(function () use ($meeting, $data, $user, $attendance, $attendedItems, $disciplineRate, $topUserId) {
+            $locked = Meeting::query()->whereKey($meeting->id)->lockForUpdate()->firstOrFail();
+
+            // 1. Update meeting metadata
+            $updateData = [
+                'status'                  => 'completed',
+                'discipline_rate'         => $disciplineRate,
+                'top_interactive_user_id' => $topUserId,
+            ];
+            if (isset($data['minutes'])) {
+                $updateData['minutes'] = $data['minutes'];
+            }
+            $locked->update($updateData);
+
+            // 2. Mark attendance with excuses
+            $this->participants->markAttendance($locked, $attendance->all(), $user);
+
+            // 3. Save Decisions
+            foreach ($data['decisions'] ?? [] as $d) {
+                MeetingDecision::create([
+                    'meeting_id'  => $locked->id,
+                    'title'       => $d['title'],
+                    'description' => $d['description'] ?? null,
+                    'decided_by'  => $user->id,
+                ]);
+            }
+
+            // 4. Save Action items
+            foreach ($data['action_items'] ?? [] as $i) {
+                ActionItemModel::create([
+                    'meeting_id'  => $locked->id,
+                    'title'       => $i['title'],
+                    'assigned_to' => $i['assigned_to'] ?? null,
+                    'due_date'    => $i['due_date'] ?? null,
+                    'status'      => 'pending',
+                ]);
+            }
+
+            // 5. Automatic Impact Points:
+            // Revoke any previous awards for this meeting to stay idempotent
+            \App\Services\ImpactPoints::revokeSource('meeting', $locked->id);
+
+            // A) 50 points to all confirmed attendees
+            foreach ($attendedItems as $att) {
+                \App\Services\ImpactPoints::awardMeetingAttendance(
+                    (int) $att['user_id'],
+                    $locked->title,
+                    $user->id,
+                    'meeting',
+                    $locked->id,
+                );
+            }
+
+            // B) 100 points bonus for top interactive member
+            if ($topUserId !== null) {
+                \App\Services\ImpactPoints::awardTopInteractiveBonus(
+                    $topUserId,
+                    $locked->title,
+                    $user->id,
+                    'meeting',
+                    $locked->id,
+                );
+
+                // Notify top interactive user
+                \App\Services\NotificationService::send(
+                    $topUserId,
+                    'meeting_top_interactive',
+                    "وسام التفاعل المتميز 🌟",
+                    "تهانينا! حصلت على 100 نقطة أثر كأكثر الأعضاء تفاعلاً في اجتماع '{$locked->title}'",
+                    [
+                        'entity_type' => 'meeting',
+                        'entity_id'   => $locked->id,
+                        'action_url'  => "/dashboard/assignee?tab=points",
+                        'meta_url'    => "/dashboard/assignee?tab=points",
+                        'icon'        => 'star',
+                        'color'       => 'amber',
+                    ]
+                );
+            }
+        });
+
+        ActivityLogger::log('meeting.closed_from_lounge', $meeting, [], $request);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم إنهاء الاجتماع ورصد الحضور واحتساب نقاط الأثر تلقائياً.',
+            'data'    => (new MeetingResource($this->loadDetail($meeting->refresh())))->detailed()->resolve($request),
         ]);
     }
 }

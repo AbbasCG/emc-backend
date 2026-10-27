@@ -4,8 +4,11 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Course;
+use App\Models\Department;
 use App\Models\Registration;
 use App\Models\Role;
+use App\Models\TeamMember;
+use App\Models\TeamProfile;
 use App\Models\User;
 use App\Services\AuditLogService;
 use App\Services\NotificationService;
@@ -141,8 +144,53 @@ class AdminUserController extends Controller
             'is_active'                 => $data['is_active'] ?? true,
         ]);
 
-        if (isset($data['department']) && is_numeric($data['department'])) {
-            $user->departments()->sync([$data['department'] => ['is_primary' => true]]);
+        $deptInput = $request->input('department_id') ?? $data['department'] ?? null;
+        $deptId = is_numeric($deptInput) ? (int) $deptInput : null;
+        if (! $deptId && is_string($deptInput) && ! empty($deptInput)) {
+            $matchedDept = Department::where('name_ar', $deptInput)
+                ->orWhere('name', $deptInput)
+                ->orWhere('slug', $deptInput)
+                ->first();
+            $deptId = $matchedDept?->id;
+        }
+
+        if ($deptId) {
+            $user->departments()->sync([$deptId => ['is_primary' => true]]);
+            $deptModel = Department::find($deptId);
+            if ($deptModel && empty($user->department)) {
+                $user->update(['department' => $deptModel->name_ar ?? $deptModel->name]);
+            }
+
+            if ($user->role === 'department_manager') {
+                $deptModel?->update(['leader_id' => $user->id]);
+            } elseif ($user->role === 'department_member') {
+                $teamProfile = TeamProfile::firstOrCreate(
+                    ['user_id' => $user->id],
+                    [
+                        'department_id' => $deptId,
+                        'name_ar'       => $user->name,
+                        'position_ar'   => 'عضو إدارة',
+                        'role_key'      => 'department_member',
+                        'email'         => $user->email,
+                        'is_active'     => true,
+                        'is_leader'     => false,
+                    ]
+                );
+                if ($teamProfile->department_id !== $deptId) {
+                    $teamProfile->update(['department_id' => $deptId]);
+                }
+                TeamMember::updateOrCreate(
+                    ['team_profile_id' => $teamProfile->id],
+                    [
+                        'user_id'       => $user->id,
+                        'department_id' => $deptId,
+                        'section_id'    => null, // unassigned, waiting for manager to seat them
+                        'role_title'    => 'عضو إدارة',
+                        'status'        => 'active',
+                        'joined_at'     => now(),
+                    ]
+                );
+            }
         }
 
         // Auto-create instructor profile so user appears in the instructors module
@@ -264,12 +312,62 @@ class AdminUserController extends Controller
             app(\App\Services\EmailVerificationService::class)->sendInitial($user->fresh(), $request->user());
         }
 
-        if (array_key_exists('department', $data)) {
-            if (is_numeric($data['department'])) {
-                $user->departments()->sync([$data['department'] => ['is_primary' => true]]);
-            } elseif (empty($data['department'])) {
-                $user->departments()->detach();
+        $deptInput = $request->input('department_id') ?? $data['department'] ?? null;
+        if ($deptInput !== null || array_key_exists('department', $data) || $request->has('department_id')) {
+            $deptId = is_numeric($deptInput) ? (int) $deptInput : null;
+            if (! $deptId && is_string($deptInput) && ! empty($deptInput)) {
+                $matchedDept = Department::where('name_ar', $deptInput)
+                    ->orWhere('name', $deptInput)
+                    ->orWhere('slug', $deptInput)
+                    ->first();
+                $deptId = $matchedDept?->id;
             }
+
+            if ($deptId) {
+                $user->departments()->sync([$deptId => ['is_primary' => true]]);
+                $deptModel = Department::find($deptId);
+                $user->update(['department' => $deptModel ? ($deptModel->name_ar ?? $deptModel->name) : $deptInput]);
+
+                if ($user->role === 'department_manager') {
+                    Department::where('id', $deptId)->update(['leader_id' => $user->id]);
+                    Department::where('leader_id', $user->id)->where('id', '!=', $deptId)->update(['leader_id' => null]);
+                } elseif ($user->role === 'department_member') {
+                    Department::where('leader_id', $user->id)->update(['leader_id' => null]);
+
+                    $teamProfile = TeamProfile::firstOrCreate(
+                        ['user_id' => $user->id],
+                        [
+                            'department_id' => $deptId,
+                            'name_ar'       => $user->name,
+                            'position_ar'   => 'عضو إدارة',
+                            'role_key'      => 'department_member',
+                            'email'         => $user->email,
+                            'is_active'     => true,
+                            'is_leader'     => false,
+                        ]
+                    );
+                    if ($teamProfile->department_id !== $deptId) {
+                        $teamProfile->update(['department_id' => $deptId]);
+                    }
+                    TeamMember::updateOrCreate(
+                        ['team_profile_id' => $teamProfile->id],
+                        [
+                            'user_id'       => $user->id,
+                            'department_id' => $deptId,
+                            'section_id'    => null,
+                            'role_title'    => 'عضو إدارة',
+                            'status'        => 'active',
+                            'joined_at'     => now(),
+                        ]
+                    );
+                }
+            } elseif (empty($deptInput)) {
+                $user->departments()->detach();
+                Department::where('leader_id', $user->id)->update(['leader_id' => null]);
+                $user->update(['department' => null]);
+            }
+        } elseif ($oldRole === 'department_manager' && $user->role !== 'department_manager') {
+            Department::where('leader_id', $user->id)->update(['leader_id' => null]);
         }
 
         if (in_array($user->fresh()->role, ['instructor', 'teacher'], true)) {
@@ -449,6 +547,8 @@ class AdminUserController extends Controller
             'phone_country_code'         => $user->phone_country_code,
             'role'                       => $user->role,
             'department'                 => $user->department,
+            'department_id'              => $user->departments()->first()?->id,
+            'department_name'            => $user->departments()->first()?->name_ar ?? $user->departments()->first()?->name ?? $user->department,
             'is_active'                  => $user->is_active ?? true,
             'city'                       => $user->city,
             'country'                    => $user->country,

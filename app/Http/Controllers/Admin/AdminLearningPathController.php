@@ -622,6 +622,8 @@ class AdminLearningPathController extends Controller
             'price'             => 'nullable|numeric|min:0',
             'discount_price'    => 'nullable|numeric|min:0',
             'status'            => 'nullable|in:draft,published,archived',
+            'start_date'        => [$isUpdate ? 'sometimes' : 'required', 'date'],
+            'end_date'          => [$isUpdate ? 'sometimes' : 'required', 'date', 'after_or_equal:start_date'],
             'is_featured'       => 'nullable|boolean',
             'enrollment_open'   => 'nullable|boolean',
             'learning_outcomes' => 'nullable|array',

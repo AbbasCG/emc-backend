@@ -18,6 +18,30 @@ return Application::configure(basePath: dirname(__DIR__))
         // supported by auth:sanctum as a compatibility fallback.
         $middleware->statefulApi();
 
+        // Exempt public guest intake endpoints from CSRF verification
+        $middleware->validateCsrfTokens(except: [
+            'api/trainer-applications',
+            'api/expert-applications',
+            'api/support-tickets',
+            'api/workshop-requests',
+            'api/volunteer-requests',
+            'api/ambassador-applications',
+            'api/partnerships/*',
+            'api/consultant-applications',
+            'api/contact',
+            'api/forms/*',
+            'trainer-applications',
+            'expert-applications',
+            'support-tickets',
+            'workshop-requests',
+            'volunteer-requests',
+            'ambassador-applications',
+            'partnerships/*',
+            'consultant-applications',
+            'contact',
+            'forms/*',
+        ]);
+
         $middleware->alias([
             'role'               => \App\Http\Middleware\RoleMiddleware::class,
             // Department-leadership route entry: a listed role OR the canonical

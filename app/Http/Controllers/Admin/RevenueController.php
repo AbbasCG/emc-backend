@@ -154,7 +154,7 @@ class RevenueController extends Controller
             'receipt_no'         => ['nullable', 'string', 'max:50', 'unique:manual_revenues,receipt_no'],
             'date'               => ['required', 'date'],
             'revenue_account_id' => ['required', 'exists:accounts,id'],
-            'deposit_account_id' => ['required', 'exists:accounts,id', 'different:revenue_account_id'],
+            'deposit_account_id' => ['nullable', 'exists:accounts,id', 'different:revenue_account_id'], // optional — auto-resolved from currency
             'amount'             => ['required', 'numeric', 'gt:0'],
             'currency'           => ['nullable', 'string', 'in:'.implode(',', self::CURRENCIES)],
             'payer_name'         => ['required', 'string', 'max:255'],
@@ -165,9 +165,24 @@ class RevenueController extends Controller
             'attachment'         => ['nullable', 'file', 'mimes:pdf,png,jpg,jpeg', 'max:10240'], // 10MB max
         ]);
 
-        $this->assertPostableAccounts($validated);
+        $user     = $request->user();
+        $currency = strtoupper($validated['currency'] ?? 'USD');
 
-        $user = $request->user();
+        // Auto-resolve deposit account from currency default if not provided
+        $depositAccountId = $validated['deposit_account_id'] ?? null;
+        if (empty($depositAccountId)) {
+            $defaultAccount = \App\Models\Account::defaultForCurrency($currency);
+            if (!$defaultAccount) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "لم يتم تحديد حساب إيداع افتراضي للعملة {$currency}. يرجى تحديده من إعدادات دليل الحسابات.",
+                ], 422);
+            }
+            $depositAccountId = $defaultAccount->id;
+        }
+        $validated['deposit_account_id'] = $depositAccountId;
+
+        $this->assertPostableAccounts($validated);
 
         // Autogenerate receipt_no if not provided
         if (empty($validated['receipt_no'])) {
@@ -199,15 +214,14 @@ class RevenueController extends Controller
         }
 
         $revenueStatus = $validated['status'] ?? 'posted';
-        $currency = $validated['currency'] ?? 'USD';
 
         try {
-            $revenue = DB::transaction(function () use ($validated, $receiptNo, $attachmentPath, $attachmentName, $programName, $revenueStatus, $currency, $user) {
+            $revenue = DB::transaction(function () use ($validated, $receiptNo, $attachmentPath, $attachmentName, $programName, $revenueStatus, $currency, $depositAccountId, $user) {
                 $manualRevenue = ManualRevenue::create([
                     'receipt_no'         => $receiptNo,
                     'date'               => $validated['date'],
                     'revenue_account_id' => $validated['revenue_account_id'],
-                    'deposit_account_id' => $validated['deposit_account_id'],
+                    'deposit_account_id' => $depositAccountId,
                     'amount'             => $validated['amount'],
                     'currency'           => $currency,
                     'payer_name'         => $validated['payer_name'],
@@ -280,7 +294,7 @@ class RevenueController extends Controller
         $validated = $request->validate([
             'date'               => ['required', 'date'],
             'revenue_account_id' => ['required', 'exists:accounts,id'],
-            'deposit_account_id' => ['required', 'exists:accounts,id', 'different:revenue_account_id'],
+            'deposit_account_id' => ['nullable', 'exists:accounts,id', 'different:revenue_account_id'], // optional — auto-resolved
             'amount'             => ['required', 'numeric', 'gt:0'],
             'currency'           => ['nullable', 'string', 'in:'.implode(',', self::CURRENCIES)],
             'payer_name'         => ['required', 'string', 'max:255'],
@@ -291,9 +305,24 @@ class RevenueController extends Controller
             'attachment'         => ['nullable', 'file', 'mimes:pdf,png,jpg,jpeg', 'max:10240'],
         ]);
 
-        $this->assertPostableAccounts($validated);
+        $user     = $request->user();
+        $currency = strtoupper($validated['currency'] ?? $revenue->currency ?? 'USD');
 
-        $user = $request->user();
+        // Auto-resolve deposit account if not explicitly supplied
+        $depositAccountId = $validated['deposit_account_id'] ?? null;
+        if (empty($depositAccountId)) {
+            $defaultAccount = \App\Models\Account::defaultForCurrency($currency);
+            if (!$defaultAccount) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "لم يتم تحديد حساب إيداع افتراضي للعملة {$currency}.",
+                ], 422);
+            }
+            $depositAccountId = $defaultAccount->id;
+        }
+        $validated['deposit_account_id'] = $depositAccountId;
+
+        $this->assertPostableAccounts($validated);
 
         // Store a replacement attachment; the old file is removed only once the update commits.
         $oldAttachment = null;
@@ -314,13 +343,13 @@ class RevenueController extends Controller
         }
 
         try {
-            DB::transaction(function () use ($revenue, $validated, $programName, $user) {
+            DB::transaction(function () use ($revenue, $validated, $programName, $depositAccountId, $currency, $user) {
                 $revenue->update([
                     'date'               => $validated['date'],
                     'revenue_account_id' => $validated['revenue_account_id'],
-                    'deposit_account_id' => $validated['deposit_account_id'],
+                    'deposit_account_id' => $depositAccountId,
                     'amount'             => $validated['amount'],
-                    'currency'           => $validated['currency'] ?? $revenue->currency ?? 'USD',
+                    'currency'           => $currency,
                     'payer_name'         => $validated['payer_name'],
                     'program_id'         => $validated['program_id'] ?? null,
                     'program_name'       => $programName,
@@ -433,6 +462,88 @@ class RevenueController extends Controller
         if ($errors) {
             throw ValidationException::withMessages($errors);
         }
+    }
+
+    /**
+     * Get paid courses list (with price > 0) for revenue course selection.
+     */
+    public function getPaidCourses(): JsonResponse
+    {
+        $courses = Course::where(function ($q) {
+                $q->where('is_paid', true)
+                  ->orWhere('type', 'paid')
+                  ->orWhere('price', '>', 0);
+            })
+            ->whereNull('deleted_at')
+            ->select('id', 'title', 'price', 'currency', 'status')
+            ->orderBy('title')
+            ->get()
+            ->map(fn($c) => [
+                'id'       => $c->id,
+                'title'    => $c->title,
+                'price'    => (float) $c->price,
+                'currency' => $c->currency ?? 'USD',
+                'status'   => $c->status,
+            ]);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $courses,
+        ]);
+    }
+
+    /**
+     * Get students registered in a specific paid course who have not completed payment.
+     * "Incomplete payment" means registration status = pending_payment.
+     */
+    public function getCourseStudentsPendingPayment(int $courseId): JsonResponse
+    {
+        $course = Course::findOrFail($courseId);
+
+        $registrations = \App\Models\Registration::with(['user'])
+            ->where('course_id', $courseId)
+            ->where('status', \App\Enums\RegistrationStatus::PENDING_PAYMENT->value)
+            ->whereNull('deleted_at')
+            ->get()
+            ->map(fn($reg) => [
+                'registration_id' => $reg->id,
+                'user_id'         => $reg->user_id,
+                'full_name'       => $reg->full_name ?? $reg->user?->name ?? 'غير محدد',
+                'email'           => $reg->email ?? $reg->user?->email ?? '',
+                'phone'           => $reg->phone ?? '',
+                'course_price'    => (float) $course->price,
+                'currency'        => $course->currency ?? 'USD',
+                'status'          => $reg->status,
+            ]);
+
+        return response()->json([
+            'success' => true,
+            'course'  => [
+                'id'    => $course->id,
+                'title' => $course->title,
+                'price' => (float) $course->price,
+                'currency' => $course->currency ?? 'USD',
+            ],
+            'data'    => $registrations,
+        ]);
+    }
+
+    /**
+     * Get cashbox/fund current balance (total posted revenues - total posted expenses).
+     * This is used to validate that expenses don't exceed available balance.
+     */
+    public function getCashboxBalance(): JsonResponse
+    {
+        $totalRevenues = (float) \App\Models\ManualRevenue::where('status', 'posted')->sum('amount');
+        $totalExpenses = (float) \App\Models\ManualExpense::where('status', 'posted')->sum('amount');
+        $balance       = $totalRevenues - $totalExpenses;
+
+        return response()->json([
+            'success'        => true,
+            'total_revenues' => $totalRevenues,
+            'total_expenses' => $totalExpenses,
+            'balance'        => $balance,
+        ]);
     }
 
     /**

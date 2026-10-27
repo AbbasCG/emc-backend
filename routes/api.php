@@ -208,6 +208,7 @@ Route::get('/team', [\App\Http\Controllers\TeamController::class, 'index'])->mid
 
 // ─── Public: Expert & Instructor Application ──────────────────────────────────
 Route::post('/expert-applications', [\App\Http\Controllers\Public\PublicExpertApplicationController::class, 'store'])->middleware('throttle:api');
+Route::post('/trainer-applications', [\App\Http\Controllers\Public\PublicTrainerApplicationController::class, 'store'])->middleware('throttle:api');
 
 // ─── Student LMS (auth:sanctum + learner: any authenticated active account, learning is not a role) ─────────────────────────────────
 Route::prefix('student')->middleware(['auth:sanctum', 'learner'])->group(function () {
@@ -820,6 +821,14 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,ai_manager
     Route::put('/{id}/status', [\App\Http\Controllers\Admin\AdminExpertApplicationController::class, 'updateStatus']);
 });
 
+// Trainer applications: reviewed by admin tier, AI department manager, and academy manager
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,ai_manager,academy_manager'])->prefix('admin/trainer-applications')->group(function () {
+    Route::get('/', [\App\Http\Controllers\Admin\AdminTrainerApplicationController::class, 'index']);
+    Route::get('/{id}', [\App\Http\Controllers\Admin\AdminTrainerApplicationController::class, 'show']);
+    Route::put('/{id}/status', [\App\Http\Controllers\Admin\AdminTrainerApplicationController::class, 'updateStatus']);
+    Route::put('/{id}/notes', [\App\Http\Controllers\Admin\AdminTrainerApplicationController::class, 'updateNotes']);
+});
+
 // ─── Public: Support tickets ─────────────────────────────────────────────────
 Route::post('/support-tickets', [PublicSupportTicketController::class, 'store'])
     ->middleware('throttle:workshop');
@@ -950,6 +959,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     Route::post('meetings/{meeting}/action-items',                       [MeetingController::class, 'storeActionItem']);
     Route::post('meetings/{meeting}/action-items/{actionItem}/convert-to-task', [MeetingController::class, 'convertActionItemToTask']);
     Route::post('meetings/{meeting}/report',                             [MeetingController::class, 'storeReport']);
+    Route::post('meetings/{meeting}/close-lounge',                        [MeetingController::class, 'closeLounge']);
 
     // Dynamic Forms: moved to their own route group below (see "Dynamic Forms"), which names the forms roles in one place.
 
@@ -1498,6 +1508,7 @@ Route::middleware(['auth:sanctum'])->prefix('department')->group(function () {
     Route::patch('meetings/{meeting}/action-items/{actionItem}',  [MeetingController::class, 'updateActionItem']);
     Route::post('meetings/{meeting}/action-items',                [MeetingController::class, 'storeActionItem']);
     Route::post('meetings/{meeting}/report',                      [MeetingController::class, 'storeReport']);
+    Route::post('meetings/{meeting}/close-lounge',                [MeetingController::class, 'closeLounge']);
     Route::get('meeting-participants',                            [MeetingController::class, 'candidates']);
     Route::get('meetings/{meeting}/participants',                 [MeetingController::class, 'participantPool']);
     Route::post('meetings/{meeting}/join',                        [MeetingController::class, 'join']);
@@ -1582,6 +1593,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_ma
     ->group(function () {
         Route::get('chart-of-accounts',               [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'tree']);
         Route::get('chart-of-accounts/suggest-code',  [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'suggestCode']);
+        Route::get('accounts/defaults',              [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'defaults']);
         Route::get('accounts',                        [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'index']);
         Route::post('accounts',                       [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'store']);
         Route::put('accounts/{id}',                   [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'update']);
@@ -1596,6 +1608,9 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_ma
 
         // Manual Revenues (سندات القبض والإيرادات اليدوية)
         Route::get('revenues/suggest-receipt-no',     [\App\Http\Controllers\Admin\RevenueController::class, 'suggestReceiptNo']);
+        Route::get('revenues/paid-courses',           [\App\Http\Controllers\Admin\RevenueController::class, 'getPaidCourses']);
+        Route::get('revenues/cashbox-balance',        [\App\Http\Controllers\Admin\RevenueController::class, 'getCashboxBalance']);
+        Route::get('revenues/course-students/{courseId}', [\App\Http\Controllers\Admin\RevenueController::class, 'getCourseStudentsPendingPayment']);
         Route::apiResource('revenues',                 \App\Http\Controllers\Admin\RevenueController::class);
         Route::get('revenues/{revenue}/attachment',         [\App\Http\Controllers\Admin\RevenueController::class, 'downloadAttachment'])->name('revenues.attachment.download');
         Route::get('revenues/{revenue}/attachment/preview', [\App\Http\Controllers\Admin\RevenueController::class, 'previewAttachment'])->name('revenues.attachment.preview');
@@ -1823,7 +1838,7 @@ Route::middleware(['auth:sanctum'])->get('job-titles', [\App\Http\Controllers\Jo
 // endpoint (role:hr_manager,admin,super_admin,tech_admin) — the volunteer
 // applicant filling out this form is ordinarily none of those roles, and
 // reusing that endpoint here silently 403'd their department dropdown.
-Route::middleware(['auth:sanctum'])->get('departments/options', function () {
+Route::get('departments/options', function () {
     return response()->json([
         'success' => true,
         'data' => \App\Models\Department::active()->where('is_active', true)->orderBy('sort_order')->orderBy('id')->get(['id', 'name_ar', 'name']),

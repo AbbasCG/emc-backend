@@ -25,7 +25,12 @@ class LearningPathResource extends JsonResource
             'discount_price'    => $this->discount_price !== null ? (float) $this->discount_price : null,
             'status'            => $this->status,
             'is_featured'       => (bool) $this->is_featured,
-            'enrollment_open'   => (bool) $this->enrollment_open,
+            'start_date'        => $this->start_date ? \Carbon\Carbon::parse($this->start_date)->format('Y-m-d') : null,
+            'end_date'          => $this->end_date ? \Carbon\Carbon::parse($this->end_date)->format('Y-m-d') : null,
+            'is_ended'          => (bool) ($this->isEnded() ?? false),
+            'computed_status'   => ($this->isEnded() ?? false) ? 'ended' : $this->status,
+            'status_label_ar'   => ($this->isEnded() ?? false) ? 'منتهية' : ($this->status === 'published' ? 'منشور' : ($this->status === 'archived' ? 'مؤرشف' : 'مسودة')),
+            'enrollment_open'   => ! ($this->isEnded() ?? false) && (bool) $this->enrollment_open,
             'learning_outcomes' => $this->ensureArray($this->learning_outcomes),
             'requirements'      => $this->ensureArray($this->requirements),
 

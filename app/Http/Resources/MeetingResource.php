@@ -114,12 +114,21 @@ class MeetingResource extends JsonResource
             'organizer'     => $this->whenLoaded('organizer', fn () => $this->organizer
                 ? ['id' => $this->organizer->id, 'name' => $this->organizer->name]
                 : null),
+            'moderator'     => $this->whenLoaded('moderator', fn () => $this->moderator
+                ? ['id' => $this->moderator->id, 'name' => $this->moderator->name]
+                : null),
+            'top_interactive_user' => $this->whenLoaded('topInteractiveUser', fn () => $this->topInteractiveUser
+                ? ['id' => $this->topInteractiveUser->id, 'name' => $this->topInteractiveUser->name]
+                : null),
+            'discipline_rate' => $this->discipline_rate !== null ? (float) $this->discipline_rate : null,
 
             'audience'      => $audience,
             'my_attendance' => $mine ? [
-                'status'       => $mine->status,
-                'joined_at'    => $mine->joined_at?->toIso8601String(),
-                'confirmed_at' => $mine->confirmed_at?->toIso8601String(),
+                'status'        => $mine->status,
+                'excuse_status' => $mine->excuse_status,
+                'excuse_reason' => $mine->excuse_reason,
+                'joined_at'     => $mine->joined_at?->toIso8601String(),
+                'confirmed_at'  => $mine->confirmed_at?->toIso8601String(),
             ] : null,
 
             'has_report'    => $hasReport,
@@ -189,19 +198,23 @@ class MeetingResource extends JsonResource
         foreach ($pool as $member) {
             $row = $byUser->get($member['id']);
             $out[$member['id']] = [
-                'user'         => ['id' => $member['id'], 'name' => $member['name'], 'department' => $member['department']],
-                'status'       => $row?->status ?? MeetingParticipant::STATUS_INVITED,
-                'joined_at'    => $row?->joined_at?->toIso8601String(),
-                'confirmed_at' => $row?->confirmed_at?->toIso8601String(),
+                'user'          => ['id' => $member['id'], 'name' => $member['name'], 'department' => $member['department']],
+                'status'        => $row?->status ?? MeetingParticipant::STATUS_INVITED,
+                'excuse_status' => $row?->excuse_status,
+                'excuse_reason' => $row?->excuse_reason,
+                'joined_at'     => $row?->joined_at?->toIso8601String(),
+                'confirmed_at'  => $row?->confirmed_at?->toIso8601String(),
             ];
         }
         foreach ($rows as $row) {
             if (! isset($out[$row->user_id])) {
                 $out[$row->user_id] = [
-                    'user'         => ['id' => (int) $row->user_id, 'name' => (string) ($names[$row->user_id] ?? ''), 'department' => null],
-                    'status'       => $row->status,
-                    'joined_at'    => $row->joined_at?->toIso8601String(),
-                    'confirmed_at' => $row->confirmed_at?->toIso8601String(),
+                    'user'          => ['id' => (int) $row->user_id, 'name' => (string) ($names[$row->user_id] ?? ''), 'department' => null],
+                    'status'        => $row->status,
+                    'excuse_status' => $row->excuse_status,
+                    'excuse_reason' => $row->excuse_reason,
+                    'joined_at'     => $row->joined_at?->toIso8601String(),
+                    'confirmed_at'  => $row->confirmed_at?->toIso8601String(),
                 ];
             }
         }

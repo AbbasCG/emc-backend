@@ -116,17 +116,27 @@ class ChartOfAccountsController extends Controller
         $old = $account->toArray();
 
         $validated = $request->validate([
-            'name_ar'       => ['required', 'string', 'max:255'],
-            'name_en'       => ['nullable', 'string', 'max:255'],
-            'is_selectable' => ['required', 'boolean'],
+            'name_ar'              => ['required', 'string', 'max:255'],
+            'name_en'              => ['nullable', 'string', 'max:255'],
+            'is_selectable'        => ['required', 'boolean'],
+            'default_for_currency' => ['nullable', 'string', 'in:USD,YER,SAR,EUR,TRY,GBP'],
         ]);
+
+        // Enforce uniqueness: clear any other account that currently holds
+        // the same default_for_currency before setting it on this one.
+        if (!empty($validated['default_for_currency'])) {
+            Account::where('default_for_currency', $validated['default_for_currency'])
+                   ->where('id', '!=', $account->id)
+                   ->update(['default_for_currency' => null]);
+        }
 
         try {
             $account->update([
-                'name_ar'       => $validated['name_ar'],
-                'name_en'       => $validated['name_en'] ?? null,
-                'is_selectable' => $validated['is_selectable'],
-                'updated_by'    => $request->user()?->id,
+                'name_ar'              => $validated['name_ar'],
+                'name_en'              => $validated['name_en'] ?? null,
+                'is_selectable'        => $validated['is_selectable'],
+                'default_for_currency' => $validated['default_for_currency'] ?? null,
+                'updated_by'           => $request->user()?->id,
             ]);
         } catch (ProtectedChartOfAccountException $e) {
             return response()->json([
@@ -171,6 +181,25 @@ class ChartOfAccountsController extends Controller
             'success' => true,
             'message' => 'تم حذف الحساب بنجاح',
         ]);
+    }
+
+    /**
+     * GET /admin/finance/accounts/defaults
+     * Returns the currently configured default account per currency.
+     */
+    public function defaults(): JsonResponse
+    {
+        $defaults = Account::whereNotNull('default_for_currency')
+                           ->get()
+                           ->keyBy('default_for_currency')
+                           ->map(fn ($a) => [
+                               'id'       => $a->id,
+                               'code'     => $a->code,
+                               'name_ar'  => $a->name_ar,
+                               'currency' => $a->default_for_currency,
+                           ]);
+
+        return response()->json(['success' => true, 'data' => $defaults]);
     }
 
     /**

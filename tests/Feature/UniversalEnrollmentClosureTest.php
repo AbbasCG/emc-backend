@@ -138,7 +138,7 @@ class UniversalEnrollmentClosureTest extends TestCase
 
     // ── ended ────────────────────────────────────────────────────────────────
 
-    public function test_an_ended_program_takes_nobody_unless_registration_was_deliberately_kept_open(): void
+    public function test_an_ended_program_takes_nobody(): void
     {
         $user = $this->userWithRole('partner');
         $ended = ['end_date' => now()->subDays(3)->toDateString(), 'start_date' => now()->subDays(30)->toDateString()];
@@ -146,8 +146,8 @@ class UniversalEnrollmentClosureTest extends TestCase
         $this->assertRefused($this->register($user, $this->free($ended + ['registration_open' => false])), 'program_ended');
         $this->assertRefused($this->checkout($user, $this->paid($ended + ['registration_open' => false])), 'program_ended');
 
-        // The older override an administrator uses on purpose: ended but still open takes registrations, as it always did.
-        $this->register($user, $this->free($ended))->assertCreated();
+        // Ended programs never take registrations, even if registration_open was set to true
+        $this->assertRefused($this->register($user, $this->free($ended + ['registration_open' => true])), 'program_ended');
     }
 
     // ── full ─────────────────────────────────────────────────────────────────

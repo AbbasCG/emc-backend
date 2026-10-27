@@ -18,6 +18,7 @@ class Account extends Model
         'is_selectable',
         'is_system',
         'is_deletable',
+        'default_for_currency',
         'created_by',
         'updated_by',
     ];
@@ -27,6 +28,20 @@ class Account extends Model
         'is_system'     => 'boolean',
         'is_deletable'  => 'boolean',
     ];
+
+    /**
+     * Resolve the default deposit/payment account for a given currency.
+     * Returns null if no default has been configured for that currency.
+     *
+     * Usage:
+     *   $account = Account::defaultForCurrency('USD');
+     */
+    public static function defaultForCurrency(string $currency): ?self
+    {
+        return static::where('default_for_currency', strtoupper($currency))
+                     ->where('is_selectable', true)
+                     ->first();
+    }
 
     /** Fields that define a system account's identity — never editable once is_system is true. */
     private const PROTECTED_IDENTITY_FIELDS = ['code', 'type'];
