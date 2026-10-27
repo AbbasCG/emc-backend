@@ -11,25 +11,44 @@ class UserResource extends JsonResource
     {
         $departmentId = null;
         $departmentName = null;
+        $departmentSlug = null;
         if ($this->relationLoaded('departments') && $this->departments->count() > 0) {
             $primary = $this->departments->where('pivot.is_primary', true)->first() ?? $this->departments->first();
             $departmentId = $primary->id;
             $departmentName = $primary->name_ar ?? $primary->name;
+            $departmentSlug = $primary->slug;
         } elseif ($this->department) {
             if (is_numeric($this->department)) {
                 $departmentId = (int) $this->department;
                 $d = \App\Models\Department::find($departmentId);
                 $departmentName = $d?->name_ar ?? $d?->name;
+                $departmentSlug = $d?->slug;
             } else {
-                $dept = \App\Models\Department::where('slug', $this->department)->orWhere('name_ar', $this->department)->first();
+                $dept = \App\Models\Department::where('slug', $this->department)
+                    ->orWhere('name_ar', $this->department)
+                    ->orWhere('name', $this->department)
+                    ->first();
                 if ($dept) {
                     $departmentId = $dept->id;
                     $departmentName = $dept->name_ar ?? $dept->name;
+                    $departmentSlug = $dept->slug;
                 } else {
                     $departmentName = $this->department;
                 }
             }
         }
+        if (! $departmentSlug && $this->id) {
+            $ledDept = \App\Models\Department::where('leader_id', $this->id)->first();
+            if ($ledDept) {
+                $departmentId = $departmentId ?? $ledDept->id;
+                $departmentName = $departmentName ?? ($ledDept->name_ar ?? $ledDept->name);
+                $departmentSlug = $ledDept->slug;
+            }
+        }
+
+        $specializedRole = method_exists($this->resource, 'getDepartmentSpecializedRole')
+            ? $this->resource->getDepartmentSpecializedRole()
+            : null;
 
         $hasEnrolledCourses = \App\Models\Registration::where('user_id', $this->id)
             ->whereIn('status', ['confirmed', 'active', 'completed', 'enrolled'])
@@ -46,9 +65,12 @@ class UserResource extends JsonResource
             'email'                      => $this->email,
             'phone'                      => $this->phone,
             'phone_country_code'         => $this->phone_country_code,
-            'role'                       => $this->effectiveRole(),
+            'role'                       => $this->role,
+            'effective_role'             => $this->effectiveRole(),
+            'specialized_role'           => $specializedRole,
             'department'                 => $this->department,
             'department_id'              => $departmentId,
+            'department_slug'            => $departmentSlug,
             'department_name'            => $departmentName,
             'has_enrolled_courses'       => $hasEnrolledCourses,
             'impact_points_balance'      => $impactPointsBalance,

@@ -106,6 +106,15 @@ class RolePermissionSeeder extends Seeder
                 Permissions::USE_AI_ASSISTANT,
             ],
 
+            'department_member' => [
+                Permissions::VIEW_TASKS,
+                Permissions::VIEW_MEETINGS,
+                Permissions::VIEW_FORMS,
+                Permissions::VIEW_TEAM,
+                Permissions::VIEW_KNOWLEDGE,
+                Permissions::USE_AI_ASSISTANT,
+            ],
+
             'section_lead' => [
                 Permissions::VIEW_TASKS, Permissions::MANAGE_TASKS,
                 Permissions::VIEW_MEETINGS,

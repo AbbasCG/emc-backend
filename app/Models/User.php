@@ -138,6 +138,52 @@ class User extends Authenticatable implements MustVerifyEmail
         ], true);
     }
 
+    public function getDepartmentSpecializedRole(): ?string
+    {
+        if ($this->role !== 'department_manager') {
+            return null;
+        }
+
+        $dept = null;
+        if ($this->relationLoaded('departments') && $this->departments->isNotEmpty()) {
+            $dept = $this->departments->where('pivot.is_primary', true)->first() ?? $this->departments->first();
+        }
+        if (! $dept && $this->id) {
+            $dept = Department::where('leader_id', $this->id)->first()
+                ?? $this->departments()->first();
+        }
+        if (! $dept && ! empty($this->department)) {
+            $dept = is_numeric($this->department)
+                ? Department::find((int) $this->department)
+                : Department::where('slug', $this->department)
+                    ->orWhere('name_ar', $this->department)
+                    ->orWhere('name', $this->department)
+                    ->first();
+        }
+
+        if (! $dept || empty($dept->slug)) {
+            return null;
+        }
+
+        return match ($dept->slug) {
+            'finance'                   => 'finance_manager',
+            'human-resources'           => 'hr_manager',
+            'marketing-media'           => 'marketing_manager',
+            'quality-governance'        => 'quality_manager',
+            'programs-tracks'           => 'programs_manager',
+            'operations'                => 'operations_manager',
+            'ai-transformation'         => 'ai_manager',
+            'community-health'          => 'community_manager',
+            'partnerships'              => 'partnerships_manager',
+            'strategy-planning'         => 'strategy_planning_manager',
+            'digital-ambassadors'       => 'digital_ambassadors_manager',
+            'advisors'                  => 'advisors_manager',
+            'executive-management'      => 'executive_admin',
+            'technology'                => 'tech_admin',
+            default                     => null,
+        };
+    }
+
     /**
      * Check if the user has one of the given role names.
      *
@@ -148,9 +194,10 @@ class User extends Authenticatable implements MustVerifyEmail
     {
         // Normalize: treat instructor <=> teacher as synonyms
         $effective = $this->effectiveRole();
+        $specialized = $this->getDepartmentSpecializedRole();
 
         foreach ($roles as $role) {
-            if ($role === $effective || $role === $this->role) {
+            if ($role === $effective || $role === $this->role || ($specialized && $role === $specialized)) {
                 return true;
             }
             // instructor requested → also accept teacher (and vice versa)
@@ -189,12 +236,26 @@ class User extends Authenticatable implements MustVerifyEmail
         }
 
         $dbRole = Role::with('permissions')
-            ->where('name', $this->effectiveRole())
+            ->where('name', $this->role)
             ->first();
 
-        return $dbRole
+        $perms = $dbRole
             ? $dbRole->permissions->pluck('name')->toArray()
             : Permissions::forRole($this->role);
+
+        // If department manager has a specialized department role, merge those permissions
+        if ($this->role === 'department_manager') {
+            $specialized = $this->getDepartmentSpecializedRole();
+            if ($specialized) {
+                $specializedRole = Role::with('permissions')->where('name', $specialized)->first();
+                $specializedPerms = $specializedRole
+                    ? $specializedRole->permissions->pluck('name')->toArray()
+                    : Permissions::forRole($specialized);
+                $perms = array_values(array_unique(array_merge($perms, $specializedPerms)));
+            }
+        }
+
+        return $perms;
     }
 
     public function allPermissions(): array
@@ -337,10 +398,15 @@ class User extends Authenticatable implements MustVerifyEmail
      */
     public function effectiveRole(): string
     {
-        return match ($this->role) {
-            'teacher' => 'instructor',
-            default   => $this->role ?? 'student',
-        };
+        if ($this->role === 'teacher') {
+            return 'instructor';
+        }
+
+        if ($this->role === 'department_manager') {
+            return $this->getDepartmentSpecializedRole() ?? 'department_manager';
+        }
+
+        return $this->role ?? 'student';
     }
 
     public function sendPasswordResetNotification($token): void
