@@ -821,8 +821,8 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,ai_manager
     Route::put('/{id}/status', [\App\Http\Controllers\Admin\AdminExpertApplicationController::class, 'updateStatus']);
 });
 
-// Trainer applications: reviewed by admin tier, AI department manager, and academy manager
-Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,ai_manager,academy_manager'])->prefix('admin/trainer-applications')->group(function () {
+// Trainer applications: reviewed by admin tier and the AI department manager (there is no academy_manager role)
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,ai_manager'])->prefix('admin/trainer-applications')->group(function () {
     Route::get('/', [\App\Http\Controllers\Admin\AdminTrainerApplicationController::class, 'index']);
     Route::get('/{id}', [\App\Http\Controllers\Admin\AdminTrainerApplicationController::class, 'show']);
     Route::put('/{id}/status', [\App\Http\Controllers\Admin\AdminTrainerApplicationController::class, 'updateStatus']);
@@ -1838,7 +1838,7 @@ Route::middleware(['auth:sanctum'])->get('job-titles', [\App\Http\Controllers\Jo
 // endpoint (role:hr_manager,admin,super_admin,tech_admin) — the volunteer
 // applicant filling out this form is ordinarily none of those roles, and
 // reusing that endpoint here silently 403'd their department dropdown.
-Route::get('departments/options', function () {
+Route::middleware(['auth:sanctum'])->get('departments/options', function () {
     return response()->json([
         'success' => true,
         'data' => \App\Models\Department::active()->where('is_active', true)->orderBy('sort_order')->orderBy('id')->get(['id', 'name_ar', 'name']),

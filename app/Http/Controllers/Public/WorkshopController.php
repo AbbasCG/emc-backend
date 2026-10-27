@@ -178,8 +178,8 @@ class WorkshopController extends Controller
             'is_ended'          => CourseComputedStatus::isEnded($c),
             'computed_status'   => CourseComputedStatus::computedStatus($c),
             'status_label_ar'   => CourseComputedStatus::statusLabelAr($c),
-            'registration_open' => ! CourseComputedStatus::isEnded($c) && (bool) ($c->registration_open ?? true),
-            'enrollment_open'   => ! CourseComputedStatus::isEnded($c) && (bool) ($c->registration_open ?? true),
+            'registration_open' => ! CourseComputedStatus::blocksPublicEnrollment($c) && (bool) ($c->registration_open ?? true),
+            'enrollment_open'   => ! CourseComputedStatus::blocksPublicEnrollment($c) && (bool) ($c->registration_open ?? true),
 
             // Price / access
             'price'    => $c->price !== null ? (float) $c->price : null,

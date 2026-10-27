@@ -125,9 +125,13 @@ final class CourseComputedStatus
         };
     }
 
-    /** Public enrollment is not allowed on an ended course or workshop. */
+    /** Public enrollment allowed on ended course only when admin keeps registration_open. */
     public static function blocksPublicEnrollment(Course $course): bool
     {
-        return self::isEnded($course);
+        if (! self::isEnded($course)) {
+            return false;
+        }
+
+        return ! (bool) ($course->registration_open ?? false);
     }
 }

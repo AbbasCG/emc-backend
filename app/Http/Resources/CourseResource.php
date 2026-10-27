@@ -65,8 +65,8 @@ class CourseResource extends JsonResource
             'effective_enrollment_count' => $this->seats_taken_count ?? ($this->registrations_count ?? 0),
             // true when capacity is set and all seats are taken
             'is_full'               => $this->capacity !== null && (int) $this->capacity > 0 && (int) ($this->seats_taken_count ?? ($this->registrations_count ?? 0)) >= (int) $this->capacity,
-            'registration_open'     => ! CourseComputedStatus::isEnded($this->resource) && (bool) ($this->registration_open ?? true),
-            'registration_status'   => CourseComputedStatus::isEnded($this->resource) ? 'closed' : ($this->registration_status ?? 'open'),
+            'registration_open'     => ! CourseComputedStatus::blocksPublicEnrollment($this->resource) && (bool) ($this->registration_open ?? true),
+            'registration_status'   => CourseComputedStatus::blocksPublicEnrollment($this->resource) ? 'closed' : ($this->registration_status ?? 'open'),
             'requires_registration_code' => (bool) ($this->requires_registration_code ?? false),
 
             // Image — raw path, resolved full URL, and thumbnail
