@@ -25,6 +25,7 @@ class WebhookDispatchService
         'meeting.created',
         'partner.requested',
         'support.ticket.created',
+        'form.submitted',
     ];
 
     /**

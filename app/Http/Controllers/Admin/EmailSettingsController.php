@@ -54,6 +54,7 @@ class EmailSettingsController extends Controller
         'ambassador_confirmation'            => ['label' => 'تأكيد طلب السفراء (للمتقدم)',     'description' => 'يُرسل لمقدم طلب السفراء تأكيداً باستلام طلبه',                            'category' => 'applications'],
         'ambassador_admin_notification'      => ['label' => 'طلب سفراء جديد (للإدارة)',       'description' => 'يُرسل للقسم المختص عند ورود طلب انضمام سفير جديد',                        'category' => 'applications'],
         'ambassador_status_changed'          => ['label' => 'تحديث حالة طلب السفراء',         'description' => 'يُرسل لمقدم الطلب عند قبول أو رفض طلب انضمامه كسفير',                     'category' => 'applications'],
+        'form_submission_confirmation'       => ['label' => 'تأكيد استلام رد على نموذج',      'description' => 'يُرسل لمن أجاب عن نموذج ذكي فُعّل فيه تأكيد الاستلام (رقم الرد ووقته فقط، دون الإجابات)', 'category' => 'applications'],
         // ── Certificates ──────────────────────────────────────────────────────
         'certificate_ready'                  => ['label' => 'شهادة جاهزة للتحميل',            'description' => 'يُرسل للطالب عند اكتمال إصدار الشهادة وتوفر ملف PDF',                     'category' => 'certificates'],
         'certificate_rejected'               => ['label' => 'رفض الشهادة',                    'description' => 'يُرسل للطالب عند رفض طلب اعتماد شهادته',                                  'category' => 'certificates'],

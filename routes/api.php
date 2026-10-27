@@ -49,6 +49,10 @@ use App\Http\Controllers\Admin\EmailLogsController;
 use App\Http\Controllers\Admin\EmailSettingsController;
 use App\Http\Controllers\Admin\DynamicFormController;
 use App\Http\Controllers\Admin\FormCollaboratorController;
+use App\Http\Controllers\Admin\FormAnalyticsController;
+use App\Http\Controllers\Admin\FormAutomationController;
+use App\Http\Controllers\Admin\FormRetentionController;
+use App\Http\Controllers\Admin\FormTemplateController;
 use App\Http\Controllers\Admin\FormLifecycleController;
 use App\Http\Controllers\Admin\FormSharingController;
 use App\Http\Controllers\Admin\FormResponseController;
@@ -1438,6 +1442,28 @@ Route::middleware(['auth:sanctum', 'role:'.implode(',', \App\Services\Forms\Form
         Route::put('forms/{form}/collaborators/{collaborator}',     [FormCollaboratorController::class, 'update']);
         Route::delete('forms/{form}/collaborators/{collaborator}',  [FormCollaboratorController::class, 'destroy']);
         Route::get('forms/{form}/activity',                         [FormCollaboratorController::class, 'activity']);
+
+        // Templates (Phase 6): the built-in library plus templates saved from forms, and duplicating a form.
+        Route::get('form-templates',                        [FormTemplateController::class, 'index']);
+        Route::post('form-templates',                       [FormTemplateController::class, 'store'])->middleware('throttle:30,1');
+        Route::get('form-templates/{template}',             [FormTemplateController::class, 'show'])->where('template', 'system:[a-z_]+|[0-9]+');
+        Route::post('form-templates/{template}/use',        [FormTemplateController::class, 'use'])->where('template', 'system:[a-z_]+|[0-9]+')->middleware('throttle:30,1');
+        Route::put('form-templates/{template}',             [FormTemplateController::class, 'update'])->whereNumber('template');
+        Route::delete('form-templates/{template}',          [FormTemplateController::class, 'destroy'])->whereNumber('template');
+        Route::post('forms/{form}/duplicate',               [FormTemplateController::class, 'duplicate'])->middleware('throttle:30,1');
+
+        // Analytics (Phase 7): a summary of the stored responses, readable by whoever may read those responses.
+        Route::get('forms/{form}/analytics',                [FormAnalyticsController::class, 'show'])->middleware('throttle:60,1');
+        Route::get('forms/{form}/analytics/export',         [FormAnalyticsController::class, 'export'])->middleware('throttle:10,1');
+        Route::get('form-analytics/overview',               [FormAnalyticsController::class, 'overview'])->middleware('throttle:60,1');
+
+        // Notifications and automation (Phase 8): who is told, the respondent's receipt, automatic assignment, reminders, webhook.
+        Route::get('forms/{form}/automation',               [FormAutomationController::class, 'show']);
+        Route::put('forms/{form}/automation',               [FormAutomationController::class, 'update'])->middleware('throttle:30,1');
+
+        // Data retention: how long responses are kept before forms:purge-responses deletes them.
+        Route::get('forms/{form}/retention',                [FormRetentionController::class, 'show']);
+        Route::put('forms/{form}/retention',                [FormRetentionController::class, 'update'])->middleware('throttle:30,1');
     });
 });
 

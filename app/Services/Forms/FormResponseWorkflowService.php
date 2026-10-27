@@ -7,6 +7,7 @@ use App\Models\FormSubmission;
 use App\Models\FormSubmissionEvent;
 use App\Models\FormSubmissionNote;
 use App\Models\User;
+use App\Services\Forms\Automation\FormAutomationService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -57,7 +58,7 @@ class FormResponseWorkflowService
             }
         }
 
-        return DB::transaction(function () use ($submission, $actor, $assignee) {
+        $result = DB::transaction(function () use ($submission, $actor, $assignee) {
             $locked = FormSubmission::query()->whereKey($submission->id)->lockForUpdate()->with('assignee:id,name')->firstOrFail();
             if (($locked->assigned_to === null && $assignee === null) || ($assignee !== null && (int) $locked->assigned_to === (int) $assignee->id)) {
                 return ['changed' => false];
@@ -75,6 +76,12 @@ class FormResponseWorkflowService
 
             return ['changed' => true];
         });
+
+        if ($result['changed'] && $assignee !== null) {
+            DB::afterCommit(fn () => app(FormAutomationService::class)->assigned($submission, $actor));
+        }
+
+        return $result;
     }
 
     public function addNote(FormSubmission $submission, User $actor, string $body): FormSubmissionNote

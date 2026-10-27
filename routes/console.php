@@ -23,6 +23,18 @@ Schedule::command('forms:purge-exports')
     ->withoutOverlapping()
     ->appendOutputTo(storage_path('logs/scheduler.log'));
 
+// Smart Forms: remind reviewers of responses still open after each form's reminder delay — once a day, at 08:00
+Schedule::command('forms:remind-pending')
+    ->dailyAt('08:00')
+    ->withoutOverlapping()
+    ->appendOutputTo(storage_path('logs/scheduler.log'));
+
+// Smart Forms: delete responses older than the retention period their form's owner chose (forms without one are never touched)
+Schedule::command('forms:purge-responses')
+    ->dailyAt('03:15')
+    ->withoutOverlapping()
+    ->appendOutputTo(storage_path('logs/scheduler.log'));
+
 // Prune failed jobs older than 7 days — runs every Sunday at 03:00
 Schedule::command('queue:prune-failed --hours=168')
     ->weeklyOn(0, '03:00')

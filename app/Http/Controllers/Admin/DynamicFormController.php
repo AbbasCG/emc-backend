@@ -23,7 +23,6 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -78,7 +77,7 @@ class DynamicFormController extends Controller
         $form = DB::transaction(function () use ($request, $data, $actor) {
             $form = DynamicForm::create([
                 'title'                => $data['title'],
-                'slug'                 => $this->uniqueSlug($data['slug'] ?? null, $data['title']),
+                'slug'                 => DynamicForm::freeSlug($data['slug'] ?? null, $data['title']),
                 'description'          => $data['description'] ?? null,
                 'type'                 => $data['type'] ?? 'general',
                 'flow'                 => self::flowFrom($data) ?: null,
@@ -424,21 +423,5 @@ class DynamicFormController extends Controller
         if (! $this->access->canUseDepartment($request->user(), $departmentId === null ? null : (int) $departmentId)) {
             throw ValidationException::withMessages(['department_id' => 'لا تملك صلاحية إنشاء نماذج لهذا القسم.']);
         }
-    }
-
-    /** The requested link when it is free; otherwise the same link with a short random tail. Existing links never change. */
-    private function uniqueSlug(?string $requested, string $title): string
-    {
-        $base = $requested !== null && $requested !== '' ? $requested : (Str::slug($title) ?: 'form');
-
-        if (! DynamicForm::withTrashed()->where('slug', $base)->exists()) {
-            return $base;
-        }
-
-        do {
-            $candidate = Str::limit($base, 140, '').'-'.Str::lower(Str::random(5));
-        } while (DynamicForm::withTrashed()->where('slug', $candidate)->exists());
-
-        return $candidate;
     }
 }
