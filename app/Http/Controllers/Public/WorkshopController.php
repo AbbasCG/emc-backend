@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Public;
 use App\Http\Controllers\Controller;
 use App\Models\Course;
 use App\Models\Registration;
+use App\Support\CourseComputedStatus;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -73,7 +74,7 @@ class WorkshopController extends Controller
         }
 
         $perPage   = min((int) $request->query('per_page', 24), 200);
-        $workshops = $query->orderBy('start_date')->paginate($perPage);
+        $workshops = $query->latest('id')->paginate($perPage);
 
         return response()->json([
             'success' => true,
@@ -174,8 +175,11 @@ class WorkshopController extends Controller
             'is_online'        => $isOnline,
 
             // Registration
-            'registration_open' => (bool) ($c->registration_open ?? true),
-            'enrollment_open'   => (bool) ($c->registration_open ?? true),
+            'is_ended'          => CourseComputedStatus::isEnded($c),
+            'computed_status'   => CourseComputedStatus::computedStatus($c),
+            'status_label_ar'   => CourseComputedStatus::statusLabelAr($c),
+            'registration_open' => ! CourseComputedStatus::blocksPublicEnrollment($c) && (bool) ($c->registration_open ?? true),
+            'enrollment_open'   => ! CourseComputedStatus::blocksPublicEnrollment($c) && (bool) ($c->registration_open ?? true),
 
             // Price / access
             'price'    => $c->price !== null ? (float) $c->price : null,

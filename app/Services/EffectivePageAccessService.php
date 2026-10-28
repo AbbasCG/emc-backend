@@ -227,8 +227,16 @@ class EffectivePageAccessService
     private function roleLayer(User $user): array
     {
         $role = Role::query()->where('name', $user->effectiveRole())->first();
+        $keys = $role ? $this->roleDefaults->getDefaultsForRole($role) : [];
 
-        return $role ? $this->roleDefaults->getDefaultsForRole($role) : [];
+        if ($user->role === 'department_manager' && $user->effectiveRole() !== 'department_manager') {
+            $deptRole = Role::query()->where('name', 'department_manager')->first();
+            if ($deptRole) {
+                $keys = array_values(array_unique(array_merge($keys, $this->roleDefaults->getDefaultsForRole($deptRole))));
+            }
+        }
+
+        return $keys;
     }
 
     /**

@@ -23,6 +23,7 @@ class RoleSeeder extends Seeder
         ['name' => 'executive_admin',   'display_name' => 'Executive Admin',     'description' => 'Read-only view across all dashboards and reports.',               'is_system' => true],
         ['name' => 'admin',             'display_name' => 'Admin',               'description' => 'Manages platform operations, courses, users, and content.',        'is_system' => true],
         ['name' => 'department_manager','display_name' => 'Department Manager',  'description' => 'Manages tasks, meetings, and team within their department.',       'is_system' => true],
+        ['name' => 'department_member', 'display_name' => 'Department Member',   'description' => 'Member of a department with access to department meetings and tasks.','is_system' => true],
         ['name' => 'section_lead',      'display_name' => 'Section Lead',        'description' => 'Manages tasks within their section.',                              'is_system' => true],
         ['name' => 'finance_manager',   'display_name' => 'Finance Manager',     'description' => 'Manages payments, revenue, coupons, and financial reports.',       'is_system' => true],
         ['name' => 'marketing_manager', 'display_name' => 'Marketing Manager',   'description' => 'Manages marketing campaigns and program visibility.',              'is_system' => true],

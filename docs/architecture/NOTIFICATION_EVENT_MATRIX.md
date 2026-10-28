@@ -64,8 +64,12 @@ Maps every real `NotificationService` scenario method (56, verified by `grep -c 
 | 54 | `volunteerHrProfileApproved` | Volunteers | HR | the volunteer (skipped when the profile has no account) | in_app | A | **Adopted** — `volunteer_hr_profile_approved:{profileId}` |
 | 55 | `volunteerHrProfileRejected` | Volunteers | HR | the volunteer (skipped when the profile has no account) | in_app | A | **Adopted** — `volunteer_hr_profile_rejected:{profileId}` |
 | 56 | `oralAssessmentMeetingLinkUpdated` | Placement | instructor/admin | student | in_app + push | C (each new link — or its removal — is a distinct event) | **Adopted** — `oral_assessment_meeting_link_updated:{bookingId}:{link or "removed"}` |
+| 57 | `formResponseReceived` | Smart Forms | respondent (via `FormAutomationService`, after commit) | the form owner and/or the leaders of its department who may read its responses — only when the form's automation switches it on | in_app | A | **Adopted** — `form_response_received:{submissionId}` |
+| 58 | `formSubmissionConfirmed` | Smart Forms | respondent | the signed-in respondent, when the form's confirmation is on | in_app + logged email | A | **Adopted** — `form_submission_confirmed:{submissionId}` |
+| 59 | `formResponseAssigned` | Smart Forms | reviewer or automatic assignment | the assignee (never the person assigning themselves) | in_app | C (re-assignment is a new event) | **Adopted** — `form_response_assigned:{submissionId}:{assigneeId}:{assignedAt}` |
+| 60 | `formResponsesPending` | Smart Forms | scheduler (`forms:remind-pending`, daily) | the assignee of each open response, or the owner for unassigned ones | in_app | C (one per person, form and day) | **Adopted** — `form_responses_pending:{formId}:{userId}:{day}` |
 
-`grep -c "public static function" app/Services/NotificationService.php` returns **57** — `send()` (the core dispatcher, not a scenario) plus the **56 real scenario methods** above, one row each.
+`grep -c "public static function" app/Services/NotificationService.php` returns **61** — `send()` (the core dispatcher, not a scenario) plus the **60 real scenario methods** above, one row each.
 
 ## Legitimate-repeat decisions made explicit this pass
 
@@ -82,9 +86,9 @@ Maps every real `NotificationService` scenario method (56, verified by `grep -c 
 - **realtime**: all 56 scenarios automatically broadcast on `notifications.{userId}` the moment their `platform_notifications` row is created (wired once, centrally, in `SendPlatformNotificationJob`, not per-scenario) — no scenario needed individual changes for this.
 - **Correction to prior-pass documentation**: earlier passes described `assignmentGraded`/`certificateIssued` as "sms/push-ready proof-of-concept scenarios" using `'channels' => ['sms', 'push']`. Re-auditing the actual source this pass (`grep -n "'channels' =>" app/Services/NotificationService.php` returns zero matches) found neither method has ever hardcoded a `channels` key — both scenarios previously fell through to no external fan-out at all (no `$extra['channels']` present, and prior to this pass there was no default policy to fall back to). Both now correctly receive `['in_app', 'push']` (no SMS — judged disproportionate cost for a non-imminent event) for the first time, via the central policy below, not a code path that existed before.
 
-## Channel policy classification (all 56 real dispatched types)
+## Channel policy classification (all 60 real dispatched types)
 
-Source of truth: `App\Support\NotificationChannelPolicy::POLICY`. Verified this pass to be a complete 1:1 mapping against the 56 real type strings extracted directly from `NotificationService.php`'s `self::send()` call sites (zero missing, zero extra — see `Ticket8ChannelPolicyTest::test_policy_covers_every_real_dispatched_type_with_no_extras`). `urgent` is `false` for every single type — none of the 49 scenario methods carry a verified, unambiguous "immediate operational emergency" signal (see ADR §21 for the specific candidates considered and rejected).
+Source of truth: `App\Support\NotificationChannelPolicy::POLICY`. Verified this pass to be a complete 1:1 mapping against the 60 real type strings extracted directly from `NotificationService.php`'s `self::send()` call sites (zero missing, zero extra — see `Ticket8ChannelPolicyTest::test_policy_covers_every_real_dispatched_type_with_no_extras`). `urgent` is `false` for every single type — none of the 49 scenario methods carry a verified, unambiguous "immediate operational emergency" signal (see ADR §21 for the specific candidates considered and rejected).
 
 | Type | Channels (default) | Urgent | Email | WhatsApp | Notes |
 |------|--------------------|--------|-------|----------|-------|
@@ -139,6 +143,10 @@ Source of truth: `App\Support\NotificationChannelPolicy::POLICY`. Verified this 
 | `ticket_resolved` | in_app | false | existing_separate | none | Submitter's report was resolved; EmailService sends TicketStatusUpdateMail separately (EmailSettingsController key `ticket_resolved`) |
 | `suggestion_approved` | in_app | false | existing_separate | none | Submitter's suggestion was approved; email sent separately via EmailService |
 | `suggestion_implemented` | in_app | false | existing_separate | none | Submitter's suggestion was added to the system; email sent separately via EmailService |
+| `form_response_received` | in_app | false | none | none | Smart Forms: new response for the owner / department reviewers who opted in; never carries an answer |
+| `form_submission_confirmed` | in_app | false | existing_separate | none | Smart Forms: receipt for the signed-in respondent; FormAutomationService sends the logged email separately (key `form_submission_confirmation`) |
+| `form_response_assigned` | in_app | false | none | none | Smart Forms: response assigned for review (Class C) |
+| `form_responses_pending` | in_app | false | none | none | Smart Forms: daily digest of responses still open after the form's delay |
 | `ambassador_application` | in_app | false | existing_separate | none | AmbassadorApplicationAdminMail already sent |
 | `ambassador_status_changed` | in_app | false | none | none | Applicant email dispatched separately by the controller, not this method |
 | `volunteer_hr_profile_submitted` | in_app | false | none | none | HR review-queue event; visible in the operations workspace and not time-sensitive |

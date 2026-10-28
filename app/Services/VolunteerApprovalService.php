@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Department;
+use App\Models\TeamMember;
 use App\Models\TeamProfile;
 use App\Models\User;
 use App\Models\VolunteerHrProfile;
@@ -186,6 +187,30 @@ class VolunteerApprovalService
                 'team_profile_id' => $teamProfile->id,
                 'rejection_reason' => null,
             ]);
+
+            // Automatic role / membership changes need an explicit business decision (config/volunteer_onboarding.php);
+            // with the switches off, approval only records the approval and the team profile, as before.
+            $targetUser = $user ?? ($locked->user_id ? User::find($locked->user_id) : null);
+            if ($targetUser && $department) {
+                if (config('volunteer_onboarding.approval_assigns_department_member_role')
+                    && in_array($targetUser->role, ['student', 'volunteer'], true)) {
+                    $targetUser->update(['role' => 'department_member']);
+                }
+                if (config('volunteer_onboarding.approval_links_department_membership')) {
+                    $targetUser->departments()->syncWithoutDetaching([$department->id => ['is_primary' => true]]);
+                    TeamMember::updateOrCreate(
+                        ['team_profile_id' => $teamProfile->id],
+                        [
+                            'user_id'       => $targetUser->id,
+                            'department_id' => $department->id,
+                            'section_id'    => null, // unassigned, waiting for manager to seat them
+                            'role_title'    => $locked->job_title ?: 'عضو إدارة',
+                            'status'        => 'active',
+                            'joined_at'     => now(),
+                        ]
+                    );
+                }
+            }
 
             return ['profile' => $locked->fresh(), 'team_profile' => $teamProfile];
         });

@@ -18,6 +18,10 @@ return Application::configure(basePath: dirname(__DIR__))
         // supported by auth:sanctum as a compatibility fallback.
         $middleware->statefulApi();
 
+        // Public guest intake forms have no CSRF cookie to present; see App\Support\PublicIntakePaths for why that is safe and
+        // how the list is kept honest.
+        $middleware->validateCsrfTokens(except: \App\Support\PublicIntakePaths::CSRF_EXEMPT);
+
         $middleware->alias([
             'role'               => \App\Http\Middleware\RoleMiddleware::class,
             // Department-leadership route entry: a listed role OR the canonical

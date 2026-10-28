@@ -6,6 +6,7 @@ use App\Models\Department;
 use App\Models\Meeting;
 use App\Models\MeetingParticipant;
 use App\Models\TeamMember;
+use App\Models\TeamProfile;
 use App\Models\User;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -73,6 +74,11 @@ class MeetingParticipantService
                 ->when($deptIds !== null, fn ($q) => $q->whereIn('department_id', $deptIds))
                 ->get(['user_id', 'department_id'])
         );
+        $pairs = $pairs->merge(
+            TeamProfile::query()->where('is_active', true)->whereNotNull('user_id')->whereNotNull('department_id')
+                ->when($deptIds !== null, fn ($q) => $q->whereIn('department_id', $deptIds))
+                ->get(['user_id', 'department_id'])
+        );
         foreach (Department::query()->when($deptIds !== null, fn ($q) => $q->whereIn('id', $deptIds))
             ->get(['id', 'leader_id', 'deputy_leader_id', 'operational_member_id']) as $d) {
             foreach (['leader_id', 'deputy_leader_id', 'operational_member_id'] as $seat) {
@@ -86,12 +92,13 @@ class MeetingParticipantService
         foreach ($pairs as $pair) {
             $firstDept[(int) $pair->user_id] ??= (int) $pair->department_id;
         }
+
+        $deptNames = Department::query()->get(['id', 'name', 'name_ar'])
+            ->mapWithKeys(fn ($d) => [(int) $d->id => $d->name_ar ?: $d->name]);
+
         if ($firstDept === []) {
             return collect();
         }
-
-        $deptNames = Department::query()->whereIn('id', array_values(array_unique($firstDept)))->get(['id', 'name', 'name_ar'])
-            ->mapWithKeys(fn ($d) => [(int) $d->id => $d->name_ar ?: $d->name]);
 
         return User::query()
             ->whereIn('id', array_keys($firstDept))
@@ -104,7 +111,7 @@ class MeetingParticipantService
                 'name'       => (string) $u->name,
                 'role'       => $u->role,
                 'role_title' => null,
-                'department' => $deptNames[$firstDept[$u->id]] ?? null,
+                'department' => isset($firstDept[$u->id]) ? ($deptNames[$firstDept[$u->id]] ?? null) : null,
             ])
             ->values();
     }
@@ -167,6 +174,7 @@ class MeetingParticipantService
             ->whereNotIn('user_id', $userIds)
             ->delete();
 
+        $newlyInvited = [];
         foreach ($userIds as $id) {
             $row = $meeting->participants()->where('user_id', $id)->first();
             if ($row) {
@@ -177,9 +185,30 @@ class MeetingParticipantService
                 $meeting->participants()->create([
                     'user_id' => $id, 'source' => MeetingParticipant::SOURCE_INVITED, 'status' => MeetingParticipant::STATUS_INVITED,
                 ]);
+                $newlyInvited[] = $id;
             }
         }
         $meeting->unsetRelation('participants');
+
+        // Send in-platform notification to newly invited members
+        if (! empty($newlyInvited)) {
+            $dateStr = $meeting->meeting_date ? $meeting->meeting_date->format('Y-m-d') : '';
+            $timeStr = $meeting->start_time ?: '';
+            \App\Services\NotificationService::send(
+                $newlyInvited,
+                'meeting_invitation',
+                "دعوة لاجتماع: {$meeting->title}",
+                "تمت دعوتك لحضور اجتماع '{$meeting->title}' المجدول بتاريخ {$dateStr} الساعة {$timeStr}",
+                [
+                    'entity_type' => 'meeting',
+                    'entity_id'   => $meeting->id,
+                    'action_url'  => "/dashboard/assignee?tab=meetings",
+                    'meta_url'    => "/dashboard/assignee?tab=meetings",
+                    'icon'        => 'video',
+                    'color'       => 'blue',
+                ]
+            );
+        }
     }
 
     // ── Joining ──────────────────────────────────────────────────────────────
@@ -211,10 +240,10 @@ class MeetingParticipantService
     // ── The report's attendance ──────────────────────────────────────────────
 
     /**
-     * Final attendance from the official report. Every entry must be in $pool; the
+     * Final attendance from the official report or lounge close. Every entry must be in $pool; the
      * caller has already validated that.
      *
-     * @param  array<int, array{user_id: int, attended: bool}>  $attendance
+     * @param  array<int, array{user_id: int, attended: bool, excuse_status?: ?string, excuse_reason?: ?string}>  $attendance
      */
     public function markAttendance(Meeting $meeting, array $attendance, User $by): void
     {
@@ -224,6 +253,13 @@ class MeetingParticipantService
                 $row->source = MeetingParticipant::SOURCE_ROSTER;
             }
             $row->status = $entry['attended'] ? MeetingParticipant::STATUS_ATTENDED : MeetingParticipant::STATUS_ABSENT;
+            if (! $entry['attended']) {
+                $row->excuse_status = $entry['excuse_status'] ?? null;
+                $row->excuse_reason = $entry['excuse_reason'] ?? null;
+            } else {
+                $row->excuse_status = null;
+                $row->excuse_reason = null;
+            }
             $row->marked_by = $by->id;
             $row->save();
         }

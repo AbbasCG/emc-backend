@@ -327,6 +327,14 @@ final class Permissions
                 self::COURSES_VIEW, self::ATTENDANCE_VIEW, self::ASSIGNMENTS_VIEW,
             ],
 
+            'department_member' => [
+                self::VIEW_TASKS, self::VIEW_MEETINGS, self::VIEW_FORMS,
+                self::VIEW_TEAM, self::VIEW_KNOWLEDGE, self::USE_AI_ASSISTANT,
+                // Granular
+                self::WR_VIEW_DEPARTMENT, self::WR_VIEW_OWN, self::WR_CREATE,
+                self::DEPTS_VIEW_OWN, self::MEMBERS_VIEW_DEPARTMENT, self::MEMBERS_VIEW,
+            ],
+
             'section_lead' => [
                 self::VIEW_TASKS, self::MANAGE_TASKS, self::VIEW_MEETINGS, self::VIEW_PROGRAMS, self::VIEW_COURSES,
                 self::VIEW_KNOWLEDGE,

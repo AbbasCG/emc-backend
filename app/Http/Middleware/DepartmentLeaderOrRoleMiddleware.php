@@ -77,10 +77,12 @@ class DepartmentLeaderOrRoleMiddleware
             return $next($request);
         }
 
+        $specializedRole = method_exists($user, 'getDepartmentSpecializedRole') ? $user->getDepartmentSpecializedRole() : null;
+
         foreach ($roles as $role) {
             $accepted = self::ALIASES[$role] ?? [$role];
 
-            if (in_array($user->role, $accepted, true)) {
+            if (in_array($user->role, $accepted, true) || ($specializedRole && in_array($specializedRole, $accepted, true))) {
                 return $next($request);
             }
         }

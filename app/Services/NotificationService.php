@@ -1847,4 +1847,88 @@ class NotificationService
             ['ticket_id' => $ticketId, 'status' => $statusLabel],
         );
     }
+
+    // ── Smart Forms (Phase 8) ────────────────────────────────────────────────
+    // FormAutomationService decides WHEN these fire (after the response is committed, and only when the form's automation asks
+    // for it); they only decide WHAT is said. No message ever carries an answer: the title of the form and a link, nothing else.
+
+    /** A new response arrived on a form: the owner and/or the department reviewers who asked to be told. */
+    public static function formResponseReceived(array $userIds, int $formId, string $formTitle, int $submissionId): void
+    {
+        $title = self::shortTitle($formTitle);
+
+        self::send($userIds, 'form_response_received',
+            'رد جديد على نموذج',
+            "وصل رد جديد على النموذج \"{$title}\" (رقم الرد {$submissionId}). اضغط لمراجعته.",
+            [
+                'entity_type'     => 'form_submission',
+                'entity_id'       => $submissionId,
+                // Class A — one response arrives once; the key is stable per response (per recipient in the job).
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('form_response_received', $submissionId),
+                'action_url'      => "/dashboard/admin/forms/{$formId}",
+                'icon'            => 'inbox',
+                'color'           => 'blue',
+            ]
+        );
+    }
+
+    /** The signed-in respondent: their response was received. The e-mail copy is sent separately (EmailService). */
+    public static function formSubmissionConfirmed(int $userId, string $formTitle, int $submissionId): void
+    {
+        $title = self::shortTitle($formTitle);
+
+        self::send($userId, 'form_submission_confirmed',
+            'تم استلام ردك',
+            "تم استلام ردك على النموذج \"{$title}\". رقم الرد: {$submissionId}.",
+            [
+                'entity_type'     => 'form_submission',
+                'entity_id'       => $submissionId,
+                // Class A — a response is confirmed once.
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('form_submission_confirmed', $submissionId),
+                'icon'            => 'check-circle',
+                'color'           => 'green',
+            ]
+        );
+    }
+
+    /**
+     * A response was assigned to an employee for review. Class C: assigning the same response to the same person again after it
+     * was taken away is a new event, so the key carries the moment of the assignment.
+     */
+    public static function formResponseAssigned(int $assigneeId, int $formId, string $formTitle, int $submissionId, string $assignedAt): void
+    {
+        $title = self::shortTitle($formTitle);
+
+        self::send($assigneeId, 'form_response_assigned',
+            'أُسند إليك رد للمراجعة',
+            "أُسند إليك الرد رقم {$submissionId} على النموذج \"{$title}\". اضغط لمراجعته.",
+            [
+                'entity_type'     => 'form_submission',
+                'entity_id'       => $submissionId,
+                'idempotency_key' => NotificationIdempotencyKey::fromComponents('form_response_assigned', [$submissionId, $assigneeId, $assignedAt]),
+                'action_url'      => "/dashboard/admin/forms/{$formId}",
+                'icon'            => 'user-check',
+                'color'           => 'blue',
+            ]
+        );
+    }
+
+    /** The daily reminder: responses still open after the form's reminder delay. One per person, form and day. */
+    public static function formResponsesPending(int $userId, int $formId, string $formTitle, int $count, string $day): void
+    {
+        $title = self::shortTitle($formTitle);
+
+        self::send($userId, 'form_responses_pending',
+            'ردود بانتظار المراجعة',
+            "لديك {$count} من الردود على النموذج \"{$title}\" ما زالت بانتظار المعالجة.",
+            [
+                'entity_type'     => 'dynamic_form',
+                'entity_id'       => $formId,
+                'idempotency_key' => NotificationIdempotencyKey::fromComponents('form_responses_pending', [$formId, $userId, $day]),
+                'action_url'      => "/dashboard/admin/forms/{$formId}",
+                'icon'            => 'clock',
+                'color'           => 'amber',
+            ]
+        );
+    }
 }

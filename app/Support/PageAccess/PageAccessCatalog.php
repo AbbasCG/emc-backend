@@ -103,7 +103,7 @@ final class PageAccessCatalog
                 '/dashboard/admin/meetings/:id',
             ]],
             ['operations.forms', '/dashboard/admin/forms', 'النماذج', $C::Operations, $R::SafeDelegatable, true, P::VIEW_FORMS, true, [
-                '/dashboard/admin/forms/create', '/dashboard/admin/forms/:id',
+                '/dashboard/admin/forms/create', '/dashboard/admin/forms/templates', '/dashboard/admin/forms/analytics', '/dashboard/admin/forms/:id',
             ]],
             ['operations.dashboard_overview', '/dashboard/executive/operations', 'نظرة عامة على العمليات', $C::Operations, $R::AdminOnly, false, null, false, [
                 '/dashboard/executive', '/dashboard/admin/operations',
@@ -259,6 +259,7 @@ final class PageAccessCatalog
             // route pattern of technical_system.ai_command_center, which tied it
             // to the technical AI platform and kept ai_manager out of both.
             ['organizational_departments.ai_expert_applications', '/dashboard/admin/ai/expert-applications', 'طلبات انضمام الخبراء', $C::OrganizationalDepartments, $R::AdminOnly, false, null, false, []],
+            ['organizational_departments.ai_trainer_applications', '/dashboard/admin/trainers/applications', 'طلبات انضمام المدربين', $C::OrganizationalDepartments, $R::AdminOnly, false, null, false, []],
             ['organizational_departments.programs_manager', '/dashboard/programs-manager', 'لوحة مدير البرامج', $C::OrganizationalDepartments, $R::SafeDelegatable, true, null, true, []],
             ['organizational_departments.operations_manager', '/dashboard/operations-manager', 'لوحة مدير العمليات', $C::OrganizationalDepartments, $R::SafeDelegatable, true, null, true, []],
             ['organizational_departments.partnerships_manager', '/dashboard/partnerships-manager', 'لوحة مدير الشراكات', $C::OrganizationalDepartments, $R::SafeDelegatable, true, null, true, []],

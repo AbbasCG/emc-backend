@@ -49,6 +49,10 @@ use App\Http\Controllers\Admin\EmailLogsController;
 use App\Http\Controllers\Admin\EmailSettingsController;
 use App\Http\Controllers\Admin\DynamicFormController;
 use App\Http\Controllers\Admin\FormCollaboratorController;
+use App\Http\Controllers\Admin\FormAnalyticsController;
+use App\Http\Controllers\Admin\FormAutomationController;
+use App\Http\Controllers\Admin\FormRetentionController;
+use App\Http\Controllers\Admin\FormTemplateController;
 use App\Http\Controllers\Admin\FormLifecycleController;
 use App\Http\Controllers\Admin\FormSharingController;
 use App\Http\Controllers\Admin\FormResponseController;
@@ -204,6 +208,7 @@ Route::get('/team', [\App\Http\Controllers\TeamController::class, 'index'])->mid
 
 // ─── Public: Expert & Instructor Application ──────────────────────────────────
 Route::post('/expert-applications', [\App\Http\Controllers\Public\PublicExpertApplicationController::class, 'store'])->middleware('throttle:api');
+Route::post('/trainer-applications', [\App\Http\Controllers\Public\PublicTrainerApplicationController::class, 'store'])->middleware('throttle:api');
 
 // ─── Student LMS (auth:sanctum + learner: any authenticated active account, learning is not a role) ─────────────────────────────────
 Route::prefix('student')->middleware(['auth:sanctum', 'learner'])->group(function () {
@@ -816,6 +821,14 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,ai_manager
     Route::put('/{id}/status', [\App\Http\Controllers\Admin\AdminExpertApplicationController::class, 'updateStatus']);
 });
 
+// Trainer applications: reviewed by admin tier and the AI department manager (there is no academy_manager role)
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,ai_manager'])->prefix('admin/trainer-applications')->group(function () {
+    Route::get('/', [\App\Http\Controllers\Admin\AdminTrainerApplicationController::class, 'index']);
+    Route::get('/{id}', [\App\Http\Controllers\Admin\AdminTrainerApplicationController::class, 'show']);
+    Route::put('/{id}/status', [\App\Http\Controllers\Admin\AdminTrainerApplicationController::class, 'updateStatus']);
+    Route::put('/{id}/notes', [\App\Http\Controllers\Admin\AdminTrainerApplicationController::class, 'updateNotes']);
+});
+
 // ─── Public: Support tickets ─────────────────────────────────────────────────
 Route::post('/support-tickets', [PublicSupportTicketController::class, 'store'])
     ->middleware('throttle:workshop');
@@ -946,6 +959,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     Route::post('meetings/{meeting}/action-items',                       [MeetingController::class, 'storeActionItem']);
     Route::post('meetings/{meeting}/action-items/{actionItem}/convert-to-task', [MeetingController::class, 'convertActionItemToTask']);
     Route::post('meetings/{meeting}/report',                             [MeetingController::class, 'storeReport']);
+    Route::post('meetings/{meeting}/close-lounge',                        [MeetingController::class, 'closeLounge']);
 
     // Dynamic Forms: moved to their own route group below (see "Dynamic Forms"), which names the forms roles in one place.
 
@@ -1438,6 +1452,28 @@ Route::middleware(['auth:sanctum', 'role:'.implode(',', \App\Services\Forms\Form
         Route::put('forms/{form}/collaborators/{collaborator}',     [FormCollaboratorController::class, 'update']);
         Route::delete('forms/{form}/collaborators/{collaborator}',  [FormCollaboratorController::class, 'destroy']);
         Route::get('forms/{form}/activity',                         [FormCollaboratorController::class, 'activity']);
+
+        // Templates (Phase 6): the built-in library plus templates saved from forms, and duplicating a form.
+        Route::get('form-templates',                        [FormTemplateController::class, 'index']);
+        Route::post('form-templates',                       [FormTemplateController::class, 'store'])->middleware('throttle:30,1');
+        Route::get('form-templates/{template}',             [FormTemplateController::class, 'show'])->where('template', 'system:[a-z_]+|[0-9]+');
+        Route::post('form-templates/{template}/use',        [FormTemplateController::class, 'use'])->where('template', 'system:[a-z_]+|[0-9]+')->middleware('throttle:30,1');
+        Route::put('form-templates/{template}',             [FormTemplateController::class, 'update'])->whereNumber('template');
+        Route::delete('form-templates/{template}',          [FormTemplateController::class, 'destroy'])->whereNumber('template');
+        Route::post('forms/{form}/duplicate',               [FormTemplateController::class, 'duplicate'])->middleware('throttle:30,1');
+
+        // Analytics (Phase 7): a summary of the stored responses, readable by whoever may read those responses.
+        Route::get('forms/{form}/analytics',                [FormAnalyticsController::class, 'show'])->middleware('throttle:60,1');
+        Route::get('forms/{form}/analytics/export',         [FormAnalyticsController::class, 'export'])->middleware('throttle:10,1');
+        Route::get('form-analytics/overview',               [FormAnalyticsController::class, 'overview'])->middleware('throttle:60,1');
+
+        // Notifications and automation (Phase 8): who is told, the respondent's receipt, automatic assignment, reminders, webhook.
+        Route::get('forms/{form}/automation',               [FormAutomationController::class, 'show']);
+        Route::put('forms/{form}/automation',               [FormAutomationController::class, 'update'])->middleware('throttle:30,1');
+
+        // Data retention: how long responses are kept before forms:purge-responses deletes them.
+        Route::get('forms/{form}/retention',                [FormRetentionController::class, 'show']);
+        Route::put('forms/{form}/retention',                [FormRetentionController::class, 'update'])->middleware('throttle:30,1');
     });
 });
 
@@ -1472,6 +1508,7 @@ Route::middleware(['auth:sanctum'])->prefix('department')->group(function () {
     Route::patch('meetings/{meeting}/action-items/{actionItem}',  [MeetingController::class, 'updateActionItem']);
     Route::post('meetings/{meeting}/action-items',                [MeetingController::class, 'storeActionItem']);
     Route::post('meetings/{meeting}/report',                      [MeetingController::class, 'storeReport']);
+    Route::post('meetings/{meeting}/close-lounge',                [MeetingController::class, 'closeLounge']);
     Route::get('meeting-participants',                            [MeetingController::class, 'candidates']);
     Route::get('meetings/{meeting}/participants',                 [MeetingController::class, 'participantPool']);
     Route::post('meetings/{meeting}/join',                        [MeetingController::class, 'join']);
@@ -1556,6 +1593,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_ma
     ->group(function () {
         Route::get('chart-of-accounts',               [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'tree']);
         Route::get('chart-of-accounts/suggest-code',  [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'suggestCode']);
+        Route::get('accounts/defaults',              [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'defaults']);
         Route::get('accounts',                        [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'index']);
         Route::post('accounts',                       [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'store']);
         Route::put('accounts/{id}',                   [\App\Http\Controllers\Admin\ChartOfAccountsController::class, 'update']);
@@ -1570,6 +1608,9 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,finance_ma
 
         // Manual Revenues (سندات القبض والإيرادات اليدوية)
         Route::get('revenues/suggest-receipt-no',     [\App\Http\Controllers\Admin\RevenueController::class, 'suggestReceiptNo']);
+        Route::get('revenues/paid-courses',           [\App\Http\Controllers\Admin\RevenueController::class, 'getPaidCourses']);
+        Route::get('revenues/cashbox-balance',        [\App\Http\Controllers\Admin\RevenueController::class, 'getCashboxBalance']);
+        Route::get('revenues/course-students/{courseId}', [\App\Http\Controllers\Admin\RevenueController::class, 'getCourseStudentsPendingPayment']);
         Route::apiResource('revenues',                 \App\Http\Controllers\Admin\RevenueController::class);
         Route::get('revenues/{revenue}/attachment',         [\App\Http\Controllers\Admin\RevenueController::class, 'downloadAttachment'])->name('revenues.attachment.download');
         Route::get('revenues/{revenue}/attachment/preview', [\App\Http\Controllers\Admin\RevenueController::class, 'previewAttachment'])->name('revenues.attachment.preview');
@@ -1812,6 +1853,7 @@ Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin
     Route::get('volunteer-hr-profiles',                                [HrVolunteerProfileController::class, 'index']);
     Route::get('volunteer-hr-profiles/filter-options',                 [HrVolunteerProfileController::class, 'filterOptions']);
     Route::get('volunteer-hr-profiles/{volunteerHrProfile}',            [HrVolunteerProfileController::class, 'show']);
+    Route::put('volunteer-hr-profiles/{volunteerHrProfile}',            [HrVolunteerProfileController::class, 'update'])->middleware('throttle:30,1');
     Route::patch('volunteer-hr-profiles/{volunteerHrProfile}/review',   [HrVolunteerProfileController::class, 'review']);
     Route::post('volunteer-hr-profiles/{volunteerHrProfile}/approve',   [HrVolunteerProfileController::class, 'approve']);
     Route::post('volunteer-hr-profiles/{volunteerHrProfile}/reject',    [HrVolunteerProfileController::class, 'reject']);
