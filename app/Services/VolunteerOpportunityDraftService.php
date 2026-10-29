@@ -38,7 +38,7 @@ class VolunteerOpportunityDraftService
             ? "تبحث {$this->deptPhrase($deptName)} في EMC عن {$who} للمساهمة في ".($role ? "دور «{$role}»" : 'دعم أعمال الإدارة').' وفق احتياجات الفريق.'
             : "تبحث EMC عن {$who} للمساهمة في ".($role ? "دور «{$role}»" : 'دعم أعمال الفريق').'.';
 
-        $responsibilities = $this->lines($request->notes);
+        $responsibilities = $this->lines($request->responsibilities ?: $request->notes);
         if ($responsibilities === []) {
             $responsibilities = [$deptName ? "دعم أعمال {$this->deptPhrase($deptName)} وفق احتياجات الفريق." : 'دعم أعمال الفريق وفق احتياجاته.'];
         }
@@ -164,6 +164,10 @@ class VolunteerOpportunityDraftService
     /** The role named in the request, unless it is just the generic default label. */
     private function roleName(HrRequest $r): ?string
     {
+        $jobTitle = trim((string) ($r->job_title ?? ''));
+        if ($jobTitle !== '') {
+            return $jobTitle;
+        }
         $type = trim((string) $r->request_type);
 
         return $type === '' || $type === self::DEFAULT_REQUEST_TYPE || str_contains($type, 'احتياج وظيفي') ? null : $type;
