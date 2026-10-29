@@ -158,13 +158,12 @@ class User extends Authenticatable implements MustVerifyEmail
      */
     public function getDepartmentSpecializedRole(): ?string
     {
-<<<<<<< HEAD
         if ($this->role !== 'department_manager') {
             return $this->isDepartmentManager() ? $this->role : null;
-=======
-        if ($this->role !== 'department_manager' || ! $this->id) {
+        }
+
+        if (! $this->id) {
             return null;
->>>>>>> origin/dev
         }
 
         $cacheKey = $this->id.'|'.$this->role;
@@ -181,29 +180,9 @@ class User extends Authenticatable implements MustVerifyEmail
             }
         }
 
-<<<<<<< HEAD
-        return match ($dept->slug) {
-            'finance'                                       => 'finance_manager',
-            'human-resources'                               => 'hr_manager',
-            'marketing-media'                               => 'marketing_manager',
-            'quality-governance'                            => 'quality_manager',
-            'programs-tracks'                               => 'programs_manager',
-            'operations'                                    => 'operations_manager',
-            'ai-transformation', 'ai-digital-transformation' => 'ai_manager',
-            'community-health'                              => 'community_manager',
-            'partnerships'                                  => 'partnerships_manager',
-            'strategy-planning'                             => 'strategy_planning_manager',
-            'digital-ambassadors'                           => 'digital_ambassadors_manager',
-            'advisors'                                      => 'advisors_manager',
-            'executive-management'                          => 'executive_admin',
-            'technology'                                    => 'tech_admin',
-            default                                         => null,
-        };
-=======
         $this->specializedRoleCache = ['key' => $cacheKey, 'role' => $role];
 
         return $role;
->>>>>>> origin/dev
     }
 
     /**
