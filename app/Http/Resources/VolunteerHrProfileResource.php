@@ -49,6 +49,8 @@ class VolunteerHrProfileResource extends JsonResource
             'professional_bio' => $this->professional_bio,
             'linkedin_url'  => $this->linkedin_url,
             'portfolio_url' => $this->portfolio_url,
+            'emergency_contact_name'  => $this->emergency_contact_name,
+            'emergency_contact_phone' => $this->emergency_contact_phone,
 
             // ── Consents and privacy — HR must see the explicit choice, never
             // infer it from whether a photo exists. null = not yet answered

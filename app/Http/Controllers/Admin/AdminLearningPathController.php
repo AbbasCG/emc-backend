@@ -622,8 +622,9 @@ class AdminLearningPathController extends Controller
             'price'             => 'nullable|numeric|min:0',
             'discount_price'    => 'nullable|numeric|min:0',
             'status'            => 'nullable|in:draft,published,archived',
-            'start_date'        => [$isUpdate ? 'sometimes' : 'required', 'date'],
-            'end_date'          => [$isUpdate ? 'sometimes' : 'required', 'date', 'after_or_equal:start_date'],
+            // Mandatory dates are an opt-in rule (config/programs.php); by default they stay optional like on every other program.
+            'start_date'        => config('programs.require_dates') ? [$isUpdate ? 'sometimes' : 'required', 'date'] : ['nullable', 'date'],
+            'end_date'          => config('programs.require_dates') ? [$isUpdate ? 'sometimes' : 'required', 'date', 'after_or_equal:start_date'] : ['nullable', 'date', 'after_or_equal:start_date'],
             'is_featured'       => 'nullable|boolean',
             'enrollment_open'   => 'nullable|boolean',
             'learning_outcomes' => 'nullable|array',

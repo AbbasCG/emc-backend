@@ -103,7 +103,7 @@ final class PageAccessCatalog
                 '/dashboard/admin/meetings/:id',
             ]],
             ['operations.forms', '/dashboard/admin/forms', 'النماذج', $C::Operations, $R::SafeDelegatable, true, P::VIEW_FORMS, true, [
-                '/dashboard/admin/forms/create', '/dashboard/admin/forms/:id',
+                '/dashboard/admin/forms/create', '/dashboard/admin/forms/templates', '/dashboard/admin/forms/analytics', '/dashboard/admin/forms/:id',
             ]],
             ['operations.dashboard_overview', '/dashboard/executive/operations', 'نظرة عامة على العمليات', $C::Operations, $R::AdminOnly, false, null, false, [
                 '/dashboard/executive', '/dashboard/admin/operations',

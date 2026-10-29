@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Str;
 
 class DynamicForm extends Model
 {
@@ -58,6 +59,7 @@ class DynamicForm extends Model
         'invitation_only' => 'boolean',
         'requires_share_link' => 'boolean',
         'flow'            => 'array',
+        'automation'      => 'array',
     ];
 
     /** The owner; for a form with no owner recorded, its creator. Ownership never silently disappears. */
@@ -129,6 +131,22 @@ class DynamicForm extends Model
         }
 
         return $this->allow_anonymous ? self::ACCESS_PUBLIC : self::ACCESS_AUTHENTICATED;
+    }
+
+    /** The requested link when it is free; otherwise the same link with a short random tail. Existing links never change. */
+    public static function freeSlug(?string $requested, string $title): string
+    {
+        $base = $requested !== null && $requested !== '' ? $requested : (Str::slug($title) ?: 'form');
+
+        if (! self::withTrashed()->where('slug', $base)->exists()) {
+            return $base;
+        }
+
+        do {
+            $candidate = Str::limit($base, 140, '').'-'.Str::lower(Str::random(5));
+        } while (self::withTrashed()->where('slug', $candidate)->exists());
+
+        return $candidate;
     }
 
     public function questions(): HasMany

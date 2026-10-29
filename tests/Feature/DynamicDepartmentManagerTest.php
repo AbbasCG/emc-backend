@@ -109,6 +109,9 @@ class DynamicDepartmentManagerTest extends TestCase
             'status' => 'interview_scheduled',
         ]);
 
+        // Department linking on approval is an opt-in business rule (config/volunteer_onboarding.php).
+        config(['volunteer_onboarding.approval_links_department_membership' => true]);
+
         $service = app(\App\Services\VolunteerApprovalService::class);
         $service->approve($profile, $admin, $dept->id);
 

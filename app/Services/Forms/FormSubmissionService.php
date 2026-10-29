@@ -9,6 +9,7 @@ use App\Models\FormQuestion;
 use App\Models\FormSubmission;
 use App\Models\User;
 use App\Rules\FormAttachmentFile;
+use App\Services\Forms\Automation\FormAutomationService;
 use App\Services\Forms\Logic\FormLogic;
 use Closure;
 use Illuminate\Http\UploadedFile;
@@ -146,7 +147,7 @@ class FormSubmissionService
      */
     public function submit(DynamicForm $form, array $validated, ?User $user, Collection $questions, ?int $versionId, ?string $shareToken = null): FormSubmission
     {
-        return DB::transaction(function () use ($form, $validated, $user, $questions, $versionId, $shareToken) {
+        $submission = DB::transaction(function () use ($form, $validated, $user, $questions, $versionId, $shareToken) {
             $locked = DynamicForm::query()->whereKey($form->id)->lockForUpdate()->firstOrFail();
             // The link is looked at again under the lock: it may have been revoked or used up since the page was opened, and
             // while the form row is held no other submission can slip in between this count and the insert below.
@@ -159,6 +160,12 @@ class FormSubmissionService
 
             return $this->store($locked, $validated, $user?->id, $questions, $versionId, $share->link?->id);
         });
+
+        // Notifications, confirmation, automatic assignment and the webhook (Phase 8) run once the response is committed, and can
+        // never make it fail.
+        DB::afterCommit(fn () => app(FormAutomationService::class)->submitted($submission));
+
+        return $submission;
     }
 
     /**

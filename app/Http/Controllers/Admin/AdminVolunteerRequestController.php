@@ -291,35 +291,39 @@ class AdminVolunteerRequestController extends Controller
                 ? (TeamProfile::where('department_id', $dept->id)->max('sort_order') ?? 0)
                 : (TeamProfile::whereNull('department_id')->max('sort_order') ?? 0);
 
-            // 5. Ensure user account exists and assign department_member role
-            $account = User::where('email', $volunteerRequest->email)->first();
-            if (! $account) {
-                $account = User::create([
-                    'name'       => $volunteerRequest->full_name,
-                    'email'      => $volunteerRequest->email,
-                    'password'   => Hash::make(Str::random(16)),
-                    'role'       => 'department_member',
-                    'phone'      => $volunteerRequest->phone,
-                    'country'    => $volunteerRequest->country,
-                    'city'       => $volunteerRequest->city,
-                    'gender'     => $volunteerRequest->gender,
-                    'department' => $dept ? ($dept->name_ar ?? $dept->name) : null,
-                    'is_active'  => true,
-                ]);
-            } elseif (in_array($account->role, ['student', 'volunteer'], true)) {
-                $account->update([
-                    'role'       => 'department_member',
-                    'department' => $dept ? ($dept->name_ar ?? $dept->name) : $account->department,
-                ]);
+            // 5. Account creation / role change is an explicit business switch (config/volunteer_onboarding.php); off by default,
+            //    in which case the conversion only creates the team profile, exactly as before.
+            $account = null;
+            if (config('volunteer_onboarding.conversion_creates_account')) {
+                $account = User::where('email', $volunteerRequest->email)->first();
+                if (! $account) {
+                    $account = User::create([
+                        'name'       => $volunteerRequest->full_name,
+                        'email'      => $volunteerRequest->email,
+                        'password'   => Hash::make(Str::random(16)),
+                        'role'       => 'department_member',
+                        'phone'      => $volunteerRequest->phone,
+                        'country'    => $volunteerRequest->country,
+                        'city'       => $volunteerRequest->city,
+                        'gender'     => $volunteerRequest->gender,
+                        'department' => $dept ? ($dept->name_ar ?? $dept->name) : null,
+                        'is_active'  => true,
+                    ]);
+                } elseif (in_array($account->role, ['student', 'volunteer'], true)) {
+                    $account->update([
+                        'role'       => 'department_member',
+                        'department' => $dept ? ($dept->name_ar ?? $dept->name) : $account->department,
+                    ]);
+                }
             }
 
             // 6. Create team_profiles row with full data mapping.
             $member = TeamProfile::create([
                 'department_id' => $dept?->id,
-                'user_id'       => $account->id,
+                'user_id'       => $account?->id,
                 'name_ar'       => $volunteerRequest->full_name,
-                'position_ar'   => 'عضو إدارة',
-                'role_key'      => 'department_member',
+                'position_ar'   => $account ? 'عضو إدارة' : 'متطوع',
+                'role_key'      => $account ? 'department_member' : 'volunteer',
                 'phone'         => $volunteerRequest->phone,
                 'email'         => $volunteerRequest->email,
                 'country'       => $volunteerRequest->country,
@@ -339,7 +343,7 @@ class AdminVolunteerRequestController extends Controller
             ]);
 
             // 7. Register membership & place in unassigned queue for department manager
-            if ($dept) {
+            if ($dept && $account) {
                 $account->departments()->syncWithoutDetaching([$dept->id => ['is_primary' => true]]);
                 TeamMember::updateOrCreate(
                     ['team_profile_id' => $member->id],

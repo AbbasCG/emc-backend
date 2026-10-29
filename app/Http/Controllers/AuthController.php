@@ -40,7 +40,7 @@ class AuthController extends Controller
             'success' => true,
             'message' => 'Registration successful',
             'data'    => [
-                'user'                => new UserResource($user),
+                'user'                => UserResource::forSelf($user),
                 'role'                => $user->effectiveRole(),
                 'permissions'         => $user->allPermissions(),
                 'token'               => $token,
@@ -90,7 +90,7 @@ class AuthController extends Controller
             'success' => true,
             'message' => 'Login successful',
             'data'    => [
-                'user'                => new UserResource($user),
+                'user'                => UserResource::forSelf($user),
                 'role'                => $user->effectiveRole(),
                 'permissions'         => $user->allPermissions(),
                 'token'               => $token,

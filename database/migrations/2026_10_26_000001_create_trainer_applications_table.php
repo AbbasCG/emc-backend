@@ -11,6 +11,11 @@ return new class extends Migration
      */
     public function up(): void
     {
+        // Re-runnable: an earlier attempt may have created the table before failing on something else.
+        if (Schema::hasTable('trainer_applications')) {
+            return;
+        }
+
         Schema::create('trainer_applications', function (Blueprint $table) {
             $table->id();
             $table->uuid('uuid')->unique();

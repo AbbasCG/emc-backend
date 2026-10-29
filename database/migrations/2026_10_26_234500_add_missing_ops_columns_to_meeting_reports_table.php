@@ -6,11 +6,10 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
+        // A REPAIR migration. Every column below is created by 2026_08_16_000850_create_meeting_reports_table, so on a database
+        // migrated normally this does nothing; it only restores the columns on a database that drifted from that history.
         Schema::table('meeting_reports', function (Blueprint $table) {
             if (! Schema::hasColumn('meeting_reports', 'department_id')) {
                 $table->foreignId('department_id')->nullable()->constrained('departments')->nullOnDelete();
@@ -44,29 +43,18 @@ return new class extends Migration
             }
         });
 
-        try {
+        if (! Schema::hasIndex('meeting_reports', ['department_id', 'meeting_date'])) {
             Schema::table('meeting_reports', function (Blueprint $table) {
                 $table->index(['department_id', 'meeting_date']);
             });
-        } catch (\Throwable) {
-            // Index might already exist
         }
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
-        Schema::table('meeting_reports', function (Blueprint $table) {
-            $columnsToDrop = array_filter([
-                'department_id', 'title', 'meeting_date', 'achieved',
-                'planned', 'needs', 'needs_reason', 'decisions', 'notes', 'created_by',
-            ], fn ($col) => Schema::hasColumn('meeting_reports', $col));
-
-            if (! empty($columnsToDrop)) {
-                $table->dropColumn($columnsToDrop);
-            }
-        });
+        // Intentionally empty. These columns (and their index) belong to 2026_08_16_000850_create_meeting_reports_table, which
+        // owns dropping them; this migration only repairs databases that lacked them. Rolling it back must NEVER drop them:
+        // they hold the meeting reports' title, notes, decisions, department and author. Same convention as
+        // 2026_08_21_200002_create_meeting_reports_table.
     }
 };

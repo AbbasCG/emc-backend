@@ -20,6 +20,9 @@ class FormActivityService
     /** action => Arabic label shown in the history tab */
     public const LABELS = [
         'created'                => 'إنشاء النموذج',
+        'created_from_template'  => 'إنشاء النموذج من قالب',
+        'duplicated'             => 'إنشاء النموذج كنسخة من نموذج آخر',
+        'saved_as_template'      => 'حفظ النموذج كقالب',
         'updated'                => 'تعديل بيانات النموذج',
         'questions_changed'      => 'تعديل الأسئلة',
         'questions_reordered'    => 'إعادة ترتيب الأسئلة',
@@ -44,6 +47,10 @@ class FormActivityService
         'invitation_revoked'     => 'إلغاء دعوة مستخدم',
         'response_corrected'     => 'تصحيح إجابات في أحد الردود',
         'responses_exported'     => 'تصدير ردود النموذج',
+        'analytics_exported'     => 'تصدير تحليلات النموذج',
+        'automation_changed'     => 'تغيير الإشعارات والأتمتة',
+        'retention_changed'      => 'تغيير مدة الاحتفاظ بالردود',
+        'responses_purged'       => 'حذف ردود انتهت مدة الاحتفاظ بها',
     ];
 
     /**
@@ -61,7 +68,7 @@ class FormActivityService
     private const ALLOWED_DETAIL_KEYS = [
         'fields', 'added', 'removed', 'edited', 'reordered', 'version', 'from_version', 'question_count', 'note',
         'from', 'to', 'user', 'access_level', 'can_view_responses', 'previous_owner_access', 'status_from', 'status_to', 'changes',
-        'saves', 'forced', 'count', 'submission', 'format', 'rows',
+        'saves', 'forced', 'count', 'submission', 'format', 'rows', 'template', 'source',
     ];
 
     public static function record(DynamicForm $form, User $actor, string $action, array $details = [], ?Request $request = null): void
