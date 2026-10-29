@@ -67,20 +67,126 @@ class AdminUserController extends Controller
         };
 
         $query
-            ->when($request->role, function ($q) use ($request) {
+            ->with(['departments', 'ledDepartments'])
+            ->when($request->filled('role') && $request->role !== 'all', function ($q) use ($request) {
                 $role = $request->role;
-                // 'instructor' and 'teacher' are the same canonical role — match both.
                 if ($role === 'instructor') {
                     $q->whereIn('role', ['instructor', 'teacher']);
+                } elseif ($role === 'department_manager') {
+                    $allManagerRoles = [
+                        'department_manager',
+                        'hr_manager',
+                        'finance_manager',
+                        'marketing_manager',
+                        'quality_manager',
+                        'tech_admin',
+                        'executive_admin',
+                        'ai_manager',
+                        'strategy_planning_manager',
+                        'digital_ambassadors_manager',
+                        'advisors_manager',
+                        'programs_manager',
+                        'operations_manager',
+                        'partnerships_manager',
+                        'community_manager',
+                    ];
+                    $q->where(function ($sub) use ($allManagerRoles) {
+                        $sub->whereIn('role', $allManagerRoles)
+                            ->orWhereHas('ledDepartments');
+                    });
                 } else {
                     $q->where('role', $role);
                 }
             })
-            ->when($request->search, function ($q) use ($request) {
-                $q->where(function ($sub) use ($request) {
-                    $sub->where('name', 'like', "%{$request->search}%")
-                        ->orWhere('email', 'like', "%{$request->search}%");
+            ->when($request->filled('department') && $request->department !== 'all', function ($q) use ($request) {
+                $dept = trim((string) $request->department);
+                $cleanDept = preg_replace('/^إدارة\s+/u', '', $dept);
+
+                $deptModel = is_numeric($dept)
+                    ? Department::find((int) $dept)
+                    : Department::where('name_ar', $dept)
+                        ->orWhere('name', $dept)
+                        ->orWhere('slug', $dept)
+                        ->orWhere('name_ar', 'like', "%{$cleanDept}%")
+                        ->first();
+                $deptId = $deptModel?->id;
+                $deptName = $deptModel ? ($deptModel->name_ar ?? $deptModel->name) : $dept;
+                $deptSlug = $deptModel?->slug;
+
+                $specializedRole = match ($deptSlug) {
+                    'finance'                                         => 'finance_manager',
+                    'human-resources'                                 => 'hr_manager',
+                    'marketing-media'                                 => 'marketing_manager',
+                    'quality-governance'                              => 'quality_manager',
+                    'programs-tracks'                                 => 'programs_manager',
+                    'operations'                                      => 'operations_manager',
+                    'ai-transformation', 'ai-digital-transformation'   => 'ai_manager',
+                    'community-health'                                => 'community_manager',
+                    'partnerships'                                    => 'partnerships_manager',
+                    'strategy-planning'                               => 'strategy_planning_manager',
+                    'digital-ambassadors'                             => 'digital_ambassadors_manager',
+                    'advisors'                                        => 'advisors_manager',
+                    'executive-management'                            => 'executive_admin',
+                    'technology'                                      => 'tech_admin',
+                    default                                           => null,
+                };
+                if (! $specializedRole) {
+                    if (str_contains($dept, 'الموارد البشرية')) $specializedRole = 'hr_manager';
+                    elseif (str_contains($dept, 'المالية')) $specializedRole = 'finance_manager';
+                    elseif (str_contains($dept, 'التسويق')) $specializedRole = 'marketing_manager';
+                    elseif (str_contains($dept, 'الجودة')) $specializedRole = 'quality_manager';
+                    elseif (str_contains($dept, 'البرامج') || str_contains($dept, 'المشاريع')) $specializedRole = 'programs_manager';
+                    elseif (str_contains($dept, 'العمليات')) $specializedRole = 'operations_manager';
+                    elseif (str_contains($dept, 'الذكاء') || str_contains($dept, 'التحول')) $specializedRole = 'ai_manager';
+                    elseif (str_contains($dept, 'المجتمع') || str_contains($dept, 'التطوع')) $specializedRole = 'community_manager';
+                    elseif (str_contains($dept, 'الشراكات')) $specializedRole = 'partnerships_manager';
+                    elseif (str_contains($dept, 'التخطيط') || str_contains($dept, 'الاستراتيجي')) $specializedRole = 'strategy_planning_manager';
+                    elseif (str_contains($dept, 'السفراء')) $specializedRole = 'digital_ambassadors_manager';
+                    elseif (str_contains($dept, 'المستشارين')) $specializedRole = 'advisors_manager';
+                    elseif (str_contains($dept, 'القيادة') || str_contains($dept, 'التنفيذية')) $specializedRole = 'executive_admin';
+                    elseif (str_contains($dept, 'التقنية') || str_contains($dept, 'البنية')) $specializedRole = 'tech_admin';
+                }
+
+                $q->where(function ($sub) use ($dept, $cleanDept, $deptId, $deptName, $specializedRole) {
+                    $sub->where('department', $dept)
+                        ->orWhere('department', $deptName)
+                        ->orWhere('department', 'like', "%{$dept}%")
+                        ->orWhere('department', 'like', "%{$cleanDept}%");
+
+                    if ($specializedRole) {
+                        $sub->orWhere('role', $specializedRole);
+                    }
+
+                    if ($deptId) {
+                        $sub->orWhereHas('departments', fn ($dq) => $dq->where('departments.id', $deptId))
+                            ->orWhereHas('ledDepartments', fn ($dq) => $dq->where('departments.id', $deptId));
+                    } else {
+                        $sub->orWhereHas('departments', fn ($dq) => $dq->where('name_ar', 'like', "%{$cleanDept}%")->orWhere('slug', $dept))
+                            ->orWhereHas('ledDepartments', fn ($dq) => $dq->where('name_ar', 'like', "%{$cleanDept}%")->orWhere('slug', $dept));
+                    }
                 });
+            })
+            ->when($request->filled('search'), function ($q) use ($request) {
+                $s = trim((string) $request->search);
+                $q->where(function ($sub) use ($s) {
+                    $sub->where('name', 'like', "%{$s}%")
+                        ->orWhere('email', 'like', "%{$s}%")
+                        ->orWhere('phone', 'like', "%{$s}%")
+                        ->orWhere('department', 'like', "%{$s}%")
+                        ->orWhere('role', 'like', "%{$s}%")
+                        ->orWhereHas('departments', fn ($dq) => $dq->where('name_ar', 'like', "%{$s}%")->orWhere('name', 'like', "%{$s}%"))
+                        ->orWhereHas('ledDepartments', fn ($dq) => $dq->where('name_ar', 'like', "%{$s}%")->orWhere('name', 'like', "%{$s}%"));
+                    if (is_numeric($s)) {
+                        $sub->orWhere('id', (int) $s);
+                    }
+                });
+            })
+            ->when($request->filled('verified') && $request->verified !== 'all', function ($q) use ($request) {
+                if ($request->verified === '1' || $request->verified === 'verified') {
+                    $q->whereNotNull('email_verified_at');
+                } elseif ($request->verified === '0' || $request->verified === 'unverified') {
+                    $q->whereNull('email_verified_at');
+                }
             })
             ->orderBy('name');
 
@@ -161,8 +267,9 @@ class AdminUserController extends Controller
                 $user->update(['department' => $deptModel->name_ar ?? $deptModel->name]);
             }
 
-            if ($user->role === 'department_manager') {
-                $deptModel?->update(['leader_id' => $user->id]);
+            if ($user->isDepartmentManager()) {
+                Department::where('id', $deptId)->update(['leader_id' => $user->id]);
+                Department::where('leader_id', $user->id)->where('id', '!=', $deptId)->update(['leader_id' => null]);
             } elseif ($user->role === 'department_member') {
                 $teamProfile = TeamProfile::firstOrCreate(
                     ['user_id' => $user->id],
@@ -279,6 +386,7 @@ class AdminUserController extends Controller
         }
 
         $oldRole = $user->role;
+        $oldWasManager = $user->isDepartmentManager();
         $oldSnap = [
             'name'  => $user->name,
             'email' => $user->email,
@@ -328,7 +436,7 @@ class AdminUserController extends Controller
                 $deptModel = Department::find($deptId);
                 $user->update(['department' => $deptModel ? ($deptModel->name_ar ?? $deptModel->name) : $deptInput]);
 
-                if ($user->role === 'department_manager') {
+                if ($user->isDepartmentManager()) {
                     Department::where('id', $deptId)->update(['leader_id' => $user->id]);
                     Department::where('leader_id', $user->id)->where('id', '!=', $deptId)->update(['leader_id' => null]);
                 } elseif ($user->role === 'department_member') {
@@ -366,7 +474,7 @@ class AdminUserController extends Controller
                 Department::where('leader_id', $user->id)->update(['leader_id' => null]);
                 $user->update(['department' => null]);
             }
-        } elseif ($oldRole === 'department_manager' && $user->role !== 'department_manager') {
+        } elseif ($oldWasManager && ! $user->isDepartmentManager()) {
             Department::where('leader_id', $user->id)->update(['leader_id' => null]);
         }
 
@@ -539,6 +647,35 @@ class AdminUserController extends Controller
 
     private function formatUser(User $user, bool $withPermissions = false): array
     {
+        $primaryDept = $user->relationLoaded('departments')
+            ? ($user->departments->where('pivot.is_primary', true)->first() ?? $user->departments->first())
+            : $user->departments()->first();
+
+        if (! $primaryDept && $user->relationLoaded('ledDepartments')) {
+            $primaryDept = $user->ledDepartments->first();
+        }
+
+        $deptName = $user->department ?: ($primaryDept?->name_ar ?? $primaryDept?->name);
+        if (! $deptName && $user->isDepartmentManager()) {
+            $deptName = match ($user->role) {
+                'hr_manager'                  => 'إدارة الموارد البشرية',
+                'finance_manager'             => 'إدارة الشؤون المالية',
+                'marketing_manager'           => 'إدارة التسويق الرقمي',
+                'quality_manager'             => 'إدارة الجودة والاعتماد الأكاديمي',
+                'programs_manager'            => 'إدارة البرامج والمشاريع',
+                'operations_manager'          => 'إدارة العمليات والخدمات المساندة',
+                'ai_manager'                  => 'إدارة التحول والذكاء الاصطناعي',
+                'community_manager'           => 'إدارة المجتمع والعمل التطوعي',
+                'partnerships_manager'        => 'إدارة الشراكات والعلاقات الخارجية',
+                'strategy_planning_manager'   => 'إدارة التخطيط الاستراتيجي',
+                'digital_ambassadors_manager' => 'إدارة السفراء الرقميين',
+                'advisors_manager'            => 'إدارة هيئة المستشارين',
+                'executive_admin'             => 'إدارة القيادة والإدارة التنفيذية',
+                'tech_admin'                  => 'إدارة البنية التحتية والتقنية',
+                default                       => null,
+            };
+        }
+
         $data = [
             'id'                         => $user->id,
             'name'                       => $user->name,
@@ -546,9 +683,9 @@ class AdminUserController extends Controller
             'phone'                      => $user->phone,
             'phone_country_code'         => $user->phone_country_code,
             'role'                       => $user->role,
-            'department'                 => $user->department,
-            'department_id'              => $user->departments()->first()?->id,
-            'department_name'            => $user->departments()->first()?->name_ar ?? $user->departments()->first()?->name ?? $user->department,
+            'department'                 => $deptName,
+            'department_id'              => $primaryDept?->id,
+            'department_name'            => $deptName,
             'is_active'                  => $user->is_active ?? true,
             'city'                       => $user->city,
             'country'                    => $user->country,

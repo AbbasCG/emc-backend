@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Operations;
 
 use App\Http\Controllers\Controller;
+use App\Models\Department;
 use App\Models\User;
 use App\Models\VolunteerPointAward;
 use App\Models\VolunteerPointRedemption;
@@ -208,9 +209,17 @@ class VolunteerPointsController extends Controller
             ] : null,
         ];
 
+        $allDepts = Department::where('is_active', true)->orderBy('sort_order')->orderBy('id')->get(['id', 'name_ar', 'name']);
+        if ($allDepts->isEmpty()) {
+            $allDepts = Department::all(['id', 'name_ar', 'name']);
+        }
+        $deptOptions = $allDepts->isNotEmpty()
+            ? $allDepts->map(fn ($d) => ['id' => $d->id, 'name' => $d->name_ar ?? $d->name])->values()->all()
+            : $scope->unique('department_id')->map(fn ($r) => ['id' => $r['department_id'], 'name' => $r['department']])
+                ->sortBy('name')->values()->all();
+
         $filterOptions = [
-            'departments' => $scope->unique('department_id')->map(fn ($r) => ['id' => $r['department_id'], 'name' => $r['department']])
-                ->sortBy('name')->values()->all(),
+            'departments' => $deptOptions,
             'levels' => collect(ImpactLevels::LEVELS)->map(fn ($l) => ['id' => $l['id'], 'title' => $l['title']])->all(),
         ];
 

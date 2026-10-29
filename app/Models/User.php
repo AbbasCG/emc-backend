@@ -127,6 +127,12 @@ class User extends Authenticatable implements MustVerifyEmail
     {
         return in_array($this->role, [
             'department_manager',
+            'hr_manager',
+            'finance_manager',
+            'marketing_manager',
+            'quality_manager',
+            'tech_admin',
+            'executive_admin',
             'ai_manager',
             'strategy_planning_manager',
             'digital_ambassadors_manager',
@@ -141,7 +147,7 @@ class User extends Authenticatable implements MustVerifyEmail
     public function getDepartmentSpecializedRole(): ?string
     {
         if ($this->role !== 'department_manager') {
-            return null;
+            return $this->isDepartmentManager() ? $this->role : null;
         }
 
         $dept = null;
@@ -166,21 +172,21 @@ class User extends Authenticatable implements MustVerifyEmail
         }
 
         return match ($dept->slug) {
-            'finance'                   => 'finance_manager',
-            'human-resources'           => 'hr_manager',
-            'marketing-media'           => 'marketing_manager',
-            'quality-governance'        => 'quality_manager',
-            'programs-tracks'           => 'programs_manager',
-            'operations'                => 'operations_manager',
-            'ai-transformation'         => 'ai_manager',
-            'community-health'          => 'community_manager',
-            'partnerships'              => 'partnerships_manager',
-            'strategy-planning'         => 'strategy_planning_manager',
-            'digital-ambassadors'       => 'digital_ambassadors_manager',
-            'advisors'                  => 'advisors_manager',
-            'executive-management'      => 'executive_admin',
-            'technology'                => 'tech_admin',
-            default                     => null,
+            'finance'                                       => 'finance_manager',
+            'human-resources'                               => 'hr_manager',
+            'marketing-media'                               => 'marketing_manager',
+            'quality-governance'                            => 'quality_manager',
+            'programs-tracks'                               => 'programs_manager',
+            'operations'                                    => 'operations_manager',
+            'ai-transformation', 'ai-digital-transformation' => 'ai_manager',
+            'community-health'                              => 'community_manager',
+            'partnerships'                                  => 'partnerships_manager',
+            'strategy-planning'                             => 'strategy_planning_manager',
+            'digital-ambassadors'                           => 'digital_ambassadors_manager',
+            'advisors'                                      => 'advisors_manager',
+            'executive-management'                          => 'executive_admin',
+            'technology'                                    => 'tech_admin',
+            default                                         => null,
         };
     }
 
@@ -197,6 +203,9 @@ class User extends Authenticatable implements MustVerifyEmail
         $specialized = $this->getDepartmentSpecializedRole();
 
         foreach ($roles as $role) {
+            if ($role === 'department_manager' && $this->isDepartmentManager()) {
+                return true;
+            }
             if ($role === $effective || $role === $this->role || ($specialized && $role === $specialized)) {
                 return true;
             }
@@ -376,6 +385,11 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->belongsToMany(Department::class, 'user_departments')
                     ->withPivot('is_primary')
                     ->withTimestamps();
+    }
+
+    public function ledDepartments(): HasMany
+    {
+        return $this->hasMany(Department::class, 'leader_id');
     }
 
     public function inDepartment(int|string $departmentIdOrSlug): bool
