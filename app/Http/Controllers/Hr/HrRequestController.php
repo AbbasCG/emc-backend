@@ -8,6 +8,7 @@ use App\Http\Resources\HrIncomingRequestResource;
 use App\Models\HrRequest;
 use App\Services\HrRequestAccessService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -23,8 +24,12 @@ class HrRequestController extends Controller
     {
         $validated = $request->validate([
             'department_id'    => ['nullable', 'exists:departments,id'],
-            'request_type'     => ['nullable', 'string', 'max:100'],
+            'employment_type'  => ['nullable', 'string', 'max:50'],
+            'job_title'        => ['nullable', 'string', 'max:150'],
+            'request_type'     => ['nullable', 'string', 'max:150'],
             'required_count'   => ['required', 'integer', 'min:1'],
+            'qualification'    => ['nullable', 'string', 'max:255'],
+            'responsibilities' => ['nullable', 'string'],
             'skills_and_specs' => ['required', 'string'],
             'notes'            => ['nullable', 'string'],
         ]);
@@ -66,17 +71,37 @@ class HrRequestController extends Controller
 
         $targetAudience = $isHrDepartment ? 'top_management' : 'hr';
 
-        // 3. Create request
-        $hrRequest = HrRequest::create([
+        // 3. Build request_type and payload
+        $employmentType   = isset($validated['employment_type']) ? trim((string) $validated['employment_type']) : null;
+        $jobTitle         = isset($validated['job_title']) ? trim((string) $validated['job_title']) : null;
+        $qualification    = isset($validated['qualification']) ? trim((string) $validated['qualification']) : null;
+        $responsibilities = isset($validated['responsibilities']) ? trim((string) $validated['responsibilities']) : null;
+
+        $resolvedRequestType = isset($validated['request_type']) && trim((string) $validated['request_type']) !== ''
+            ? trim((string) $validated['request_type'])
+            : ($jobTitle !== null && $jobTitle !== ''
+                ? ($employmentType ? "{$jobTitle} ({$employmentType})" : $jobTitle)
+                : 'احتياج وظيفي / نقص أعضاء');
+
+        $payload = [
             'department_id'    => $deptId,
-            'request_type'     => $validated['request_type'] ?? 'احتياج وظيفي / نقص أعضاء',
+            'request_type'     => mb_substr($resolvedRequestType, 0, 100),
             'required_count'   => $validated['required_count'],
             'skills_and_specs' => $validated['skills_and_specs'],
             'notes'            => $validated['notes'] ?? null,
             'status'           => 'pending',
             'target_audience'  => $targetAudience,
             'created_by'       => $user->id,
-        ]);
+        ];
+
+        if (Schema::hasColumn('hr_requests', 'employment_type')) {
+            $payload['employment_type']  = $employmentType ?: null;
+            $payload['job_title']        = $jobTitle ?: null;
+            $payload['qualification']    = $qualification ?: null;
+            $payload['responsibilities'] = $responsibilities ?: null;
+        }
+
+        $hrRequest = HrRequest::create($payload);
 
         return response()->json([
             'success' => true,
