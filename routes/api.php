@@ -150,6 +150,7 @@ use App\Http\Controllers\Admin\ConsultantApplicationController as AdminConsultan
 use App\Http\Controllers\Operations\MeetingReportController;
 use App\Http\Controllers\Operations\WeeklyReportController;
 use App\Http\Controllers\Operations\VolunteerPointsController;
+use App\Http\Controllers\Operations\VolunteerPointRequestController;
 use App\Http\Controllers\Operations\OperationsBoardController;
 use Illuminate\Support\Facades\Route;
 
@@ -883,6 +884,16 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
     // منح/استبدال نقاط الأثر وقائمة المستحقين: الصلاحية التجارية تُفحص داخل
     // المتحكم (members.recognize / members.manage + نطاق الإدارة) — لا قائمة أدوار.
     Route::get('volunteer-points/recipients',        [VolunteerPointsController::class, 'recipients']);
+    // الأنشطة والتصنيفات وسياسات النقاط
+    Route::get('volunteer-points/activities',        [VolunteerPointRequestController::class, 'activities']);
+    // مسار طلبات منح النقاط ومسار الاعتماد للموارد البشرية
+    Route::get('volunteer-points/requests',                             [VolunteerPointRequestController::class, 'index']);
+    Route::post('volunteer-points/requests',                            [VolunteerPointRequestController::class, 'store']);
+    Route::get('volunteer-points/requests/{pointRequest}',              [VolunteerPointRequestController::class, 'show']);
+    Route::post('volunteer-points/requests/{pointRequest}/approve',      [VolunteerPointRequestController::class, 'approve']);
+    Route::post('volunteer-points/requests/{pointRequest}/reject',       [VolunteerPointRequestController::class, 'reject']);
+    Route::post('volunteer-points/requests/{pointRequest}/revision',     [VolunteerPointRequestController::class, 'returnForRevision']);
+
     // قائمة المستفيدين وسجل عضو وتصحيح نقاطه: الصلاحية والنطاق في المتحكم أيضًا
     // (history: صاحب السجل دائمًا، وغيره للمخوَّل ضمن نطاقه). لا تعديل ولا حذف.
     Route::get('volunteer-points/members',                  [VolunteerPointsController::class, 'members']);
