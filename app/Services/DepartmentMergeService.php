@@ -65,6 +65,10 @@ final class DepartmentMergeService
         // Draft opportunities are generated from an hr_request and keep that request's department, like it does.
         'volunteer_opportunities' => 'department_id',
         'hr_applications' => 'department_id',
+        // Volunteer point requests record the department they were filed for. They are a written-once
+        // request/approval trail reviewed by HR (not by department), and the FK is onDelete('set null'),
+        // so hard-deleting the duplicate would silently erase that attribution: it forces archive-not-delete.
+        'volunteer_point_requests' => 'department_id',
         'financial_requests' => 'department_id',
         'documents' => 'department_id',
         'document_folders' => 'department_id',

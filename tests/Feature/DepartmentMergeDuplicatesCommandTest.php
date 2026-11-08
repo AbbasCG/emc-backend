@@ -14,6 +14,7 @@ use App\Models\TeamProfile;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Models\UserDepartment;
+use App\Models\VolunteerPointRequest;
 use App\Models\WeeklyDepartmentReport;
 use App\Services\DepartmentMergeService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -192,6 +193,42 @@ class DepartmentMergeDuplicatesCommandTest extends TestCase
         $this->merge(['--name' => self::AI, '--move-historical' => true])->assertSuccessful();
 
         $this->assertSame($canonical->id, $ticket->fresh()->department_id);
+        $this->assertNull(Department::find($dup->id));
+    }
+
+    public function test_volunteer_point_requests_are_history_that_forces_archive_not_delete(): void
+    {
+        // The FK is nullOnDelete: hard-deleting the duplicate would silently erase which department a request was filed for.
+        $this->assertSame('department_id', DepartmentMergeService::PRESERVE['volunteer_point_requests']);
+        $this->assertArrayNotHasKey('volunteer_point_requests', DepartmentMergeService::MOVE);
+
+        [$canonical, $dup] = $this->pair();
+        $volunteer = User::factory()->create();
+        $request = VolunteerPointRequest::create([
+            'user_id' => $volunteer->id, 'requester_id' => User::factory()->create()->id, 'department_id' => $dup->id,
+            'category_key' => 'events', 'activity_name' => 'تنظيم فعالية', 'points_requested' => 10,
+            'reason' => 'تنظيم فعالية', 'status' => VolunteerPointRequest::STATUS_APPROVED, 'points_approved' => 8,
+        ]);
+
+        $this->merge(['--name' => self::AI])->expectsOutputToContain('ARCHIVED')->assertSuccessful();
+
+        $request->refresh();
+        $this->assertSame($dup->id, $request->department_id, 'a filed request keeps the department it was filed for');
+        $this->assertSame(8, $request->points_approved, 'the approval trail is untouched');
+        $this->assertSame('archived', $dup->fresh()->status);
+    }
+
+    public function test_move_historical_also_repoints_volunteer_point_requests(): void
+    {
+        [$canonical, $dup] = $this->pair();
+        $request = VolunteerPointRequest::create([
+            'user_id' => User::factory()->create()->id, 'requester_id' => User::factory()->create()->id, 'department_id' => $dup->id,
+            'category_key' => 'events', 'activity_name' => 'تنظيم فعالية', 'points_requested' => 10, 'reason' => 'تنظيم فعالية',
+        ]);
+
+        $this->merge(['--name' => self::AI, '--move-historical' => true])->assertSuccessful();
+
+        $this->assertSame($canonical->id, $request->fresh()->department_id);
         $this->assertNull(Department::find($dup->id));
     }
 
