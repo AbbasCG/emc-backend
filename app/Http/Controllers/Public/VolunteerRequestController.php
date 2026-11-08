@@ -18,7 +18,10 @@ class VolunteerRequestController extends Controller
     public function store(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'opportunity_id'      => 'nullable|integer|exists:volunteer_opportunities,id',
+            // Applications to a specific opportunity go through POST /volunteer-opportunities/{id}/applications, which
+            // enforces the opportunity's lifecycle (draft/closed/expired), one application per email and the stricter answers.
+            // Accepting the id here would bypass all of that, so this general endpoint refuses it.
+            'opportunity_id'      => 'prohibited',
             'full_name'           => 'required|string|max:255',
             'email'               => 'required|email|max:255',
             'phone'               => 'required|string|max:30',
@@ -80,6 +83,8 @@ class VolunteerRequestController extends Controller
             'cv_file'             => ['nullable', 'file', 'max:5120', new PdfCvFile],
             'notes'               => 'nullable|string',
             'agree_terms'         => 'accepted',
+        ], [
+            'opportunity_id.prohibited' => 'للتقديم على فرصة تطوعية محددة استخدم صفحة الفرصة نفسها.',
         ]);
 
         $cvPath = null;
@@ -98,7 +103,6 @@ class VolunteerRequestController extends Controller
         };
 
         $volunteerRequest = VolunteerRequest::create([
-            'opportunity_id'      => $data['opportunity_id'] ?? null,
             'full_name'           => $data['full_name'],
             'email'               => $data['email'],
             'phone'               => $data['phone'],
