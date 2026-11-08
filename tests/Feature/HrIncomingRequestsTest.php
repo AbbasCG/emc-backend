@@ -100,7 +100,8 @@ class HrIncomingRequestsTest extends TestCase
 
         $this->assertCount(1, $json['data']);
         $row = $json['data'][0];
-        $this->assertSame(['id', 'title', 'request_type', 'department', 'requester', 'required_count', 'skills_and_specs', 'skills', 'notes', 'status', 'status_label', 'target_audience', 'target_audience_label', 'hr_feedback', 'created_at', 'updated_at', 'draft'], array_keys($row));
+        // The detailed staffing fields (employment type, job title, qualification, duties) are part of the contract the HR page reads.
+        $this->assertSame(['id', 'title', 'employment_type', 'job_title', 'request_type', 'department', 'requester', 'required_count', 'qualification', 'responsibilities', 'skills_and_specs', 'skills', 'notes', 'status', 'status_label', 'target_audience', 'target_audience_label', 'hr_feedback', 'created_at', 'updated_at', 'draft'], array_keys($row));
         $this->assertSame($r->id, $row['id']);
         $this->assertSame('مصمم محتوى — التسويق والإعلام', $row['title']);
         $this->assertSame(['تصميم جرافيك', 'صناعة المحتوى', 'مونتاج الفيديو'], $row['skills']);
@@ -112,6 +113,25 @@ class HrIncomingRequestsTest extends TestCase
         $this->assertTrue($json['capabilities']['can_manage']);
         $this->assertTrue($json['capabilities']['can_match_volunteers']);
         $this->assertStringNotContainsString('@', json_encode($json['data']));
+    }
+
+    public function test_the_detailed_staffing_fields_are_returned_and_legacy_rows_yield_null(): void
+    {
+        $detailed = $this->request([
+            'employment_type' => 'استبدال', 'job_title' => 'مصمم محتوى', 'qualification' => 'بكالوريوس تصميم',
+            'responsibilities' => "تصميم المواد\nمراجعة الهوية",
+        ]);
+        $legacy = $this->request(['request_type' => 'احتياج وظيفي']);
+
+        $rows = collect($this->as('hr_manager')->getJson(self::BASE.'/incoming')->assertOk()->json('data'))->keyBy('id');
+
+        $this->assertSame('استبدال', $rows[$detailed->id]['employment_type']);
+        $this->assertSame('مصمم محتوى', $rows[$detailed->id]['job_title']);
+        $this->assertSame('بكالوريوس تصميم', $rows[$detailed->id]['qualification']);
+        $this->assertSame("تصميم المواد\nمراجعة الهوية", $rows[$detailed->id]['responsibilities']);
+        foreach (['employment_type', 'job_title', 'qualification', 'responsibilities'] as $field) {
+            $this->assertNull($rows[$legacy->id][$field], "a request saved before the detailed fields existed has no $field");
+        }
     }
 
     public function test_unauthorized_users_cannot_list_or_read_requests(): void

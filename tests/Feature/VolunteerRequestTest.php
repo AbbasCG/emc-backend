@@ -70,23 +70,43 @@ class VolunteerRequestTest extends TestCase
                 'phone',
                 'country',
                 'city',
-                'gender',
                 'desired_department',
-                'experience_level',
-                'availability',
-                'motivation',
                 'agree_terms',
             ]]);
+
+        // gender, experience_level, availability and motivation became optional with the five-level assessment form
+        // (commit b23f39b): the wizard sends education_level / volunteer_days_availability / value_add_contributions instead.
+        foreach (['gender', 'experience_level', 'availability', 'motivation'] as $optional) {
+            $this->assertArrayNotHasKey($optional, $response->json('errors'), "$optional is no longer a required field");
+        }
     }
 
-    public function test_short_motivation_fails_validation(): void
+    public function test_assessment_submission_without_the_legacy_fields_falls_back_to_the_new_answers(): void
     {
-        $response = $this->postJson('/api/volunteer-requests', $this->validPayload([
-            'motivation' => 'Too short',
-        ]));
+        $payload = $this->validPayload([
+            'education_level' => 'bachelor',
+            'volunteer_days_availability' => 'weekends',
+            'value_add_contributions' => 'Short',
+        ]);
+        unset($payload['gender'], $payload['experience_level'], $payload['availability'], $payload['motivation']);
 
-        $response->assertStatus(422)
-            ->assertJsonStructure(['errors' => ['motivation']]);
+        $this->postJson('/api/volunteer-requests', $payload)->assertCreated();
+
+        $this->assertDatabaseHas('volunteer_requests', [
+            'email' => 'ahmed@example.com',
+            'gender' => 'unspecified',
+            'experience_level' => 'bachelor',
+            'availability' => 'weekends',
+            'motivation' => 'Short',
+        ]);
+    }
+
+    public function test_the_motivation_has_no_server_side_minimum_because_the_wizard_forwards_a_free_text_answer_as_it(): void
+    {
+        // PENDING A BUSINESS DECISION: the old rule was `required|min:20`. VolunteerApply.tsx sends the optional, unbounded
+        // `value_add_contributions` as `motivation`, so a minimum here would reject valid wizard submissions. The legacy
+        // opportunity form still enforces 20 characters in the browser only.
+        $this->postJson('/api/volunteer-requests', $this->validPayload(['motivation' => 'Too short']))->assertCreated();
     }
 
     public function test_invalid_cv_file_type_is_rejected(): void
