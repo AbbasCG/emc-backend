@@ -152,10 +152,13 @@ class VolunteerRequestController extends Controller
 
             // الحقول العامة السابقة
             'desired_department'  => $data['desired_department'],
-            'experience_level'    => $data['experience_level'] ?? ($data['education_level'] ?? 'غير محدد'),
+            // A question the applicant did not answer is stored as NULL, never as an invented answer, and an answer is
+            // never copied into a different question (education level is not experience level, what a person can
+            // contribute is not why they volunteer). `gender` keeps its approved 'unspecified' value above.
+            'experience_level'    => $data['experience_level'] ?? null,
             'skills'              => $data['skills'] ?? (is_array($data['personal_skills'] ?? null) ? implode(', ', $data['personal_skills']) : null),
-            'availability'        => $data['availability'] ?? ($data['volunteer_days_availability'] ?? 'مرن'),
-            'motivation'          => $data['motivation'] ?? ($data['value_add_contributions'] ?? 'الرغبة في المساهمة في خدمة المجتمع وتطوير المهارات'),
+            'availability'        => $data['availability'] ?? null,
+            'motivation'          => $data['motivation'] ?? null,
             'previous_experience' => $data['previous_experience'] ?? ($data['volunteering_organizations'] ?? null),
             'cv_file_path'        => $cvPath,
             'notes'               => $data['notes'] ?? null,
