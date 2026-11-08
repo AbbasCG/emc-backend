@@ -81,7 +81,7 @@ class VolunteerRequestTest extends TestCase
         }
     }
 
-    public function test_assessment_submission_without_the_legacy_fields_falls_back_to_the_new_answers(): void
+    public function test_assessment_submission_without_the_legacy_fields_stores_no_answer_for_them(): void
     {
         $payload = $this->validPayload([
             'education_level' => 'bachelor',
@@ -92,21 +92,27 @@ class VolunteerRequestTest extends TestCase
 
         $this->postJson('/api/volunteer-requests', $payload)->assertCreated();
 
+        // Unanswered questions are NULL (gender keeps its approved 'unspecified'), and each new answer stays in its own column.
         $this->assertDatabaseHas('volunteer_requests', [
             'email' => 'ahmed@example.com',
             'gender' => 'unspecified',
-            'experience_level' => 'bachelor',
-            'availability' => 'weekends',
-            'motivation' => 'Short',
+            'experience_level' => null,
+            'availability' => null,
+            'motivation' => null,
+            'education_level' => 'bachelor',
+            'volunteer_days_availability' => 'weekends',
+            'value_add_contributions' => 'Short',
         ]);
     }
 
-    public function test_the_motivation_has_no_server_side_minimum_because_the_wizard_forwards_a_free_text_answer_as_it(): void
+    public function test_a_provided_motivation_is_stored_as_given_on_the_general_endpoint(): void
     {
-        // PENDING A BUSINESS DECISION: the old rule was `required|min:20`. VolunteerApply.tsx sends the optional, unbounded
-        // `value_add_contributions` as `motivation`, so a minimum here would reject valid wizard submissions. The legacy
-        // opportunity form still enforces 20 characters in the browser only.
+        // The old rule was `required|min:20`. The general endpoint no longer asks for a motivation at all (the assessment
+        // wizard has no such question), so when one is sent it is kept verbatim. The 20-character minimum still applies
+        // where the question is asked: POST /api/volunteer-opportunities/{id}/applications.
         $this->postJson('/api/volunteer-requests', $this->validPayload(['motivation' => 'Too short']))->assertCreated();
+
+        $this->assertDatabaseHas('volunteer_requests', ['email' => 'ahmed@example.com', 'motivation' => 'Too short']);
     }
 
     public function test_invalid_cv_file_type_is_rejected(): void
