@@ -213,6 +213,7 @@ final class RoleDefaultMap
             'hr.tasks',
             'hr.team',
             'hr.volunteer_opportunities',
+            'hr.volunteer_points_approval',
             'hr.volunteer_requests',
             'hr.volunteers',
             'operations.accepted_volunteers',
