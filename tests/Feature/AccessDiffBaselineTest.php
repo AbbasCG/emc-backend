@@ -348,7 +348,7 @@ class AccessDiffBaselineTest extends TestCase
         );
 
         $this->assertFileExists($dir.'/baseline.json');
-        $this->assertCount(138, $catalog);
+        $this->assertCount(139, $catalog);
         $this->assertNotEmpty($unseeded);
         $this->assertNotEmpty($seeded);
     }

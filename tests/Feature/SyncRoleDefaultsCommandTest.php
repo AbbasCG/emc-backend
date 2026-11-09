@@ -67,7 +67,7 @@ class SyncRoleDefaultsCommandTest extends TestCase
             ->assertExitCode(0);
 
         $this->assertSame(0, $this->rows());
-        $this->assertSame(190, RoleDefaultMap::pairCount());
+        $this->assertSame(191, RoleDefaultMap::pairCount());
     }
 
     // ── 19. First apply ──────────────────────────────────────────────────────
@@ -77,10 +77,10 @@ class SyncRoleDefaultsCommandTest extends TestCase
         $this->seedCanonicalRoles();
 
         $this->artisan('access:sync-role-defaults', ['--apply' => true])
-            ->expectsOutputToContain('Writes performed                : 190')
+            ->expectsOutputToContain('Writes performed                : 191')
             ->assertExitCode(0);
 
-        $this->assertSame(190, $this->rows());
+        $this->assertSame(191, $this->rows());
 
         // Every stored row belongs to the canonical map — no stranger crept in.
         $map = RoleDefaultMap::all();
@@ -118,7 +118,7 @@ class SyncRoleDefaultsCommandTest extends TestCase
         $this->assertContains('created_by', $columns);
 
         $actor = User::where('role', 'super_admin')->first();
-        $this->assertSame(190, RolePageDefault::where('created_by', $actor->id)->count());
+        $this->assertSame(191, RolePageDefault::where('created_by', $actor->id)->count());
 
         // Identity is role + page_key; no route string is ever stored.
         foreach (RolePageDefault::query()->pluck('page_key') as $key) {
@@ -133,17 +133,17 @@ class SyncRoleDefaultsCommandTest extends TestCase
     {
         $this->seedCanonicalRoles();
         $this->artisan('access:sync-role-defaults', ['--apply' => true])->assertExitCode(0);
-        $this->assertSame(190, $this->rows());
+        $this->assertSame(191, $this->rows());
 
         $before = RolePageDefault::query()->orderBy('id')->pluck('page_key')->all();
 
         $this->artisan('access:sync-role-defaults', ['--apply' => true])
             ->expectsOutputToContain('Planned inserts                 : 0')
-            ->expectsOutputToContain('Already present                 : 190')
+            ->expectsOutputToContain('Already present                 : 191')
             ->expectsOutputToContain('Writes performed                : 0')
             ->assertExitCode(0);
 
-        $this->assertSame(190, $this->rows());
+        $this->assertSame(191, $this->rows());
         $this->assertSame($before, RolePageDefault::query()->orderBy('id')->pluck('page_key')->all());
     }
 
@@ -167,7 +167,7 @@ class SyncRoleDefaultsCommandTest extends TestCase
         $this->artisan('access:sync-role-defaults', ['--apply' => true])->assertExitCode(0);
 
         // Canonical rows added alongside it, custom row untouched.
-        $this->assertSame(191, $this->rows(), '190 canonical + 1 pre-existing custom row');
+        $this->assertSame(192, $this->rows(), '191 canonical + 1 pre-existing custom row');
 
         $after = RolePageDefault::find($customRow->id);
         $this->assertNotNull($after, 'the custom row must not be deleted');
@@ -343,7 +343,7 @@ class SyncRoleDefaultsCommandTest extends TestCase
         $this->assertSame($before['overrides'], DB::table('user_page_access_overrides')->count());
         $this->assertSame($before['users'], DB::table('users')->count());
         $this->assertSame($before['roles'], DB::table('roles')->count());
-        $this->assertSame(190, $this->rows());
+        $this->assertSame(191, $this->rows());
     }
 
     // ── --role scoping stays additive ────────────────────────────────────────
