@@ -12,9 +12,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 /**
- * لوحة التشغيل المرئية للجميع: كل أدوار الفريق تقرأ نفس اللوحة —
- * من يعمل على ماذا، حالة كل مهمة، والمُقفَل منها. القراءة للجميع؛
- * الكتابة تبقى عبر مسارات الأدمن المقيَّدة.
+ * لوحة التشغيل المرئية للجميع / الأجايل العام والخاص
  */
 class OperationsBoardController extends Controller
 {
@@ -22,7 +20,6 @@ class OperationsBoardController extends Controller
     {
     }
 
-    /** ما نطاق الإدارات المتاح لهذا المستخدم — تُبنى عليه واجهة اختيار الإدارة. */
     public function myDepartmentAccess(Request $request): JsonResponse
     {
         return response()->json([
@@ -35,12 +32,30 @@ class OperationsBoardController extends Controller
     {
         $statuses = [
             'idea', 'under_review', 'planning', 'waiting_approval',
-            'in_progress', 'completed', 'postponed', 'cancelled', 'needs_evaluation',
+            'in_progress', 'needs_evaluation', 'completed', 'postponed', 'cancelled',
         ];
 
+        $user = $request->user();
+        $isMineScope = $request->scope === 'mine' || $request->boolean('mine');
+
         $query = Task::query()
-            ->with(['department:id,name', 'assignedTo:id,name', 'createdBy:id,name'])
-            ->when($request->department_id, fn ($q) => $q->where('department_id', $request->department_id));
+            ->with([
+                'department:id,name',
+                'assignedTo:id,name',
+                'createdBy:id,name',
+                'evaluation.evaluator',
+                'attachments',
+            ])
+            ->when($request->department_id, fn ($q) => $q->where('department_id', $request->department_id))
+            ->when($isMineScope, function ($q) use ($user) {
+                // الأجايل الخاص بالعضو: فقط مهامه المقبولة
+                $q->where('assigned_to', $user->id)
+                  ->where('acceptance_status', Task::ACCEPTANCE_ACCEPTED);
+            })
+            ->when(! $isMineScope && $request->unassigned, function ($q) {
+                // المهام غير المسندة الموجهة للإدارة
+                $q->whereNull('assigned_to');
+            });
 
         $board = [];
         foreach ($statuses as $status) {
@@ -52,7 +67,6 @@ class OperationsBoardController extends Controller
         return response()->json(['success' => true, 'data' => $board]);
     }
 
-    /** أعضاء إدارة (القائد + كامل أعضاء الإدارة) — يغذي قائمة التقييم في التقرير الأسبوعي ومحضر الاجتماع. */
     public function departmentMembers(Request $request, Department $department): JsonResponse
     {
         if (! $this->departmentAccess->canAccessDepartment($request->user(), $department->id)) {

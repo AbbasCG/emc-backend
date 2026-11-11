@@ -65,6 +65,7 @@ use App\Http\Controllers\Admin\PartnershipRequestAdminController;
 use App\Http\Controllers\Admin\SupportTicketController as AdminSupportTicketController;
 use App\Http\Controllers\Admin\TaskController;
 use App\Http\Controllers\Admin\VolunteerController;
+use App\Http\Controllers\Admin\VolunteerHubController;
 use App\Http\Controllers\Admin\AdminVolunteerRequestController;
 use App\Http\Controllers\Admin\HrVolunteerProfileController;
 use App\Http\Controllers\VolunteerHrProfileController;
@@ -954,15 +955,25 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     Route::put('consultant-applications/{consultantApplication}/status', [AdminConsultantApplicationController::class, 'updateStatus']);
 
     // Tasks
-    Route::get('tasks/my',      [TaskController::class, 'myTasks']);
-    Route::get('tasks/overdue', [TaskController::class, 'overdue']);
-    Route::get('tasks/kanban',  [TaskController::class, 'kanban']);
+    Route::get('tasks/my',                               [TaskController::class, 'myTasks']);
+    Route::get('tasks/pending-acceptance',               [TaskController::class, 'myPendingAcceptance']);
+    Route::get('tasks/pending-evaluation',               [TaskController::class, 'pendingEvaluation']);
+    Route::get('tasks/pending-hr-approval',              [TaskController::class, 'pendingHrApproval']);
+    Route::get('tasks/unassigned-department',            [TaskController::class, 'unassignedDepartment']);
+    Route::get('tasks/overdue',                          [TaskController::class, 'overdue']);
+    Route::get('tasks/kanban',                           [TaskController::class, 'kanban']);
     Route::apiResource('tasks', TaskController::class);
-    Route::post('tasks/{task}/comments',               [TaskController::class, 'storeComment']);
-    Route::post('tasks/{task}/checklist',              [TaskController::class, 'storeChecklist']);
-    Route::put('tasks/{task}/checklist/{item}',        [TaskController::class, 'updateChecklist']);
-    Route::post('tasks/{task}/lock',                   [TaskController::class, 'lock']);
-    Route::post('tasks/{task}/unlock',                 [TaskController::class, 'unlock']);
+    Route::post('tasks/{task}/accept',                   [TaskController::class, 'accept']);
+    Route::post('tasks/{task}/reject',                   [TaskController::class, 'reject']);
+    Route::post('tasks/{task}/reassign',                 [TaskController::class, 'reassign']);
+    Route::post('tasks/{task}/claim',                    [TaskController::class, 'claim']);
+    Route::post('tasks/{task}/evaluate',                 [TaskController::class, 'evaluate']);
+    Route::post('tasks/{task}/hr-approve',               [TaskController::class, 'hrApprove']);
+    Route::post('tasks/{task}/comments',                 [TaskController::class, 'storeComment']);
+    Route::post('tasks/{task}/checklist',                [TaskController::class, 'storeChecklist']);
+    Route::put('tasks/{task}/checklist/{item}',          [TaskController::class, 'updateChecklist']);
+    Route::post('tasks/{task}/lock',                     [TaskController::class, 'lock']);
+    Route::post('tasks/{task}/unlock',                   [TaskController::class, 'unlock']);
 
     // Meetings
     Route::apiResource('meetings', MeetingController::class);
@@ -1383,6 +1394,12 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     Route::get('tasks/{task}',                                         [TaskController::class,                    'show']);
     Route::patch('tasks/{task}',                                       [TaskController::class,                    'update']);
     Route::post('tasks',                                               [TaskController::class,                    'store']);
+    Route::post('tasks/{task}/accept',                                 [TaskController::class,                    'accept']);
+    Route::post('tasks/{task}/reject',                                 [TaskController::class,                    'reject']);
+    Route::post('tasks/{task}/reassign',                               [TaskController::class,                    'reassign']);
+    Route::post('tasks/{task}/claim',                                  [TaskController::class,                    'claim']);
+    Route::post('tasks/{task}/evaluate',                               [TaskController::class,                    'evaluate']);
+    Route::post('tasks/{task}/hr-approve',                             [TaskController::class,                    'hrApprove']);
     Route::post('tasks/{task}/comments',                               [TaskController::class,                    'storeComment']);
     Route::get('meetings',                                             [MeetingController::class,                 'index']);
     Route::get('meetings/{meeting}',                                   [MeetingController::class,                 'show']);
@@ -1489,10 +1506,15 @@ Route::middleware(['auth:sanctum', 'role:'.implode(',', \App\Services\Forms\Form
 });
 
 
-// ─── Operations: volunteers read — HR/community dashboards consume this list ─
+// ─── Operations: volunteers read & Volunteer Hub ──────────────────────────────
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,hr_manager,operations_manager,community_manager'])->prefix('operations')->group(function () {
-    Route::get('volunteers',             [VolunteerController::class, 'index']);
-    Route::get('volunteers/{volunteer}', [VolunteerController::class, 'show']);
+    Route::get('volunteers/hub',                        [VolunteerHubController::class, 'index']);
+    Route::put('volunteers/{volunteer}/status',         [VolunteerHubController::class, 'updateStatus']);
+    Route::get('volunteers/{volunteer}/status-logs',    [VolunteerHubController::class, 'statusLogs']);
+    Route::get('volunteers/{volunteer}/points-ledger',  [VolunteerHubController::class, 'pointsLedger']);
+    Route::get('volunteers/{volunteer}/weekly-ratings', [VolunteerHubController::class, 'weeklyRatings']);
+    Route::get('volunteers',                            [VolunteerController::class, 'index']);
+    Route::get('volunteers/{volunteer}',                [VolunteerController::class, 'show']);
 });
 
 // ─── Operations: marketing items — the marketing team manages its own board ──
