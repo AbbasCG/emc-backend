@@ -35,7 +35,7 @@
     </tr>
     <tr>
       <td style="color:#64748B;font-size:13px;padding:5px 0;">مستوى الخبرة</td>
-      <td style="color:#1E3A5F;font-size:14px;font-weight:700;padding:5px 0;">{{ $experienceLevel }}</td>
+      <td style="color:#1E3A5F;font-size:14px;font-weight:700;padding:5px 0;">{{ filled($experienceLevel) ? $experienceLevel : 'لم يُحدَّد' }}</td>
     </tr>
     @if($skills)
     <tr>

@@ -19,7 +19,7 @@ class VolunteerApplicationAdminMail extends Mailable
         public readonly string  $applicantEmail,
         public readonly string  $applicantPhone,
         public readonly string  $department,
-        public readonly string  $experienceLevel,
+        public readonly ?string $experienceLevel,
         public readonly ?string $skills,
         public readonly string  $submittedAt,
         public readonly string  $reviewUrl,

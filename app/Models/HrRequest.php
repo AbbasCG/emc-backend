@@ -13,8 +13,12 @@ class HrRequest extends Model
 
     protected $fillable = [
         'department_id',
+        'employment_type',
+        'job_title',
         'request_type',
         'required_count',
+        'qualification',
+        'responsibilities',
         'skills_and_specs',
         'notes',
         'status',

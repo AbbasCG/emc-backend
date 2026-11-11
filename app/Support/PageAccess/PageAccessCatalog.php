@@ -189,6 +189,12 @@ final class PageAccessCatalog
             // Publish workflow for volunteer opportunities (public site). ADMIN_ONLY and not delegatable:
             // publishing is public-facing. The API behind it needs manage_team (view_volunteers for applicants).
             ['hr.volunteer_opportunities', '/dashboard/hr/opportunities', 'فرص التطوع', $C::Hr, $R::AdminOnly, false, P::MANAGE_TEAM, false, []],
+            // Review/approval queue for volunteer impact-point requests. It used to be owned implicitly by the
+            // `/dashboard/hr` prefix (hr.dashboard), so it had no row of its own and could not be granted or revoked
+            // from Access Control. ADMIN_ONLY and not delegatable, exactly like the page it was inheriting from.
+            // Opening the page confers no approval right: approve / reject / revision stay gated in
+            // VolunteerPointRequestController (members.manage, organisation scope, or HR roles).
+            ['hr.volunteer_points_approval', '/dashboard/hr/volunteer-points-approval', 'اعتماد نقاط المتطوعين', $C::Hr, $R::AdminOnly, false, P::MEMBERS_MANAGE, false, []],
             ['hr.instructors', '/dashboard/hr/instructors', 'المدربون', $C::Hr, $R::AdminOnly, false, P::VIEW_TEAM, false, []],
             ['hr.onboarding', '/dashboard/hr/onboarding', 'التهيئة', $C::Hr, $R::SafeDelegatable, true, P::MANAGE_TEAM, true, []],
             ['hr.volunteer_requests', '/dashboard/hr/volunteer-requests', 'طلبات المتطوعين', $C::Hr, $R::SafeDelegatable, true, P::MANAGE_VOLUNTEERS, true, [

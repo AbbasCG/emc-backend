@@ -87,7 +87,7 @@ class VolunteerMatchingService
         $pool = VolunteerRequest::query()
             ->whereIn('status', self::CANDIDATE_STATUSES)
             ->orderByDesc('created_at')->limit(self::POOL)
-            ->get(['id', 'opportunity_id', 'full_name', 'desired_department', 'experience_level', 'skills', 'availability', 'motivation', 'previous_experience', 'status', 'created_at']);
+            ->get(['id', 'opportunity_id', 'full_name', 'desired_department', 'experience_level', 'skills', 'availability', 'motivation', 'value_add_contributions', 'previous_experience', 'status', 'created_at']);
 
         $out = [];
         if ($profile['max'] > 0) {
@@ -176,8 +176,11 @@ class VolunteerMatchingService
     {
         $skillsNorm = SkillText::normalize($v->skills);
         $skillsWords = SkillText::keywords($v->skills);
-        $expNorm = SkillText::normalize($v->previous_experience.' '.$v->motivation);
-        $expWords = SkillText::keywords($v->previous_experience.' '.$v->motivation);
+        // Free-text evidence of experience. The assessment form's "what can you add" answer is kept in its own column
+        // (it used to be copied into `motivation`), so it is read here directly to keep scoring those applicants as before.
+        $experienceText = $v->previous_experience.' '.$v->motivation.' '.$v->value_add_contributions;
+        $expNorm = SkillText::normalize($experienceText);
+        $expWords = SkillText::keywords($experienceText);
 
         $earned = ['skills' => 0.0, 'department' => 0.0, 'experience' => 0.0, 'level' => 0.0];
         $matched = [];
