@@ -132,15 +132,18 @@ class VolunteerPointRequestController extends Controller
             ], 422);
         }
 
-        // فحص السقف الشهري المعتاد (2500 نقطة)
-        $usedMonth = $this->recipients->monthPoints($recipientId);
-        if ($usedMonth + $points > VolunteerPointsController::MONTHLY_CAP) {
-            $left = max(0, VolunteerPointsController::MONTHLY_CAP - $usedMonth);
-            return response()->json([
-                'success' => false,
-                'message' => "يتجاوز السقف الشهري المعتاد (".VolunteerPointsController::MONTHLY_CAP." نقطة) — المتبقي لهذا العضو هذا الشهر {$left} نقطة.",
-                'code'    => 'MONTHLY_CAP_EXCEEDED',
-            ], 422);
+        // فحص السقف الشهري للأعمال الداخلية (2500 نقطة) — وتُستثنى المبادرات والمعسكرات والجوائز
+        $isExempt = VolunteerPointsController::isExemptCategory($activity->category_key);
+        if (! $isExempt) {
+            $usedMonth = $this->recipients->monthCappedPoints($recipientId);
+            if ($usedMonth + $points > VolunteerPointsController::MONTHLY_CAP) {
+                $left = max(0, VolunteerPointsController::MONTHLY_CAP - $usedMonth);
+                return response()->json([
+                    'success' => false,
+                    'message' => "يتجاوز السقف الشهري للأعمال الداخلية (".VolunteerPointsController::MONTHLY_CAP." نقطة) — المتبقي لهذا العضو هذا الشهر {$left} نقطة.",
+                    'code'    => 'MONTHLY_CAP_EXCEEDED',
+                ], 422);
+            }
         }
 
         // فحص السقف الخاص بالنشاط إن وجد
@@ -303,19 +306,23 @@ class VolunteerPointRequestController extends Controller
         $user = $pointRequest->user;
         $lifetime = (int) VolunteerPointAward::where('user_id', $user->id)->sum('points');
         $redeemed = (int) VolunteerPointRedemption::where('user_id', $user->id)->sum('points');
-        $monthPoints = $this->recipients->monthPoints($user->id);
+        $monthCapped = $this->recipients->monthCappedPoints($user->id);
+        $monthTotal = $this->recipients->monthTotalPoints($user->id);
         $months = (int) $user->created_at->diffInMonths(now());
         $level = ImpactLevels::eligible($lifetime, $months);
+        $isExempt = VolunteerPointsController::isExemptCategory($pointRequest->category_key);
 
         return response()->json([
             'success' => true,
             'data'    => $pointRequest->load(['user:id,name,role', 'department:id,name', 'requester:id,name', 'reviewer:id,name', 'activity']),
             'volunteer_summary' => [
-                'lifetime_points'  => $lifetime,
-                'available_points' => max(0, $lifetime - $redeemed),
-                'month_points'     => $monthPoints,
-                'level'            => $level,
-                'monthly_cap_left' => max(0, VolunteerPointsController::MONTHLY_CAP - $monthPoints),
+                'lifetime_points'       => $lifetime,
+                'available_points'      => max(0, $lifetime - $redeemed),
+                'month_points'          => $monthCapped,
+                'month_total_points'    => $monthTotal,
+                'level'                 => $level,
+                'monthly_cap_left'      => max(0, VolunteerPointsController::MONTHLY_CAP - $monthCapped),
+                'is_request_exempt'     => $isExempt,
             ],
             'attachment_url' => $pointRequest->attachment_path ? Storage::disk('public')->url($pointRequest->attachment_path) : null,
         ]);
@@ -342,15 +349,18 @@ class VolunteerPointRequestController extends Controller
         $finalPoints = $validated['approved_points'] ?? $pointRequest->points_requested;
         $notes = $validated['review_notes'] ?? null;
 
-        // التحقق من السقف الشهري
-        $usedMonth = $this->recipients->monthPoints($pointRequest->user_id);
-        if ($usedMonth + $finalPoints > VolunteerPointsController::MONTHLY_CAP) {
-            $left = max(0, VolunteerPointsController::MONTHLY_CAP - $usedMonth);
-            return response()->json([
-                'success' => false,
-                'message' => "يتجاوز السقف الشهري للمتطوع (".VolunteerPointsController::MONTHLY_CAP." نقطة) — المتبقي له {$left} نقطة.",
-                'code'    => 'MONTHLY_CAP_EXCEEDED',
-            ], 422);
+        // التحقق من السقف الشهري للأعمال الداخلية فقط
+        $isExempt = VolunteerPointsController::isExemptCategory($pointRequest->category_key);
+        if (! $isExempt) {
+            $usedMonth = $this->recipients->monthCappedPoints($pointRequest->user_id);
+            if ($usedMonth + $finalPoints > VolunteerPointsController::MONTHLY_CAP) {
+                $left = max(0, VolunteerPointsController::MONTHLY_CAP - $usedMonth);
+                return response()->json([
+                    'success' => false,
+                    'message' => "يتجاوز السقف الشهري للأعمال الداخلية للمتطوع (".VolunteerPointsController::MONTHLY_CAP." نقطة) — المتبقي له {$left} نقطة.",
+                    'code'    => 'MONTHLY_CAP_EXCEEDED',
+                ], 422);
+            }
         }
 
         $award = DB::transaction(function () use ($pointRequest, $actor, $finalPoints, $notes) {

@@ -289,7 +289,15 @@ class ImpactPointsRecipients
             ->selectRaw('user_id, SUM(points) as total, COUNT(*) as events, MAX(awarded_at) as last_at')
             ->get()
             ->keyBy('user_id');
-        $month = VolunteerPointAward::query()
+        $monthCapped = VolunteerPointAward::query()
+            ->whereIn('user_id', $ids)
+            ->where('points', '>', 0)
+            ->whereNotIn('category', \App\Http\Controllers\Operations\VolunteerPointsController::EXEMPT_CATEGORIES)
+            ->whereBetween('awarded_at', [now()->startOfMonth(), now()->endOfMonth()])
+            ->groupBy('user_id')
+            ->selectRaw('user_id, SUM(points) as total')
+            ->pluck('total', 'user_id');
+        $monthTotal = VolunteerPointAward::query()
             ->whereIn('user_id', $ids)
             ->where('points', '>', 0)
             ->whereBetween('awarded_at', [now()->startOfMonth(), now()->endOfMonth()])
@@ -297,33 +305,54 @@ class ImpactPointsRecipients
             ->selectRaw('user_id, SUM(points) as total')
             ->pluck('total', 'user_id');
 
-        return $users->map(function (User $u) use ($context, $departments, $totals, $month) {
+        return $users->map(function (User $u) use ($context, $departments, $totals, $monthCapped, $monthTotal) {
             $lifetime = (int) ($totals[$u->id]->total ?? 0);
             $level = ImpactLevels::eligible($lifetime, (int) $u->created_at->diffInMonths(now()));
             $lastAt = $totals[$u->id]->last_at ?? null;
 
             return [
-                'user_id'          => $u->id,
-                'name'             => $u->name,
-                'department_id'    => (int) $context[$u->id]['department_id'],
-                'department'       => $departments[$context[$u->id]['department_id']] ?? null,
-                'role_title'       => $context[$u->id]['role_title'],
-                'month_points'     => (int) ($month[$u->id] ?? 0),
-                'lifetime_points'  => $lifetime,
-                'awards_count'     => (int) ($totals[$u->id]->events ?? 0),
-                'last_activity_at' => $lastAt ? \Illuminate\Support\Carbon::parse($lastAt)->toIso8601String() : null,
-                'level'            => ['id' => $level['id'], 'title' => $level['title']],
+                'user_id'            => $u->id,
+                'name'               => $u->name,
+                'department_id'      => (int) $context[$u->id]['department_id'],
+                'department'         => $departments[$context[$u->id]['department_id']] ?? null,
+                'role_title'         => $context[$u->id]['role_title'],
+                'month_points'       => (int) ($monthCapped[$u->id] ?? 0),
+                'month_total_points' => (int) ($monthTotal[$u->id] ?? 0),
+                'lifetime_points'    => $lifetime,
+                'awards_count'       => (int) ($totals[$u->id]->events ?? 0),
+                'last_activity_at'   => $lastAt ? \Illuminate\Support\Carbon::parse($lastAt)->toIso8601String() : null,
+                'level'              => ['id' => $level['id'], 'title' => $level['title']],
             ];
         })->values();
     }
 
-    /** Positive points a user already received this calendar month (all sources). */
-    public function monthPoints(int $userId): int
+    /**
+     * مجموع نقاط الأعمال الداخلية الخاضعة للسقف الشهري (2500 نقطة).
+     * تُستثنى المبادرات، المعسكرات، الجوائز الشهرية، والجوائز الاستثنائية.
+     */
+    public function monthCappedPoints(int $userId): int
+    {
+        return (int) VolunteerPointAward::query()
+            ->where('user_id', $userId)
+            ->where('points', '>', 0)
+            ->whereNotIn('category', \App\Http\Controllers\Operations\VolunteerPointsController::EXEMPT_CATEGORIES)
+            ->whereBetween('awarded_at', [now()->startOfMonth(), now()->endOfMonth()])
+            ->sum('points');
+    }
+
+    /** إجمالي النقاط الممنوحة للعضو هذا الشهر عبر كافة التصنيفات. */
+    public function monthTotalPoints(int $userId): int
     {
         return (int) VolunteerPointAward::query()
             ->where('user_id', $userId)
             ->where('points', '>', 0)
             ->whereBetween('awarded_at', [now()->startOfMonth(), now()->endOfMonth()])
             ->sum('points');
+    }
+
+    /** Positive points a user already received this calendar month (internal capped work). */
+    public function monthPoints(int $userId): int
+    {
+        return $this->monthCappedPoints($userId);
     }
 }

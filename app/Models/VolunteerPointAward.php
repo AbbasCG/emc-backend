@@ -12,12 +12,16 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class VolunteerPointAward extends Model
 {
-    /** فئات المنح — تعكس أبواب سياسة نقاط أثر EMC v1.0. */
+    /** فئات المنح — تعكس أبواب سياسة نقاط أثر EMC v1.0 والتصنيفات المعتمدة. */
     public const CATEGORIES = [
         'meetings', 'task', 'quality_bonus', 'initiative', 'workshop', 'camp',
         'community', 'mentoring', 'knowledge', 'institutional',
         'best_of_department', 'best_of_center', 'exceptional_impact',
         'continuity', 'other',
+        // فئات الأنشطة المعتمدة في Seeder
+        'meetings_commitment', 'admin_tech_tasks', 'initiatives_institutional',
+        'workshops', 'camps', 'community_service', 'mentoring_knowledge',
+        'monthly_awards', 'exceptional_continuity',
     ];
 
     /**
