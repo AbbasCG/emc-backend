@@ -122,8 +122,11 @@ final class PageAccessCatalog
             ['operations.accepted_volunteers', '/dashboard/volunteer', 'المتطوعون المقبولون', $C::Operations, $R::SafeDelegatable, true, P::VIEW_VOLUNTEERS, true, [
                 '/dashboard/volunteer/:id',
             ]],
-            ['operations.volunteers_management', '/dashboard/admin/volunteers', 'إدارة المتطوعين', $C::Operations, $R::AdminOnly, false, P::MANAGE_VOLUNTEERS, false, [
-                '/dashboard/admin/volunteers/:id', '/dashboard/ops/volunteers',
+            ['operations.volunteers', '/dashboard/ops/volunteers', 'المتطوعون (العمليات)', $C::Operations, $R::SafeDelegatable, true, P::VIEW_VOLUNTEERS, true, [
+                '/dashboard/ops/volunteers/:id',
+            ]],
+            ['operations.volunteers_management', '/dashboard/admin/volunteers', 'إدارة المتطوعين', $C::Operations, $R::SafeDelegatable, true, P::MANAGE_VOLUNTEERS, false, [
+                '/dashboard/admin/volunteers/:id',
             ]],
             ['operations.support_tickets', '/dashboard/support', 'تذاكر الدعم الفني', $C::Operations, $R::SafeDelegatable, true, P::VIEW_SUPPORT_TICKETS, true, [
                 '/dashboard/support/:id', '/dashboard/admin/support-tickets', '/dashboard/admin/support-tickets/:id',
