@@ -96,9 +96,10 @@ final class PageAccessCatalog
             ['operations.workshop_requests', '/dashboard/admin/workshop-requests', 'طلبات الورش', $C::Operations, $R::AdminOnly, false, P::WR_VIEW_ALL, false, [
                 '/dashboard/admin/workshop-requests/:id',
             ]],
-            ['operations.tasks', '/dashboard/admin/tasks', 'المهام', $C::Operations, $R::SafeDelegatable, true, P::VIEW_TASKS, true, [
-                '/dashboard/admin/tasks/kanban', '/dashboard/admin/tasks/my', '/dashboard/admin/tasks/overdue',
+            ['operations.tasks', '/dashboard/admin/tasks', 'المهام ومتابعة العمليات', $C::Operations, $R::SafeDelegatable, true, P::VIEW_TASKS, true, [
+                '/dashboard/admin/tasks/kanban', '/dashboard/admin/tasks/overdue',
             ]],
+            ['operations.my_tasks', '/dashboard/admin/tasks/my', 'مهامي ومسؤولياتي', $C::Operations, $R::SafeDelegatable, true, null, false, [], true],
             ['operations.meetings', '/dashboard/admin/meetings', 'الاجتماعات', $C::Operations, $R::SafeDelegatable, true, P::VIEW_MEETINGS, true, [
                 '/dashboard/admin/meetings/:id',
             ]],
@@ -121,8 +122,11 @@ final class PageAccessCatalog
             ['operations.accepted_volunteers', '/dashboard/volunteer', 'المتطوعون المقبولون', $C::Operations, $R::SafeDelegatable, true, P::VIEW_VOLUNTEERS, true, [
                 '/dashboard/volunteer/:id',
             ]],
-            ['operations.volunteers_management', '/dashboard/admin/volunteers', 'إدارة المتطوعين', $C::Operations, $R::AdminOnly, false, P::MANAGE_VOLUNTEERS, false, [
-                '/dashboard/admin/volunteers/:id', '/dashboard/ops/volunteers',
+            ['operations.volunteers', '/dashboard/ops/volunteers', 'المتطوعون (العمليات)', $C::Operations, $R::SafeDelegatable, true, P::VIEW_VOLUNTEERS, true, [
+                '/dashboard/ops/volunteers/:id',
+            ]],
+            ['operations.volunteers_management', '/dashboard/admin/volunteers', 'إدارة المتطوعين', $C::Operations, $R::SafeDelegatable, true, P::MANAGE_VOLUNTEERS, false, [
+                '/dashboard/admin/volunteers/:id',
             ]],
             ['operations.support_tickets', '/dashboard/support', 'تذاكر الدعم الفني', $C::Operations, $R::SafeDelegatable, true, P::VIEW_SUPPORT_TICKETS, true, [
                 '/dashboard/support/:id', '/dashboard/admin/support-tickets', '/dashboard/admin/support-tickets/:id',
@@ -204,7 +208,7 @@ final class PageAccessCatalog
             ]],
             ['hr.team', '/dashboard/hr/team', 'فريق الموارد البشرية', $C::Hr, $R::AdminOnly, false, P::VIEW_TEAM, false, []],
             ['hr.departments_overview', '/dashboard/hr/departments', 'الإدارات (موارد بشرية)', $C::Hr, $R::AdminOnly, false, P::DEPTS_VIEW, false, []],
-            ['hr.tasks', '/dashboard/hr/tasks', 'مهام الموارد البشرية', $C::Hr, $R::SafeDelegatable, true, P::VIEW_TASKS, true, []],
+            ['hr.tasks', '/dashboard/hr/tasks', 'مهام واعتماد', $C::Hr, $R::SafeDelegatable, true, P::VIEW_TASKS, false, []],
             ['hr.documents', '/dashboard/hr/documents', 'مستندات الموارد البشرية', $C::Hr, $R::AdminOnly, false, null, false, []],
 
             // ── Quality ──────────────────────────────────────────────────────

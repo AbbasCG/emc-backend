@@ -41,11 +41,54 @@ class VolunteerPointsController extends Controller
     public const EURO_PER_1000 = 10;
 
     /**
-     * السقف الشهري لنقاط المستلم الموجبة (كل المصادر) — يُعلَن في policy()
-     * ويُطبَّق على المنح اليدوية والتصحيحات الموجبة. الخصم (نقاط سالبة) لا
-     * يُحتسب ضمنه.
+     * السقف الشهري لنقاط المستلم من الأعمال الداخلية للإدارة (2500 نقطة).
+     * تُستثنى منه المبادرات، المعسكرات، الجوائز الشهرية، والجوائز الاستثنائية.
      */
     public const MONTHLY_CAP = 2500;
+
+    /**
+     * التصنيفات والأنشطة المستثناة بالكامل من السقف الشهري (2500 نقطة).
+     */
+    public const EXEMPT_CATEGORIES = [
+        // 1. المبادرات
+        'initiatives_institutional',
+        'initiative',
+        'institutional',
+        // 2. المعسكرات
+        'camps',
+        'camp',
+        // 3. الجوائز الشهرية
+        'monthly_awards',
+        'best_of_department',
+        'best_of_center',
+        // 4. الجوائز الاستثنائية
+        'exceptional_continuity',
+        'exceptional_impact',
+        'continuity',
+    ];
+
+    /**
+     * التحقق مما إذا كان التصنيف مستثنى من السقف الشهري للأعمال الداخلية (2500 نقطة).
+     */
+    public static function isExemptCategory(?string $category): bool
+    {
+        if (! $category) {
+            return false;
+        }
+
+        $c = strtolower(trim($category));
+
+        if (in_array($c, self::EXEMPT_CATEGORIES, true)) {
+            return true;
+        }
+
+        // دعم مطابقة الكلمات المفتاحية باللغة العربية
+        if (str_contains($c, 'مبادر') || str_contains($c, 'معسكر') || str_contains($c, 'شهري') || str_contains($c, 'استثنائ')) {
+            return true;
+        }
+
+        return false;
+    }
 
     /** أقصى عدد صفوف للوحة الصدارة لغير المخوَّلين — لا قائمة كاملة بالأسماء. */
     private const LEADERBOARD_MAX = 20;
@@ -135,17 +178,22 @@ class VolunteerPointsController extends Controller
         return null;
     }
 
-    private function monthlyCapViolation(int $userId, int $signedPoints): ?JsonResponse
+    private function monthlyCapViolation(int $userId, int $signedPoints, ?string $category = null): ?JsonResponse
     {
         if ($signedPoints <= 0) {
             return null;
         }
 
-        $used = $this->recipients->monthPoints($userId);
+        // الأنشطة المستثناة (المبادرات، المعسكرات، الجوائز الشهرية، الجوائز الاستثنائية) لا تخضع لقيد الـ 2500 نقطة
+        if ($category !== null && self::isExemptCategory($category)) {
+            return null;
+        }
+
+        $used = $this->recipients->monthCappedPoints($userId);
         if ($used + $signedPoints > self::MONTHLY_CAP) {
             $left = max(0, self::MONTHLY_CAP - $used);
 
-            return $this->rejected("يتجاوز السقف الشهري (".self::MONTHLY_CAP." نقطة) — المتبقي لهذا العضو هذا الشهر {$left} نقطة.", 'MONTHLY_CAP_EXCEEDED');
+            return $this->rejected("يتجاوز السقف الشهري للأعمال الداخلية (".self::MONTHLY_CAP." نقطة) — المتبقي لهذا العضو هذا الشهر {$left} نقطة.", 'MONTHLY_CAP_EXCEEDED');
         }
 
         return null;
@@ -332,7 +380,7 @@ class VolunteerPointsController extends Controller
             return $this->rejected('هذا المستخدم ليس عضوًا فعّالًا في فريق EMC ضمن نطاق صلاحيتك.', 'RECIPIENT_NOT_ELIGIBLE');
         }
 
-        if ($violation = $this->monthlyCapViolation($recipientId, $data['points']) ?? $this->balanceViolation($recipientId, $data['points'])) {
+        if ($violation = $this->monthlyCapViolation($recipientId, $data['points'], $data['category']) ?? $this->balanceViolation($recipientId, $data['points'])) {
             return $violation;
         }
 
@@ -521,16 +569,17 @@ class VolunteerPointsController extends Controller
         return response()->json(['success' => true, 'data' => $redemption], 201);
     }
 
-    /** مصفوفة السياسة للواجهة (المستويات + قيمة النقطة). */
+    /** مصفوفة السياسة للواجهة (المستويات + قيمة النقطة + السقف الشهري وقواعد الاستثناء). */
     public function policy(): JsonResponse
     {
         return response()->json([
             'success' => true,
             'data'    => [
-                'levels'        => self::LEVELS,
-                'euro_per_1000' => self::EURO_PER_1000,
-                'monthly_cap'   => self::MONTHLY_CAP,
-                'version'       => '1.0',
+                'levels'            => self::LEVELS,
+                'euro_per_1000'     => self::EURO_PER_1000,
+                'monthly_cap'       => self::MONTHLY_CAP,
+                'exempt_categories' => self::EXEMPT_CATEGORIES,
+                'version'           => '1.1',
             ],
         ]);
     }

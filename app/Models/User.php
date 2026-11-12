@@ -332,6 +332,11 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->hasMany(TeamMember::class);
     }
 
+    public function teamProfiles(): HasMany
+    {
+        return $this->hasMany(TeamProfile::class);
+    }
+
     /**
      * Phase 2C explicit per-user PAGE ACCESS overrides (allow/deny).
      * Deliberately NOT named permissions(): this is page exposure only, never
