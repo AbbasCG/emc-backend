@@ -1507,7 +1507,7 @@ Route::middleware(['auth:sanctum', 'role:'.implode(',', \App\Services\Forms\Form
 
 
 // ─── Operations: volunteers read & Volunteer Hub ──────────────────────────────
-Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,hr_manager,operations_manager,community_manager'])->prefix('operations')->group(function () {
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_admin,hr_manager'])->prefix('operations')->group(function () {
     Route::get('volunteers/hub',                        [VolunteerHubController::class, 'index']);
     Route::put('volunteers/{volunteer}/status',         [VolunteerHubController::class, 'updateStatus']);
     Route::get('volunteers/{volunteer}/status-logs',    [VolunteerHubController::class, 'statusLogs']);
