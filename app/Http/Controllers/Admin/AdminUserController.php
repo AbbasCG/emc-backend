@@ -67,7 +67,7 @@ class AdminUserController extends Controller
         };
 
         $query
-            ->with(['departments', 'ledDepartments'])
+            ->with(['departments', 'ledDepartments', 'teamMemberships.department', 'teamProfiles.department', 'volunteerProfile.department'])
             ->when($request->filled('role') && $request->role !== 'all', function ($q) use ($request) {
                 $role = $request->role;
                 if ($role === 'instructor') {
@@ -93,6 +93,13 @@ class AdminUserController extends Controller
                     $q->where(function ($sub) use ($allManagerRoles) {
                         $sub->whereIn('role', $allManagerRoles)
                             ->orWhereHas('ledDepartments');
+                    });
+                } elseif ($role === 'department_member') {
+                    $q->where(function ($sub) {
+                        $sub->where('role', 'department_member')
+                            ->orWhereHas('teamMemberships')
+                            ->orWhereHas('teamProfiles')
+                            ->orWhereHas('departments');
                     });
                 } else {
                     $q->where('role', $role);
@@ -159,10 +166,16 @@ class AdminUserController extends Controller
 
                     if ($deptId) {
                         $sub->orWhereHas('departments', fn ($dq) => $dq->where('departments.id', $deptId))
-                            ->orWhereHas('ledDepartments', fn ($dq) => $dq->where('departments.id', $deptId));
+                            ->orWhereHas('ledDepartments', fn ($dq) => $dq->where('departments.id', $deptId))
+                            ->orWhereHas('teamMemberships', fn ($tq) => $tq->where('department_id', $deptId))
+                            ->orWhereHas('teamProfiles', fn ($tpq) => $tpq->where('department_id', $deptId))
+                            ->orWhereHas('volunteerProfile', fn ($vq) => $vq->where('department_id', $deptId));
                     } else {
                         $sub->orWhereHas('departments', fn ($dq) => $dq->where('name_ar', 'like', "%{$cleanDept}%")->orWhere('slug', $dept))
-                            ->orWhereHas('ledDepartments', fn ($dq) => $dq->where('name_ar', 'like', "%{$cleanDept}%")->orWhere('slug', $dept));
+                            ->orWhereHas('ledDepartments', fn ($dq) => $dq->where('name_ar', 'like', "%{$cleanDept}%")->orWhere('slug', $dept))
+                            ->orWhereHas('teamMemberships.department', fn ($dq) => $dq->where('name_ar', 'like', "%{$cleanDept}%")->orWhere('slug', $dept))
+                            ->orWhereHas('teamProfiles.department', fn ($dq) => $dq->where('name_ar', 'like', "%{$cleanDept}%")->orWhere('slug', $dept))
+                            ->orWhereHas('volunteerProfile.department', fn ($dq) => $dq->where('name_ar', 'like', "%{$cleanDept}%")->orWhere('slug', $dept));
                     }
                 });
             })
@@ -175,11 +188,24 @@ class AdminUserController extends Controller
                         ->orWhere('department', 'like', "%{$s}%")
                         ->orWhere('role', 'like', "%{$s}%")
                         ->orWhereHas('departments', fn ($dq) => $dq->where('name_ar', 'like', "%{$s}%")->orWhere('name', 'like', "%{$s}%"))
-                        ->orWhereHas('ledDepartments', fn ($dq) => $dq->where('name_ar', 'like', "%{$s}%")->orWhere('name', 'like', "%{$s}%"));
+                        ->orWhereHas('ledDepartments', fn ($dq) => $dq->where('name_ar', 'like', "%{$s}%")->orWhere('name', 'like', "%{$s}%"))
+                        ->orWhereHas('teamMemberships.department', fn ($dq) => $dq->where('name_ar', 'like', "%{$s}%")->orWhere('name', 'like', "%{$s}%"))
+                        ->orWhereHas('teamProfiles.department', fn ($dq) => $dq->where('name_ar', 'like', "%{$s}%")->orWhere('name', 'like', "%{$s}%"))
+                        ->orWhereHas('volunteerProfile.department', fn ($dq) => $dq->where('name_ar', 'like', "%{$s}%")->orWhere('name', 'like', "%{$s}%"));
                     if (is_numeric($s)) {
                         $sub->orWhere('id', (int) $s);
                     }
                 });
+            })
+            ->when($request->filled('joined') && $request->joined !== 'all', function ($q) use ($request) {
+                $joined = $request->joined;
+                if ($joined === 'month') {
+                    $q->where('created_at', '>=', now()->startOfMonth());
+                } elseif ($joined === 'quarter') {
+                    $q->where('created_at', '>=', now()->subDays(90));
+                } elseif ($joined === 'year') {
+                    $q->where('created_at', '>=', now()->startOfYear());
+                }
             })
             ->when($request->filled('verified') && $request->verified !== 'all', function ($q) use ($request) {
                 if ($request->verified === '1' || $request->verified === 'verified') {
@@ -653,6 +679,18 @@ class AdminUserController extends Controller
 
         if (! $primaryDept && $user->relationLoaded('ledDepartments')) {
             $primaryDept = $user->ledDepartments->first();
+        }
+
+        if (! $primaryDept && $user->relationLoaded('teamMemberships')) {
+            $primaryDept = $user->teamMemberships->first()?->department;
+        }
+
+        if (! $primaryDept && $user->relationLoaded('teamProfiles')) {
+            $primaryDept = $user->teamProfiles->first()?->department;
+        }
+
+        if (! $primaryDept && $user->relationLoaded('volunteerProfile')) {
+            $primaryDept = $user->volunteerProfile?->department;
         }
 
         $deptName = $user->department ?: ($primaryDept?->name_ar ?? $primaryDept?->name);
