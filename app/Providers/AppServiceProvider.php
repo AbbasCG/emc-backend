@@ -225,6 +225,12 @@ class AppServiceProvider extends ServiceProvider
                 ->by($request->user()?->id ?: $request->ip());
         });
 
+        // Users Management analytics — read-only aggregates behind per-tab permissions; per user, not per IP
+        RateLimiter::for('users_analytics', function (Request $request) {
+            return Limit::perMinute((int) config('users-analytics.rate_limit_per_minute', 30))
+                ->by($request->user()?->id ?: $request->ip());
+        });
+
         // Auth endpoints — 5 req/min per IP (brute-force protection)
         // Covers login, forgot-password, reset-password.
         // 5 attempts per minute is sufficient for legitimate users and blocks credential stuffing.
