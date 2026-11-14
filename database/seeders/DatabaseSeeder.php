@@ -21,6 +21,7 @@ class DatabaseSeeder extends Seeder
             PermissionSeeder::class,
             RolePermissionSeeder::class,
             GranularPermissionsSeeder::class,   // granular dotted-notation permissions
+            UsersAnalyticsPermissionSeeder::class, // Users hub analytics keys (super_admin / tech_admin only)
             DemoUserSeeder::class,
             TrackSeeder::class,
             LearningPathSeeder::class,

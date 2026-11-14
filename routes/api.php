@@ -2030,6 +2030,20 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin'])->prefix
     Route::post('registrations/repair-links',  [\App\Http\Controllers\AdminController::class, 'repairRegistrationLinks']);
 });
 
+// ─── Users Management hub — analytics tabs (read-only aggregates) ───────────────
+// Each tab has its OWN permission; seeing the users table is not enough. super_admin / tech_admin pass the
+// permission middleware; every other role needs an explicit grant (no default role has these keys).
+Route::middleware(['auth:sanctum', 'throttle:users_analytics'])->prefix('admin/users-analytics')->group(function () {
+    Route::get('overview', [\App\Http\Controllers\Admin\UsersAnalyticsController::class, 'overview'])
+        ->middleware('permission:'.\App\Support\Permissions::USERS_ANALYTICS_VIEW);
+    Route::get('activity', [\App\Http\Controllers\Admin\UsersAnalyticsController::class, 'activity'])
+        ->middleware('permission:'.\App\Support\Permissions::USERS_ACTIVITY_VIEW);
+    Route::get('last-logins', [\App\Http\Controllers\Admin\UsersAnalyticsController::class, 'lastLogins'])
+        ->middleware('permission:'.\App\Support\Permissions::USERS_ACTIVITY_VIEW);
+    Route::get('acquisition', [\App\Http\Controllers\Admin\UsersAnalyticsController::class, 'acquisition'])
+        ->middleware('permission:'.\App\Support\Permissions::USERS_ACQUISITION_VIEW);
+});
+
 // ─── Delete / restore user — super_admin + tech_admin ───────────────────────
 Route::delete('admin/users/{user}', [AdminUserController::class, 'destroy'])
     ->middleware(['auth:sanctum', 'role:super_admin,tech_admin']);

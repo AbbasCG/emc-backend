@@ -31,6 +31,16 @@ final class Permissions
     /** @deprecated Use granular view/create/update/delete_users */
     const MANAGE_USERS  = 'manage_users';
 
+    /**
+     * Users Management hub — aggregate analytics tabs (/dashboard/super-admin/crud/users?tab=…).
+     * Aggregates only (no emails, phones or IPs), each tab behind its OWN key: being allowed to see the users
+     * table never implies seeing growth, login or acquisition figures. No role gets them by default; super_admin and
+     * tech_admin hold them through Permissions::all(), anyone else needs an explicit grant (Access Control → roles).
+     */
+    const USERS_ANALYTICS_VIEW   = 'users.analytics.view';
+    const USERS_ACTIVITY_VIEW    = 'users.activity.view';
+    const USERS_ACQUISITION_VIEW = 'users.acquisition.view';
+
     // ── Education / Programs ─────────────────────────────────────────────────
     const VIEW_PROGRAMS    = 'view_programs';
     const MANAGE_PROGRAMS  = 'manage_programs';
@@ -205,6 +215,7 @@ final class Permissions
         return [
             // Users
             self::VIEW_USERS, self::CREATE_USERS, self::UPDATE_USERS, self::DELETE_USERS, self::MANAGE_ROLES,
+            self::USERS_ANALYTICS_VIEW, self::USERS_ACTIVITY_VIEW, self::USERS_ACQUISITION_VIEW,
             // Education
             self::VIEW_PROGRAMS, self::MANAGE_PROGRAMS, self::VIEW_COURSES, self::MANAGE_COURSES,
             self::VIEW_WORKSHOPS, self::MANAGE_WORKSHOPS, self::VIEW_TRACKS, self::MANAGE_TRACKS,
@@ -478,7 +489,7 @@ final class Permissions
     public static function grouped(): array
     {
         return [
-            'users'        => [self::VIEW_USERS, self::CREATE_USERS, self::UPDATE_USERS, self::DELETE_USERS, self::MANAGE_ROLES, self::IMPERSONATE_USERS],
+            'users'        => [self::VIEW_USERS, self::CREATE_USERS, self::UPDATE_USERS, self::DELETE_USERS, self::MANAGE_ROLES, self::IMPERSONATE_USERS, self::USERS_ANALYTICS_VIEW, self::USERS_ACTIVITY_VIEW, self::USERS_ACQUISITION_VIEW],
             'education'    => [self::VIEW_PROGRAMS, self::MANAGE_PROGRAMS, self::VIEW_COURSES, self::MANAGE_COURSES, self::VIEW_WORKSHOPS, self::MANAGE_WORKSHOPS, self::VIEW_TRACKS, self::MANAGE_TRACKS, self::VIEW_REGISTRATIONS, self::MANAGE_REGISTRATIONS],
             'lms'          => [self::VIEW_SESSIONS, self::MANAGE_SESSIONS, self::VIEW_ATTENDANCE, self::MANAGE_ATTENDANCE, self::VIEW_ASSIGNMENTS, self::MANAGE_ASSIGNMENTS, self::REVIEW_SUBMISSIONS, self::VIEW_MATERIALS, self::MANAGE_MATERIALS],
             'finance'      => [self::VIEW_PAYMENTS, self::MANAGE_PAYMENTS, self::VIEW_REVENUE, self::MANAGE_COUPONS, self::MANAGE_SCHOLARSHIPS, self::VIEW_FINANCIAL_REPORTS],
