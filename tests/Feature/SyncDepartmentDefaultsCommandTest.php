@@ -386,7 +386,7 @@ class SyncDepartmentDefaultsCommandTest extends TestCase
         $resolved = app(EffectivePageAccessService::class)->resolveAll($leader);
 
         $baseline = array_filter(PageAccessCatalog::all(), fn (PageAccessEntry $e) => $e->authenticatedBaseline);
-        $this->assertCount(7, $baseline);
+        $this->assertCount(8, $baseline);
 
         foreach ($baseline as $entry) {
             $this->assertTrue($resolved[$entry->key]->allowed);

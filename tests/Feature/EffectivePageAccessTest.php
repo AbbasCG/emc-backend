@@ -49,7 +49,7 @@ class EffectivePageAccessTest extends TestCase
     /**
      * Phase 2G.2 — every authenticated account receives these seven from
      * PageAccessCatalog, with no stored row anywhere. Assertions below add them
-     * explicitly rather than loosening to "contains", so an unexpected EIGHTH
+     * explicitly rather than loosening to "contains", so an unexpected NINTH
      * baseline entry would still fail the suite.
      */
     private const AUTHENTICATED_BASELINE = [
@@ -60,6 +60,7 @@ class EffectivePageAccessTest extends TestCase
         'personal.notification_preferences',
         'personal.volunteer_hr_profile',
         'personal.student_learning',
+        'operations.my_tasks',
     ];
 
     /** @param array<int,string> $extra */
@@ -932,7 +933,7 @@ class EffectivePageAccessTest extends TestCase
     {
         $svc = app(RolePageDefaultService::class);
 
-        $this->assertCount(130, $svc->eligibleKeys());
+        $this->assertCount(132, $svc->eligibleKeys());
         $this->assertNotContains(self::PROTECTED_PAGE, $svc->eligibleKeys());
     }
 
@@ -940,8 +941,8 @@ class EffectivePageAccessTest extends TestCase
     {
         $svc = app(DepartmentPageDefaultService::class);
 
-        $this->assertCount(46, $svc->eligibleKeys(DepartmentPageAudience::Member));
-        $this->assertCount(48, $svc->eligibleKeys(DepartmentPageAudience::Leader));
+        $this->assertCount(49, $svc->eligibleKeys(DepartmentPageAudience::Member));
+        $this->assertCount(51, $svc->eligibleKeys(DepartmentPageAudience::Leader));
         $this->assertNotContains(self::LEADER_ONLY_PAGE, $svc->eligibleKeys(DepartmentPageAudience::Member));
         $this->assertContains(self::LEADER_ONLY_PAGE, $svc->eligibleKeys(DepartmentPageAudience::Leader));
     }
@@ -951,7 +952,7 @@ class EffectivePageAccessTest extends TestCase
         $svc = app(UserPageAccessOverrideService::class);
         $target = $this->ordinaryUser();
 
-        $this->assertCount(130, $svc->eligibleKeys());
+        $this->assertCount(132, $svc->eligibleKeys());
         $this->assertSame([], $svc->getOverrides($target));
 
         $svc->setOverride($this->superAdmin(), $target, self::MEMBER_PAGE, UserPageAccessState::Allow);
@@ -968,7 +969,7 @@ class EffectivePageAccessTest extends TestCase
     {
         $all = PageAccessCatalog::all();
 
-        $this->assertCount(139, $all);
+        $this->assertCount(141, $all);
         $this->assertTrue(PageAccessCatalog::find(self::PROTECTED_PAGE)->isProtected());
         $this->assertFalse(PageAccessCatalog::find(self::MEMBER_PAGE)->isProtected());
     }

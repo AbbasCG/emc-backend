@@ -52,6 +52,7 @@ class AuthenticatedBaselineTest extends TestCase
         'hr.my_requests',
         'personal.volunteer_hr_profile',
         'personal.student_learning',
+        'operations.my_tasks',
     ];
 
     /** Deliberately excluded — see the excluded-regression section. */
@@ -84,7 +85,7 @@ class AuthenticatedBaselineTest extends TestCase
         }
     }
 
-    public function test_the_baseline_set_is_exactly_these_seven(): void
+    public function test_the_baseline_set_is_exactly_these_eight(): void
     {
         $flagged = array_values(array_map(
             fn (PageAccessEntry $e) => $e->key,
@@ -95,7 +96,7 @@ class AuthenticatedBaselineTest extends TestCase
         $expected = self::BASELINE;
         sort($expected);
 
-        $this->assertSame($expected, $flagged, 'Only the seven approved capabilities may be baseline.');
+        $this->assertSame($expected, $flagged, 'Only the eight approved capabilities may be baseline.');
     }
 
     public function test_every_other_capability_defaults_to_false(): void
@@ -105,7 +106,7 @@ class AuthenticatedBaselineTest extends TestCase
             fn (PageAccessEntry $e) => ! in_array($e->key, self::BASELINE, true)
         );
 
-        $this->assertCount(132, $nonBaseline);
+        $this->assertCount(133, $nonBaseline);
 
         foreach ($nonBaseline as $entry) {
             $this->assertFalse($entry->authenticatedBaseline, "[{$entry->key}] must not be baseline.");
@@ -452,7 +453,7 @@ class AuthenticatedBaselineTest extends TestCase
         $svc = $this->resolver();
         $all = $svc->resolveAll($user);
 
-        $this->assertCount(139, $all);
+        $this->assertCount(141, $all);
 
         foreach ($all as $key => $row) {
             $this->assertSame($row->allowed, $svc->canAccess($user, $key), "canAccess disagreed for [{$key}].");
