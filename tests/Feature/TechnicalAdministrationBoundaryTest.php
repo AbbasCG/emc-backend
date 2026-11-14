@@ -204,7 +204,7 @@ class TechnicalAdministrationBoundaryTest extends TestCase
     public function test_catalog_size_and_other_risk_levels_are_unchanged(): void
     {
         $all = PageAccessCatalog::all();
-        $this->assertCount(139, $all);
+        $this->assertCount(141, $all);
 
         $byRisk = [];
         foreach ($all as $e) {
@@ -237,9 +237,12 @@ class TechnicalAdministrationBoundaryTest extends TestCase
         // list (a new capability, not a reclassification).
         // +1 ADMIN_ONLY afterwards: hr.volunteer_points_approval, the volunteer-points review queue that used to ride on
         // the hr.dashboard prefix (a new registry row, not a reclassification).
-        $this->assertSame(84, $byRisk['ADMIN_ONLY']);
-        $this->assertSame(46, $byRisk['SAFE_DELEGATABLE']);
-        $this->assertSame(139, array_sum($byRisk));
+        // Operations-hub update (2026-11-12): operations.my_tasks and operations.volunteers are new SAFE_DELEGATABLE
+        // capabilities, and operations.volunteers_management moved from ADMIN_ONLY to SAFE_DELEGATABLE
+        // (ADMIN_ONLY 84 -> 83, SAFE_DELEGATABLE 46 -> 49).
+        $this->assertSame(83, $byRisk['ADMIN_ONLY']);
+        $this->assertSame(49, $byRisk['SAFE_DELEGATABLE']);
+        $this->assertSame(141, array_sum($byRisk));
     }
 
     // ── 2. PAGE ACCESS != BUSINESS AUTHORIZATION ─────────────────────────────
@@ -366,9 +369,28 @@ class TechnicalAdministrationBoundaryTest extends TestCase
     {
         $actor = $this->user('operations_manager');
 
-        $response = $this->actingAs($actor)->getJson('/api/operations/volunteers');
+        // The marketing board is the operations surface this role keeps.
+        $response = $this->actingAs($actor)->getJson('/api/operations/marketing');
 
-        $this->assertNotSame(403, $response->getStatusCode(), 'operations_manager must keep /api/operations access.');
+        $this->assertNotSame(403, $response->getStatusCode(), 'operations_manager must keep /api/operations/marketing.');
+    }
+
+    /**
+     * Volunteer Hub reads carry personal data, so since the 2026-11-12 operations-hub update they are limited to
+     * HR manager and above (admin, super_admin, tech_admin, executive_admin, hr_manager). operations_manager and
+     * community_manager used to be in that group and no longer are — on purpose.
+     */
+    public function test_volunteer_hub_routes_are_limited_to_hr_manager_and_above(): void
+    {
+        foreach (['operations_manager', 'community_manager', 'department_manager', 'volunteer', 'student'] as $role) {
+            $this->actingAs($this->user($role))->getJson('/api/operations/volunteers')->assertForbidden();
+            $this->actingAs($this->user($role))->getJson('/api/operations/volunteers/hub')->assertForbidden();
+        }
+
+        foreach (['hr_manager', 'admin', 'executive_admin'] as $role) {
+            $status = $this->actingAs($this->user($role))->getJson('/api/operations/volunteers')->getStatusCode();
+            $this->assertNotSame(403, $status, "{$role} must keep the volunteer hub reads.");
+        }
     }
 
     // ── 5. AI separation is unaffected by the reclassification ───────────────

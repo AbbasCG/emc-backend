@@ -331,14 +331,14 @@ class AccessControlSecurityMatrixTest extends TestCase
 
     // ── 5. Authenticated baseline stays narrow ───────────────────────────────
 
-    public function test_every_persona_receives_exactly_the_seven_baseline_capabilities(): void
+    public function test_every_persona_receives_exactly_the_eight_baseline_capabilities(): void
     {
         $this->seedCanonical();
 
         $baseline = array_map(fn (PageAccessEntry $e) => $e->key, array_filter(
             PageAccessCatalog::all(), fn (PageAccessEntry $e) => $e->authenticatedBaseline
         ));
-        $this->assertCount(7, $baseline);
+        $this->assertCount(8, $baseline);
 
         foreach (self::PERSONAS as $role) {
             if (in_array($role, self::ROOT, true)) {

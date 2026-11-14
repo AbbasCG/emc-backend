@@ -208,7 +208,7 @@ class RoleDefaultSimulationTest extends TestCase
             PageAccessCatalog::all(), fn (PageAccessEntry $e) => $e->authenticatedBaseline
         ));
 
-        $this->assertCount(7, $baseline);
+        $this->assertCount(8, $baseline);
 
         foreach (RoleDefaultMap::all() as $role => $keys) {
             foreach ($baseline as $b) {
