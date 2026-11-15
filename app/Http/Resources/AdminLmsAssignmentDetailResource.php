@@ -136,6 +136,8 @@ class AdminLmsAssignmentDetailResource extends JsonResource
             'text_answer'   => $s->text_answer,
             'notes'         => $s->notes,
             'file_url'      => $s->file_path ? route('submissions.download', $s->id) : null,
+            // Every file of the current attempt (a legacy single-file submission is one attachment with id "legacy").
+            'attachments'   => app(\App\Services\AssignmentUploads\AssignmentSubmissionFileService::class)->attachmentsFor($s),
         ];
     }
 

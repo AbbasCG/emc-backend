@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class AssignmentSubmission extends Model
 {
@@ -36,5 +37,13 @@ class AssignmentSubmission extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /** The CURRENT attachment set (attempt_number 0). History sets are read through the history service. */
+    public function currentFiles(): HasMany
+    {
+        return $this->hasMany(AssignmentSubmissionFile::class, 'submission_id')
+            ->where('attempt_number', 0)
+            ->orderBy('id');
     }
 }

@@ -114,10 +114,43 @@ class AppServiceProvider extends ServiceProvider
         $this->configureLmsRouteModelBinding();
         $this->configurePolicies();
         $this->configurePermissionGates();
+        $this->reportAssignmentUploadMisconfiguration();
         // configureEventListeners() intentionally removed.
         // Laravel 13 auto-discovers every handle(SomeEvent) listener in app/Listeners.
         // Adding Event::listen() calls here on top of auto-discovery registers each
         // listener TWICE — one notification fires → user receives two duplicates.
+    }
+
+    /**
+     * An inconsistent config/assignment_uploads.php (for example a total limit below the largest per-file limit) is
+     * logged loudly instead of showing up as a confusing failure on the first student submission. It never throws (a bad
+     * upload setting must not take the whole API down) and it logs AT MOST ONCE PER HOUR: this runs on every request, so an
+     * unthrottled critical line would flood the log. `assignments:check-upload-limits` reports the same errors on demand.
+     */
+    private function reportAssignmentUploadMisconfiguration(): void
+    {
+        try {
+            $errors = app(\App\Services\AssignmentUploads\AssignmentUploadPolicy::class)->configErrors();
+        } catch (\Throwable $e) {
+            $errors = ['config/assignment_uploads.php could not be evaluated: '.$e->getMessage()];
+        }
+
+        if ($errors === []) {
+            return;
+        }
+
+        try {
+            // Cache::add is atomic: only the first request in the hour wins the right to log.
+            if (! \Illuminate\Support\Facades\Cache::add('assignment_uploads:config_error_logged', 1, 3600)) {
+                return;
+            }
+            \Illuminate\Support\Facades\Log::critical('config/assignment_uploads.php is inconsistent.', ['errors' => $errors]);
+        } catch (\Throwable) {
+            // No usable cache (or log) right now: stay quiet on web requests, but never hide it from a console user.
+            if (app()->runningInConsole()) {
+                fwrite(STDERR, 'config/assignment_uploads.php is inconsistent: '.implode(' | ', $errors).PHP_EOL);
+            }
+        }
     }
 
     private function configureLmsRouteModelBinding(): void
@@ -265,6 +298,17 @@ class AppServiceProvider extends ServiceProvider
         // Contact form — 3 req/min per IP
         RateLimiter::for('contact', function (Request $request) {
             return Limit::perMinute(3)->by($request->ip());
+        });
+
+        // Assignment submissions with files: each request can carry 25 MB that is read, hashed and zip-listed, so the
+        // ceiling is per user (never per IP: a classroom shares one) and much lower than the general API bucket.
+        RateLimiter::for('assignment_submit', function (Request $request) {
+            return Limit::perMinute(10)->by('assignment-submit:'.(($request->user('sanctum') ?? $request->user())?->id ?: $request->ip()));
+        });
+
+        // Streaming a stored submission file.
+        RateLimiter::for('submission_download', function (Request $request) {
+            return Limit::perMinute(60)->by('submission-download:'.(($request->user('sanctum') ?? $request->user())?->id ?: $request->ip()));
         });
 
         // Payment write actions — 10 req/min per user

@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Services\AssignmentUploads\AssignmentSubmissionFileService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -19,6 +20,10 @@ class AssignmentSubmissionResource extends JsonResource
             'file_url'      => $this->file_path
                 ? route('submissions.download', $this->id)
                 : null,
+
+            // Every file of the CURRENT attempt (multi-file submissions). A legacy single-file submission appears as
+            // one attachment with id "legacy". Download only through the authorized `download_url`.
+            'attachments'   => app(AssignmentSubmissionFileService::class)->attachmentsFor($this->resource),
 
             // Text answer
             'text_answer'   => $this->text_answer,

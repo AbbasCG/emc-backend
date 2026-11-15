@@ -68,6 +68,7 @@ class InstructorSubmissionController extends Controller
             'assignment:id,title,max_score,due_date,course_id,workshop_id',
             'assignment.course' => fn ($q) => $q->withTrashed()->select(['id', 'title', 'slug', 'instructor_id']),
             'assignment.workshop' => fn ($q) => $q->withTrashed()->select(['id', 'title', 'slug', 'course_id']),
+            'currentFiles',
         ])
             ->whereIn('assignment_id', $assignmentIds)
             ->whereNotNull('submitted_at')
@@ -127,6 +128,7 @@ class InstructorSubmissionController extends Controller
             'assignment:id,title,max_score,due_date,course_id,workshop_id',
             'assignment.course' => fn ($q) => $q->withTrashed()->select(['id', 'title', 'slug', 'instructor_id']),
             'assignment.workshop' => fn ($q) => $q->withTrashed()->select(['id', 'title', 'slug', 'course_id']),
+            'currentFiles',
         ])
             ->where('assignment_id', $assignment->id)
             ->whereNotNull('submitted_at')
@@ -187,6 +189,7 @@ class InstructorSubmissionController extends Controller
             'assignment:id,title,max_score,due_date,course_id,workshop_id',
             'assignment.course' => fn ($q) => $q->withTrashed()->select(['id', 'title', 'slug', 'instructor_id']),
             'assignment.workshop' => fn ($q) => $q->withTrashed()->select(['id', 'title', 'slug', 'course_id']),
+            'currentFiles',
         ]);
 
         $profile  = $request->user()->instructorProfile;
@@ -219,7 +222,9 @@ class InstructorSubmissionController extends Controller
     {
         $this->authorize('review', $submission);
 
-        $attempts = app(AssignmentSubmissionHistoryService::class)->attempts($submission);
+        $history = app(AssignmentSubmissionHistoryService::class);
+        $attempts = $history->attempts($submission);
+        $attachmentsByAttempt = $history->attachmentsByAttempt($submission);
 
         return response()->json([
             'success' => true,
@@ -230,6 +235,8 @@ class InstructorSubmissionController extends Controller
                 // presence of a file is reported, not a (misleading) link to
                 // the CURRENT submission's file.
                 'has_file'       => $a->file_path !== null,
+                // Files of THAT attempt, downloadable through the per-file authorized endpoint.
+                'attachments'    => $attachmentsByAttempt[$a->attempt_number] ?? [],
                 'text_answer'    => $a->text_answer,
                 'notes'          => $a->notes,
                 'score'          => $a->score,
@@ -293,6 +300,7 @@ class InstructorSubmissionController extends Controller
             'assignment:id,title,max_score,due_date,course_id,workshop_id',
             'assignment.course' => fn ($q) => $q->withTrashed()->select(['id', 'title', 'slug', 'instructor_id']),
             'assignment.workshop' => fn ($q) => $q->withTrashed()->select(['id', 'title', 'slug', 'course_id']),
+            'currentFiles',
         ]);
 
         $student    = $fresh->user;

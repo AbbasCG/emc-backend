@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Services\AssignmentUploads\AssignmentSubmissionFileService;
 use App\Support\AssignmentSubmissionStatus;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -55,8 +56,11 @@ class InstructorSubmissionResource extends JsonResource
             'body_text'      => $textAnswer,
             'text_answer'    => $textAnswer,
             'notes'          => $this->notes,
-            'file_path'      => $this->file_path,
+            // The raw storage path is internal and never serialised; use `file_url` / `attachments`.
+            'has_file'       => $this->file_path !== null || $this->relationLoaded('currentFiles') && $this->currentFiles->isNotEmpty(),
             'file_url'       => $fileUrl,
+            // Every file of the current attempt; a legacy single-file submission is one attachment with id "legacy".
+            'attachments'    => app(AssignmentSubmissionFileService::class)->attachmentsFor($this->resource),
 
             // Flat aliases consumed by the frontend normalizer
             'student_name'     => $studentName,

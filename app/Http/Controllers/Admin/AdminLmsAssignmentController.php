@@ -138,6 +138,7 @@ class AdminLmsAssignmentController extends Controller
         $courseAssignment->load([
             'course.instructor.user',
             'submissions.user',
+            'submissions.currentFiles',
         ]);
 
         return response()->json([

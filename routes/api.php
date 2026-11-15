@@ -221,7 +221,10 @@ Route::prefix('student')->middleware(['auth:sanctum', 'learner'])->group(functio
     Route::get('/materials',     [StudentMaterialController::class, 'index']);
     Route::get('/assignments',              [StudentAssignmentController::class, 'index']);
     Route::get('/assignments/{assignment}', [StudentAssignmentController::class, 'show']);
-    Route::post('/assignments/{assignment}/submit', [StudentAssignmentController::class, 'submit']);
+    // Limits for the file picker: the frontend reads them from here and never hardcodes numbers.
+    Route::get('/assignment-upload-rules', \App\Http\Controllers\Student\AssignmentUploadRulesController::class);
+    Route::post('/assignments/{assignment}/submit', [StudentAssignmentController::class, 'submit'])
+        ->middleware([\App\Http\Middleware\RejectOversizedAssignmentUpload::class, 'throttle:assignment_submit']);
     Route::get('/assignments/{assignment}/history', [StudentAssignmentController::class, 'history']);
     Route::post('/lessons/{lesson}/complete', [StudentLessonController::class, 'complete']);
     Route::get('/progress',      [StudentProgressController::class, 'index']);
@@ -321,10 +324,16 @@ Route::middleware('auth:sanctum')->group(function () {
 });
 
 // ─── Protected assignment submission download (auth:sanctum, access checked inside) ──
-Route::middleware('auth:sanctum')->get(
+Route::middleware(['auth:sanctum', 'throttle:submission_download'])->get(
     '/submissions/{submission}/download',
     [\App\Http\Controllers\SubmissionDownloadController::class, 'download']
 )->name('submissions.download');
+
+// One file of a multi-file submission (same access rule as the route above; the file must belong to the submission).
+Route::middleware(['auth:sanctum', 'throttle:submission_download'])->get(
+    '/submissions/{submission}/files/{file}/download',
+    [\App\Http\Controllers\SubmissionFileDownloadController::class, 'download']
+)->whereNumber('submission')->whereNumber('file')->name('submissions.files.download');
 
 // ─── HR Staffing Requests (طلبات الاحتياج الوظيفي بين الإدارات و HR والإدارة العليا) ────────
 Route::middleware('auth:sanctum')->prefix('admin')->group(function () {
@@ -358,7 +367,7 @@ Route::middleware('auth:sanctum')->prefix('admin')->group(function () {
 Route::get(
     '/instructor/submissions/{submission}/file',
     [\App\Http\Controllers\SubmissionDownloadController::class, 'instructorFile']
-)->name('instructor.submissions.file');
+)->middleware('throttle:submission_download')->name('instructor.submissions.file');
 
 // ─── Realtime broadcasting auth (Ticket 8 completion pass) ─────────────────────
 // The framework auto-registers GET/POST /broadcasting/auth under the "web"
