@@ -3,12 +3,16 @@
 namespace App\Http\Controllers\Student;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Student\SubmitAssignmentRequest;
 use App\Http\Resources\AssignmentSubmissionResource;
 use App\Http\Resources\StudentCourseAssignmentResource;
 use App\Models\Assignment;
 use App\Models\AssignmentSubmission;
 use App\Models\CourseAssignment;
 use App\Services\AssignmentSubmissionHistoryService;
+use App\Services\AssignmentUploads\AssignmentSubmissionFileService;
+use App\Services\AssignmentUploads\AssignmentSubmissionPreconditions;
+use App\Services\AssignmentUploads\SubmissionRejectedException;
 use App\Services\LmsEnrollmentService;
 use App\Services\NotificationService;
 use App\Services\StudentProgressService;
@@ -16,7 +20,13 @@ use App\Support\AssignmentSubmissionStatus;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Database\DeadlockException;
+use Illuminate\Database\QueryException;
+use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 class StudentAssignmentController extends Controller
@@ -44,7 +54,16 @@ class StudentAssignmentController extends Controller
 
         $perPage = min((int) $request->query('per_page', 20), 100);
 
-        return StudentCourseAssignmentResource::collection($query->paginate($perPage))
+        $page = $query->paginate($perPage);
+
+        // The student's own submission (with its attachments) for every row of this page in TWO queries, handed to
+        // StudentCourseAssignmentResource through the request, instead of one submission query + one attachments query per row.
+        $request->attributes->set(
+            StudentCourseAssignmentResource::PRELOADED_SUBMISSIONS,
+            StudentCourseAssignmentResource::submissionsFor($user, $page->getCollection()),
+        );
+
+        return StudentCourseAssignmentResource::collection($page)
             ->additional(['success' => true, 'message' => 'Assignments retrieved successfully']);
     }
 
@@ -93,11 +112,34 @@ class StudentAssignmentController extends Controller
         $assignment->load([
             'course:id,title',
             'submissions' => fn ($q) => $q->where('user_id', $user->id),
+            'submissions.currentFiles',
         ]);
 
         return (new \App\Http\Resources\LmsAssignmentResource($assignment))
             ->additional(['success' => true])
             ->response();
+    }
+
+    /**
+     * A genuine race (two requests at once): the unique key was taken (UniqueConstraintViolationException, MySQL 1062,
+     * SQLite UNIQUE), or the database aborted one of two competing transactions (SQLSTATE 40001, MySQL 1213 deadlock /
+     * 1205 lock wait timeout). Other integrity violations (foreign key, NOT NULL) are NOT races and are not reported as one.
+     */
+    private function isConcurrencyConflict(\Throwable $e): bool
+    {
+        if ($e instanceof DeadlockException || $e instanceof UniqueConstraintViolationException) {
+            return true;
+        }
+        if (! $e instanceof QueryException) {
+            return false;
+        }
+
+        $state = (string) ($e->errorInfo[0] ?? '');
+        $code  = (int) ($e->errorInfo[1] ?? 0);
+
+        return $state === '40001'
+            || in_array($code, [1062, 1213, 1205], true)
+            || ($code === 19 && str_contains($e->getMessage(), 'UNIQUE constraint failed'));
     }
 
     /**
@@ -125,7 +167,9 @@ class StudentAssignmentController extends Controller
             return response()->json(['success' => true, 'data' => []]);
         }
 
-        $attempts = app(AssignmentSubmissionHistoryService::class)->attempts($submission);
+        $history = app(AssignmentSubmissionHistoryService::class);
+        $attempts = $history->attempts($submission);
+        $attachmentsByAttempt = $history->attachmentsByAttempt($submission);
 
         return response()->json([
             'success' => true,
@@ -133,6 +177,7 @@ class StudentAssignmentController extends Controller
                 'attempt_number' => $a->attempt_number,
                 'text_answer'    => $a->text_answer,
                 'has_file'       => $a->file_path !== null,
+                'attachments'    => $attachmentsByAttempt[$a->attempt_number] ?? [],
                 'score'          => $a->score,
                 'feedback'       => $a->feedback,
                 'status'         => $a->status,
@@ -146,128 +191,187 @@ class StudentAssignmentController extends Controller
      * POST /api/student/assignments/{assignment}/submit
      *
      * Submit (or resubmit) an assignment.
-     * Payload: file (optional), text_answer / answer_text (optional), notes (optional).
+     * Payload: files[] (optional, up to config('assignment_uploads.max_files')), file (optional, legacy single
+     * upload kept for old clients), text_answer / answer_text (optional), notes (optional).
+     *
+     * Authorization, the cheap business rules and the verification of EVERY uploaded file happen in
+     * SubmitAssignmentRequest, before anything is stored: one bad file => 422, nothing written, assignment not marked
+     * submitted. Under concurrency the rules are checked AGAIN here, under a lock, because the first check can be stale.
+     *
+     * Attachment-set semantics on resubmission: a resubmission that carries files REPLACES the visible attachment
+     * set; the superseded set stays reachable through the attempt history (the history snapshot copies it). A
+     * resubmission without files keeps the current set (the same behaviour the single `file_path` always had).
      */
     public function submit(
-        Request $request,
+        SubmitAssignmentRequest $request,
         Assignment $assignment,
-        LmsEnrollmentService $enrollment,
         StudentProgressService $progress,
+        AssignmentSubmissionFileService $attachments,
+        AssignmentSubmissionPreconditions $preconditions,
     ): JsonResponse {
         $user      = $request->user();
-        $courseIds = $enrollment->enrolledCourseIds($user);
-
-        $assignment->loadMissing('workshop');
-        $courseId = $assignment->course_id
-            ?? $assignment->workshop?->course_id;
-
-        $accessible = $courseId && $courseIds->contains($courseId);
-
-        if ($accessible && $assignment->class_group_id) {
-            // Same class-membership gate as show() — a course-enrolled student
-            // outside the assigned class group must not be able to submit by
-            // posting directly to a known assignment ID.
-            $myClassGroupIds = $enrollment->classGroupIdsByCourse($user);
-            $accessible = $myClassGroupIds->get($courseId) === $assignment->class_group_id;
-        }
-
-        // Submitting is something a LEARNER does: it needs an enrollment in the assignment's course, for every account, administrators
-        // included (they have no learner standing in a course they are not enrolled in).
-        if (! $accessible) {
-            return response()->json([
-                'success' => false,
-                'message' => 'غير مصرح لك بالوصول إلى هذا المسار.',
-            ], 403);
-        }
-
-        $validated = $request->validate([
-            'text_answer' => ['nullable', 'string', 'max:20000'],
-            'answer_text' => ['nullable', 'string', 'max:20000'],
-            'notes'       => ['nullable', 'string', 'max:5000'],
-            'file'        => [
-                'nullable', 'file', 'max:10240',
-                'mimes:pdf,doc,docx,png,jpg,jpeg,webp,zip',
-            ],
-        ]);
+        $validated = $request->validated();
+        $uploads   = $request->inspectedUploads();
 
         $textAnswer = $validated['text_answer'] ?? $validated['answer_text'] ?? null;
+        // SAME definition as SubmitAssignmentRequest (filled()): "0" is an answer, whitespace-only/empty is not.
+        $hasText    = filled($textAnswer);
 
-        $existing = AssignmentSubmission::query()
-            ->where('assignment_id', $assignment->id)
-            ->where('user_id', $user->id)
-            ->first();
+        // One submission per student+assignment at a time: a double click or a client retry that overlaps the first
+        // request waits here instead of racing it. Stores without lock support simply skip this layer (the row lock and
+        // the unique keys below remain the guarantee).
+        $lock = null;
+        try {
+            $lock = Cache::lock('assignment-submit:'.$assignment->id.':'.$user->id, 120);
+            $lock->block(5);
+        } catch (LockTimeoutException) {
+            return AssignmentSubmissionPreconditions::rejection([
+                'assignment' => ['طلب تسليم آخر لهذا الواجب قيد المعالجة. انتظر لحظات ثم حدّث الصفحة وتحقق من حالة التسليم.'],
+            ], 409);
+        } catch (\Throwable) {
+            $lock = null;
+        }
 
-        $instructorRequestedResubmission = $existing && $existing->status === 'needs_revision';
+        $stored = [];
+        $requestedByInstructor = false;
+        $wasResubmission = false;
 
-        if ($existing?->submitted_at && ! $assignment->resubmission_allowed && ! $instructorRequestedResubmission) {
-            throw ValidationException::withMessages([
-                'assignment' => ['تم تسليم هذا الواجب مسبقاً ولا يمكن إعادة التسليم إلا بطلب من المدرس.'],
+        try {
+            $existing = AssignmentSubmission::query()
+                ->where('assignment_id', $assignment->id)
+                ->where('user_id', $user->id)
+                ->first();
+
+            // Already-submitted / attempts used up / nothing to submit (also checked, cheaply, before the files were read).
+            $violations = $preconditions->violations($assignment, $existing, $hasText, $uploads !== []);
+            if ($violations !== []) {
+                return AssignmentSubmissionPreconditions::rejection($violations);
+            }
+
+            $submissionStatus = AssignmentSubmissionStatus::onSubmit($assignment);
+
+            // Only now (every check passed) are files written. Identical content already in the current set is reused
+            // instead of being stored again, so a retry never creates duplicate attachments.
+            try {
+                $stored = $attachments->store($uploads, $assignment->id, $user->id, $attachments->currentSetIndex($existing));
+            } catch (\RuntimeException $e) {
+                Log::error('Could not write assignment attachments to the private disk.', ['error' => $e->getMessage(), 'assignment_id' => $assignment->id]);
+
+                return response()->json([
+                    'success' => false,
+                    'code'    => 'storage_failed',
+                    'message' => 'تعذّر حفظ الملفات على الخادم. لم يتم تسليم الواجب. أعد المحاولة بعد قليل، وإذا استمرت المشكلة فتواصل مع الدعم الفني.',
+                ], 503);
+            }
+
+            $submission = DB::transaction(function () use ($user, $assignment, $textAnswer, $hasText, $uploads, $validated, $stored, $submissionStatus, $attachments, $preconditions, &$requestedByInstructor, &$wasResubmission) {
+                // The row the decision is really based on: re-read under a lock so two overlapping requests cannot both
+                // pass the rules with a stale copy, and re-run the rules on it.
+                $locked = AssignmentSubmission::query()
+                    ->where('assignment_id', $assignment->id)
+                    ->where('user_id', $user->id)
+                    ->lockForUpdate()
+                    ->first();
+
+                $violations = $preconditions->violations($assignment, $locked, $hasText, $uploads !== []);
+                if ($violations !== []) {
+                    throw new SubmissionRejectedException($violations);
+                }
+
+                $requestedByInstructor = $locked && $locked->status === 'needs_revision';
+                $wasResubmission       = (bool) $locked?->submitted_at;
+
+                // Ticket 5: a real resubmission (a row already existed with prior
+                // content/grade/feedback) must never silently lose that state —
+                // snapshot it into attempt history before it gets overwritten.
+                // The very first submission has no prior state to preserve.
+                // The snapshot also copies the current attachment set into history.
+                if ($locked) {
+                    app(AssignmentSubmissionHistoryService::class)->snapshot($locked);
+                }
+
+                $data = [
+                    'text_answer'  => $textAnswer ?? $locked?->text_answer,
+                    'notes'        => array_key_exists('notes', $validated) ? $validated['notes'] : $locked?->notes,
+                    // Legacy column kept in step: the first new attachment, so old clients that only know `file_url`
+                    // (and the legacy download endpoints) keep working.
+                    'file_path'    => ($stored[0]['stored_path'] ?? null) ?? $locked?->file_path,
+                    'submitted_at' => now(),
+                    'status'       => $submissionStatus,
+                    'score'        => null,
+                    'feedback'     => null,
+                ];
+
+                if ($requestedByInstructor
+                    && \Illuminate\Support\Facades\Schema::hasColumn('assignment_submissions', 'resubmitted_at')
+                ) {
+                    $data['resubmitted_at'] = now();
+                }
+
+                $submission = AssignmentSubmission::query()->updateOrCreate(
+                    [
+                        'assignment_id' => $assignment->id,
+                        'user_id'       => $user->id,
+                    ],
+                    $data
+                );
+
+                if ($stored !== []) {
+                    $attachments->replaceCurrentSet($submission, $stored);
+                }
+
+                return $submission;
+            }, 3); // up to 2 extra attempts on a deadlock / lock-wait: the closure is idempotent (it only reads, then writes inside the transaction)
+        } catch (SubmissionRejectedException $e) {
+            // Lost the race (or the rules changed between the first check and the lock): nothing of this request stays.
+            $attachments->discard($stored);
+
+            return AssignmentSubmissionPreconditions::rejection($e->errors, $e->status);
+        } catch (QueryException|DeadlockException $e) {
+            // The DB work failed: remove the files THIS request wrote so no orphan is left on the private disk. Files
+            // the winning request stored have other (uuid) names and are never touched.
+            $attachments->discard($stored);
+
+            if ($this->isConcurrencyConflict($e)) {
+                return AssignmentSubmissionPreconditions::rejection([
+                    'assignment' => ['تم استلام تسليم هذا الواجب للتو من طلب آخر. حدّث الصفحة وتحقق من حالة التسليم قبل المحاولة مرة أخرى.'],
+                ], 409);
+            }
+
+            // Anything else (a foreign key, NOT NULL, a lost connection, ...) is a real fault, not a race: say so honestly.
+            Log::error('Assignment submission failed with an unexpected database error.', [
+                'assignment_id' => $assignment->id,
+                'user_id'       => $user->id,
+                'sqlstate'      => $e instanceof QueryException ? ($e->errorInfo[0] ?? null) : null,
+                'driver_code'   => $e instanceof QueryException ? ($e->errorInfo[1] ?? null) : null,
+                'error'         => $e->getMessage(),
             ]);
-        }
 
-        if ($assignment->max_attempts !== null && $existing) {
-            $priorAttempts = app(AssignmentSubmissionHistoryService::class)->attempts($existing)->count();
-            $attemptAboutToBeMade = $priorAttempts + 2; // +1 for $existing itself (already one attempt), +1 for this new one
-            if ($attemptAboutToBeMade > $assignment->max_attempts) {
-                throw ValidationException::withMessages([
-                    'assignment' => ["لقد وصلت إلى الحد الأقصى لعدد المحاولات المسموح بها ({$assignment->max_attempts})."],
-                ]);
+            return response()->json([
+                'success' => false,
+                'code'    => 'submission_failed',
+                'message' => 'تعذّر حفظ التسليم بسبب خطأ غير متوقع. لم يتم تسليم الواجب. أعد المحاولة بعد قليل، وإذا استمرت المشكلة فتواصل مع الدعم الفني.',
+            ], 500);
+        } catch (\Throwable $e) {
+            $attachments->discard($stored);
+
+            throw $e;
+        } finally {
+            // Releasing the lock must NEVER turn an already committed submission into a 500 (a lock that expired, or a cache
+            // store that went away, is only worth a log line).
+            try {
+                $lock?->release();
+            } catch (\Throwable $e) {
+                Log::warning('Could not release the assignment submission lock.', ['error' => $e->getMessage()]);
             }
         }
-
-        $filePath = null;
-        if ($request->hasFile('file') && $request->file('file')->isValid()) {
-            $filePath = $request->file('file')->store('assignment-submissions', 'private');
-        }
-
-        if (! $textAnswer && ! $filePath && ! $existing?->text_answer && ! $existing?->file_path) {
-            throw ValidationException::withMessages([
-                'text_answer' => ['Provide a text answer or upload a file.'],
-            ]);
-        }
-
-        $submissionStatus = AssignmentSubmissionStatus::onSubmit($assignment);
-
-        $submission = DB::transaction(function () use ($user, $assignment, $textAnswer, $validated, $filePath, $existing, $submissionStatus, $instructorRequestedResubmission) {
-            // Ticket 5: a real resubmission (a row already existed with prior
-            // content/grade/feedback) must never silently lose that state —
-            // snapshot it into attempt history before it gets overwritten.
-            // The very first submission has no prior state to preserve.
-            if ($existing) {
-                app(AssignmentSubmissionHistoryService::class)->snapshot($existing);
-            }
-
-            $data = [
-                'text_answer'  => $textAnswer ?? $existing?->text_answer,
-                'notes'        => array_key_exists('notes', $validated) ? $validated['notes'] : $existing?->notes,
-                'file_path'    => $filePath ?? $existing?->file_path,
-                'submitted_at' => now(),
-                'status'       => $submissionStatus,
-                'score'        => null,
-                'feedback'     => null,
-            ];
-
-            if ($instructorRequestedResubmission
-                && \Illuminate\Support\Facades\Schema::hasColumn('assignment_submissions', 'resubmitted_at')
-            ) {
-                $data['resubmitted_at'] = now();
-            }
-
-            return AssignmentSubmission::query()->updateOrCreate(
-                [
-                    'assignment_id' => $assignment->id,
-                    'user_id'       => $user->id,
-                ],
-                $data
-            );
-        });
 
         $progress->syncForUser($user);
 
         $assignment->loadMissing('course.instructor');
         $instructorUserId = $assignment->course?->instructor?->user_id;
         if ($instructorUserId) {
-            if ($instructorRequestedResubmission) {
+            if ($requestedByInstructor) {
                 NotificationService::studentResubmittedAssignment(
                     instructorUserId: $instructorUserId,
                     studentName:      $user->name,
@@ -286,9 +390,12 @@ class StudentAssignmentController extends Controller
             }
         }
 
-        return (new AssignmentSubmissionResource($submission->load('assignment')))
-            ->additional(['success' => true, 'message' => 'Assignment submitted successfully.'])
+        return (new AssignmentSubmissionResource($submission->load('assignment', 'currentFiles')))
+            ->additional([
+                'success' => true,
+                'message' => $wasResubmission ? 'تمت إعادة تسليم الواجب بنجاح.' : 'تم تسليم الواجب بنجاح.',
+            ])
             ->response()
-            ->setStatusCode($existing?->submitted_at ? 200 : 201);
+            ->setStatusCode($wasResubmission ? 200 : 201);
     }
 }

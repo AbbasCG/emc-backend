@@ -79,10 +79,35 @@ return Application::configure(basePath: dirname(__DIR__))
             \Illuminate\Http\Exceptions\ThrottleRequestsException $e,
             \Illuminate\Http\Request $request,
         ) {
+            // Assignment uploads / submission downloads are student-facing and read by people, not machines: Arabic.
+            if ($request->is('api/student/assignments/*/submit', 'api/submissions/*/download', 'api/submissions/*/files/*/download', 'api/instructor/submissions/*/file')) {
+                $retryAfter = (int) ($e->getHeaders()['Retry-After'] ?? 60);
+
+                return response()->json([
+                    'success'     => false,
+                    'code'        => 'too_many_requests',
+                    'message'     => 'عدد الطلبات كبير. انتظر قليلاً ثم أعد المحاولة بعد '.$retryAfter.' ثانية.',
+                    'retry_after' => $retryAfter,
+                ], 429, $e->getHeaders());
+            }
+
             return response()->json([
                 'success' => false,
                 'message' => 'Too many requests. Please slow down and try again.',
             ], 429);
+        });
+
+        // 413 — assignment submission larger than PHP's post_max_size. PHP discards the whole body in that case, and
+        // Laravel's global ValidatePostSize middleware raises this exception first. Answer with the real reason and the
+        // limits (JSON, Arabic) instead of a bare 413; every other route keeps Laravel's default handling.
+        $exceptions->render(function (
+            \Illuminate\Http\Exceptions\PostTooLargeException $e,
+            \Illuminate\Http\Request $request,
+        ) {
+            if ($request->is('api/student/assignments/*/submit')) {
+                return app(\App\Services\AssignmentUploads\OversizedUploadResponder::class)
+                    ->make($request, 'server_post_max_size');
+            }
         });
 
         // 401 — Unauthenticated (Sanctum token missing / expired)

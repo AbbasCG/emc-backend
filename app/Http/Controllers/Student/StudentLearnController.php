@@ -108,7 +108,10 @@ class StudentLearnController extends Controller
         ] : null;
 
         // Build enriched module array: progress stats + full children
-        $modulesData = $course->modules->map(function ($mod) use ($user, $bridge, $progressSvc) {
+        // The student's submissions (+ attachments) for every module-level assignment in TWO queries, not two per row.
+        $moduleSubmissions = StudentCourseAssignmentResource::submissionsFor($user, $course->modules->flatMap->courseAssignments);
+
+        $modulesData = $course->modules->map(function ($mod) use ($user, $bridge, $progressSvc, $moduleSubmissions) {
             $progress = $progressSvc->computeForModule($mod, $user);
 
             $lessons = $mod->lessons->map(fn ($l) => [
@@ -155,11 +158,9 @@ class StudentLearnController extends Controller
                 'is_visible'    => $s->is_visible,
             ])->values();
 
-            $assignments = $mod->courseAssignments->map(function ($ca) use ($bridge, $user) {
+            $assignments = $mod->courseAssignments->map(function ($ca) use ($bridge, $user, $moduleSubmissions) {
                 $lms = $bridge->ensureLmsAssignment($ca);
-                $sub = AssignmentSubmission::where('assignment_id', $lms->id)
-                    ->where('user_id', $user->id)
-                    ->first();
+                $sub = $moduleSubmissions->get($lms->id);
                 return [
                     'id'                   => $ca->id,
                     'course_id'            => $ca->course_id,
@@ -180,6 +181,8 @@ class StudentLearnController extends Controller
                     'score'                => $sub?->score,
                     'feedback'             => $sub?->feedback,
                     'submitted_at'         => $sub?->submitted_at?->toIso8601String(),
+                    // Same shape as the course-level items (StudentCourseAssignmentResource): includes `attachments`.
+                    'my_submission'        => $sub ? \App\Http\Resources\AssignmentSubmissionResource::make($sub)->resolve() : null,
                     'sort_order'           => (int) $ca->sort_order,
                 ];
             })->values();
@@ -202,6 +205,12 @@ class StudentLearnController extends Controller
             ->whereIn('status', ['published', 'active'])
             ->orderBy('sort_order')
             ->get();
+
+        // Course-level assignment rows: the resource reads the student's submissions (+ attachments) from this preload.
+        $request->attributes->set(
+            StudentCourseAssignmentResource::PRELOADED_SUBMISSIONS,
+            StudentCourseAssignmentResource::submissionsFor($user, $courseLevelAssignments),
+        );
 
         $courseLevelSessions = $course->courseSessions()
             ->whereNull('module_id')

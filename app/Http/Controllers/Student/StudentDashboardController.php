@@ -237,6 +237,8 @@ class StudentDashboardController extends Controller
             ->with([
                 'course:id,title,slug',
                 'submissions' => fn ($q) => $q->where('user_id', $user->id),
+                // Their attachments, in one query for the whole list (LmsAssignmentResource -> my_submission.attachments).
+                'submissions.currentFiles',
             ])
             ->orderBy('deadline')
             ->get();
