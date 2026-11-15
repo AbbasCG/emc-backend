@@ -84,7 +84,7 @@ client_max_body_size 32m;
 php artisan assignments:check-upload-limits
 ```
 
-يتحقق من اتساق `config/assignment_uploads.php` (مثلاً: الحد الإجمالي لا يقل عن أكبر حد لملف واحد)، ومن تحميل الامتدادات `zip` و`fileinfo` و`mbstring` و`gd`، ثم يقارن `upload_max_filesize` و`post_max_size` و`max_file_uploads` بإعدادات `config/assignment_uploads.php` ويطبع `OK` أو `FAIL` لكل بند مع القيمة المطلوبة بالعربية والإنجليزية، ويعيد الرمز `0` عند النجاح و`1` عند أي فشل (صالح لخطوة CI أو سكربت النشر).
+يتحقق من اتساق `config/assignment_uploads.php` (مثلاً: الحد الإجمالي لا يقل عن أكبر حد لملف واحد)، ومن تحميل الامتدادات `zip` و`fileinfo` و`mbstring` و`dom` و`libxml`، ثم يقارن `upload_max_filesize` و`post_max_size` و`max_file_uploads` بإعدادات `config/assignment_uploads.php` ويطبع `OK` أو `FAIL` لكل بند مع القيمة المطلوبة بالعربية والإنجليزية، ويعيد الرمز `0` عند النجاح و`1` عند أي فشل (صالح لخطوة CI أو سكربت النشر).
 
 تنبيه مهم: الأمر يعمل على PHP CLI وقد يقرأ ملف `php.ini` مختلفاً عن PHP-FPM. بعد النشر تحقّق أيضاً من قيم FPM الفعلية (مثلاً `php-fpm -i | grep -E "upload_max_filesize|post_max_size|max_file_uploads"` أو صفحة phpinfo محمية)، ثم جرّب رفع ملف حقيقي بحجم قريب من الحد.
 
