@@ -12,8 +12,9 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 /**
- * Approving a volunteer or converting a volunteer request must not change accounts, roles or department membership on its own
- * unless the business switched that rule on (config/volunteer_onboarding.php). Off is the default and the previous behaviour.
+ * Approving a volunteer's HR profile (the legacy path) must not change accounts, roles or department membership on its own unless the
+ * business switched that rule on (config/volunteer_onboarding.php). Off is the default and the previous behaviour.
+ * Converting a volunteer REQUEST is not governed by a switch any more: it always creates / links the account (see VolunteerConversionTest).
  */
 class VolunteerOnboardingSwitchesTest extends TestCase
 {
@@ -94,47 +95,48 @@ class VolunteerOnboardingSwitchesTest extends TestCase
         ]);
     }
 
-    public function test_conversion_creates_no_account_and_changes_no_role_by_default(): void
+    public function test_conversion_no_longer_depends_on_the_old_conversion_switch(): void
     {
-        $this->department();
-        $admin = User::factory()->create(['role' => 'admin', 'is_active' => true]);
-        $existing = User::factory()->create(['role' => 'student', 'email' => 'existing@emc.test']);
-        $before = User::count();
+        // `conversion_creates_account` guarded the OLD behaviour (convert = team profile only). Converting now always creates / links the
+        // account, whatever that switch says; the approval_* switches above still guard only the legacy HR-profile approval.
+        foreach ([false, true] as $switch) {
+            config(['volunteer_onboarding.conversion_creates_account' => $switch]);
 
-        foreach (['new@emc.test', 'existing@emc.test'] as $email) {
+            $dept = $this->department();
+            $admin = User::factory()->create(['role' => 'admin', 'is_active' => true]);
+            $email = 'new-'.($switch ? 'on' : 'off').'@emc.test';
+
             $this->app['auth']->forgetGuards();
             $this->actingAs($admin, 'sanctum')
-                ->postJson('/api/admin/volunteer-requests/'.$this->acceptedRequest($email)->id.'/convert-to-member')
+                ->postJson('/api/admin/volunteer-requests/'.$this->acceptedRequest($email)->id.'/convert-to-member', ['department_id' => $dept->id])
                 ->assertCreated()
-                ->assertJsonPath('data.role_key', 'volunteer');
-        }
+                ->assertJsonPath('data.role_key', 'department_member')
+                ->assertJsonPath('data.account_created', true);
 
-        $this->assertSame($before, User::count(), 'no account created');
-        $this->assertSame('student', $existing->fresh()->role, 'no role change');
-        $this->assertSame(0, TeamMember::count());
+            $created = User::where('email', $email)->firstOrFail();
+            $this->assertSame('department_member', $created->role);
+            $this->assertTrue($created->departments->contains($dept->id));
+            $this->assertNull(TeamMember::where('user_id', $created->id)->firstOrFail()->section_id);
+        }
     }
 
-    public function test_conversion_switch_creates_a_department_member_account_and_seat(): void
+    public function test_conversion_upgrades_a_student_and_never_re_roles_an_instructor(): void
     {
-        config(['volunteer_onboarding.conversion_creates_account' => true]);
         $dept = $this->department();
         $admin = User::factory()->create(['role' => 'admin', 'is_active' => true]);
+        $student = User::factory()->create(['role' => 'student', 'email' => 'existing@emc.test']);
         $instructor = User::factory()->create(['role' => 'instructor', 'email' => 'teacher@emc.test']);
 
-        $this->actingAs($admin, 'sanctum')
-            ->postJson('/api/admin/volunteer-requests/'.$this->acceptedRequest('new@emc.test')->id.'/convert-to-member')
-            ->assertCreated()
-            ->assertJsonPath('data.role_key', 'department_member');
+        foreach (['existing@emc.test', 'teacher@emc.test'] as $email) {
+            $this->app['auth']->forgetGuards();
+            $this->actingAs($admin, 'sanctum')
+                ->postJson('/api/admin/volunteer-requests/'.$this->acceptedRequest($email)->id.'/convert-to-member', ['department_id' => $dept->id])
+                ->assertCreated()
+                ->assertJsonPath('data.account_existing', true);
+        }
 
-        $created = User::where('email', 'new@emc.test')->firstOrFail();
-        $this->assertSame('department_member', $created->role);
-        $this->assertTrue($created->departments->contains($dept->id));
-        $this->assertNull(TeamMember::where('user_id', $created->id)->firstOrFail()->section_id);
-
-        $this->app['auth']->forgetGuards();
-        $this->actingAs($admin, 'sanctum')
-            ->postJson('/api/admin/volunteer-requests/'.$this->acceptedRequest('teacher@emc.test')->id.'/convert-to-member')
-            ->assertCreated();
+        $this->assertSame('department_member', $student->fresh()->role);
         $this->assertSame('instructor', $instructor->fresh()->role, 'an existing instructor is never re-roled');
+        $this->assertTrue($instructor->fresh()->departments->contains($dept->id), 'but is still linked to the chosen department');
     }
 }

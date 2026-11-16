@@ -86,6 +86,8 @@ class UserResource extends JsonResource
                 \App\Models\VolunteerPointRedemption::where('user_id', $this->id)->sum('points')
             )),
             'is_active'                  => $this->is_active ?? true,
+            // True while the account still holds a temporary password: the SPA must send the user to the change-password screen.
+            'must_change_password'       => $this->when($isSelf, fn () => (bool) $this->must_change_password),
             'city'                       => $this->city,
             'gender'                     => $this->gender,
             'country'                    => $this->country,

@@ -4,19 +4,20 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\VolunteerRequestResource;
+use App\Exceptions\VolunteerConversionException;
 use App\Models\Department;
-use App\Models\TeamMember;
-use App\Models\TeamProfile;
-use App\Models\User;
 use App\Models\VolunteerRequest;
 use App\Services\AuditLogService;
 use App\Services\NotificationService;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
+use App\Services\VolunteerConversionService;
+use App\Support\ThrottleResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Validator;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AdminVolunteerRequestController extends Controller
@@ -145,6 +146,17 @@ class AdminVolunteerRequestController extends Controller
     // PATCH /api/admin/volunteer-requests/{id}/status
     public function updateStatus(Request $request, VolunteerRequest $volunteerRequest): JsonResponse
     {
+        // A converted request is final: its member, account and hub profile exist. Moving it back to accepted / rejected / pending would
+        // leave a status that contradicts converted_member_id, so no status change is accepted, whatever the target.
+        if ($volunteerRequest->isConverted() || $volunteerRequest->status === 'converted_to_member') {
+            return response()->json([
+                'success'           => false,
+                'already_converted' => true,
+                'message'           => 'تم تحويل هذا الطلب إلى عضو، ولا يمكن تغيير حالته.',
+                'volunteer_request' => new VolunteerRequestResource($volunteerRequest->load('reviewer')),
+            ], 409);
+        }
+
         $data = $request->validate([
             'status'      => 'required|string|in:' . implode(',', VolunteerRequest::allowedStatuses()),
             'admin_notes' => 'nullable|string',
@@ -249,12 +261,17 @@ class AdminVolunteerRequestController extends Controller
         return [null, $path];
     }
 
-    // POST /api/admin/volunteer-requests/{id}/convert-to-member
-    public function convertToMember(Request $request, VolunteerRequest $volunteerRequest): JsonResponse
+    private const CONVERT_ROLES = ['super_admin', 'tech_admin', 'admin', 'hr_manager'];
+
+    // POST /api/admin/volunteer-requests/{id}/convert-to-member    body: { department_id }
+    //
+    // HR confirms (or changes) the department the volunteer applied for; the whole conversion (account, department membership, team
+    // profile, volunteer-hub profile, request stamp) is one transaction in VolunteerConversionService. The e-mail goes out after commit.
+    public function convertToMember(Request $request, VolunteerRequest $volunteerRequest, VolunteerConversionService $conversion): JsonResponse
     {
         // Role guard — admin/super_admin covered by route middleware; also allow hr_manager.
-        $user = $request->user();
-        if (! in_array($user->role, ['super_admin', 'tech_admin', 'admin', 'hr_manager'], true)) {
+        $actor = $request->user();
+        if (! in_array($actor->role, self::CONVERT_ROLES, true)) {
             return response()->json(['success' => false, 'message' => 'غير مصرح لك بهذا الإجراء.'], 403);
         }
 
@@ -277,139 +294,177 @@ class AdminVolunteerRequestController extends Controller
             ], 422);
         }
 
+        // 3. The department HR picked in the popup is required.
+        $validator = Validator::make($request->all(), [
+            'department_id' => ['required', 'integer', 'exists:departments,id'],
+        ], [
+            'department_id.required' => 'اختر الإدارة التي سينضم إليها المتطوع.',
+            'department_id.integer'  => 'الإدارة المختارة غير صالحة.',
+            'department_id.exists'   => 'الإدارة المختارة غير موجودة.',
+        ]);
+        $department = $validator->fails() ? null : Department::find((int) $request->input('department_id'));
+
+        if ($department !== null && $department->status === 'archived') {
+            $validator->errors()->add('department_id', 'الإدارة المختارة مؤرشفة ولا يمكن الانضمام إليها.');
+            $department = null;
+        }
+        if ($department === null) {
+            return response()->json([
+                'success' => false,
+                'message' => $validator->errors()->first('department_id') ?: 'الإدارة المختارة غير صالحة.',
+                'errors'  => ['department_id' => $validator->errors()->get('department_id')],
+            ], 422);
+        }
+
         try {
-            // 3. Resolve department — best-effort match on name_ar / name; null is fine.
-            $dept = $volunteerRequest->desired_department
-                ? Department::where('name_ar', $volunteerRequest->desired_department)
-                    ->orWhere('name_ar', 'like', '%' . $volunteerRequest->desired_department . '%')
-                    ->orWhere('name', 'like', '%' . $volunteerRequest->desired_department . '%')
-                    ->first()
-                : null;
-
-            // 4. sort_order: append after the last member in the department.
-            $maxSort = $dept
-                ? (TeamProfile::where('department_id', $dept->id)->max('sort_order') ?? 0)
-                : (TeamProfile::whereNull('department_id')->max('sort_order') ?? 0);
-
-            // 5. Account creation / role change is an explicit business switch (config/volunteer_onboarding.php); off by default,
-            //    in which case the conversion only creates the team profile, exactly as before.
-            $account = null;
-            if (config('volunteer_onboarding.conversion_creates_account')) {
-                $account = User::where('email', $volunteerRequest->email)->first();
-                if (! $account) {
-                    $account = User::create([
-                        'name'       => $volunteerRequest->full_name,
-                        'email'      => $volunteerRequest->email,
-                        'password'   => Hash::make(Str::random(16)),
-                        'role'       => 'department_member',
-                        'phone'      => $volunteerRequest->phone,
-                        'country'    => $volunteerRequest->country,
-                        'city'       => $volunteerRequest->city,
-                        'gender'     => $volunteerRequest->gender,
-                        'department' => $dept ? ($dept->name_ar ?? $dept->name) : null,
-                        'is_active'  => true,
-                    ]);
-                } elseif (in_array($account->role, ['student', 'volunteer'], true)) {
-                    $account->update([
-                        'role'       => 'department_member',
-                        'department' => $dept ? ($dept->name_ar ?? $dept->name) : $account->department,
-                    ]);
-                }
+            $result = $conversion->convert($volunteerRequest, $department, $actor);
+        } catch (VolunteerConversionException $e) {
+            $payload = ['success' => false, 'message' => $e->getMessage()];
+            if ($e->reason === VolunteerConversionException::ALREADY_CONVERTED) {
+                $payload['already_converted'] = true;
+                $payload['volunteer_request'] = new VolunteerRequestResource($volunteerRequest->fresh()->load('reviewer'));
             }
 
-            // 6. Create team_profiles row with full data mapping.
-            $member = TeamProfile::create([
-                'department_id' => $dept?->id,
-                'user_id'       => $account?->id,
-                'name_ar'       => $volunteerRequest->full_name,
-                'position_ar'   => $account ? 'عضو إدارة' : 'متطوع',
-                'role_key'      => $account ? 'department_member' : 'volunteer',
-                'phone'         => $volunteerRequest->phone,
-                'email'         => $volunteerRequest->email,
-                'country'       => $volunteerRequest->country,
-                'city'          => $volunteerRequest->city,
-                'gender'        => $volunteerRequest->gender,
-                'skills'        => $volunteerRequest->skills,
-                'cv_file_path'  => $volunteerRequest->cv_file_path,
-                'sort_order'    => $maxSort + 1,
-                'is_leader'     => false,
-                'is_executive'  => false,
-                'is_active'     => true,
-                'is_new_member' => true,
-                'member_type'   => 'volunteer',
-                'source'        => 'volunteer_request',
-                'source_id'     => $volunteerRequest->id,
-                'joined_at'     => now(),
-            ]);
-
-            // 7. Register membership & place in unassigned queue for department manager
-            if ($dept && $account) {
-                $account->departments()->syncWithoutDetaching([$dept->id => ['is_primary' => true]]);
-                TeamMember::updateOrCreate(
-                    ['team_profile_id' => $member->id],
-                    [
-                        'user_id'       => $account->id,
-                        'department_id' => $dept->id,
-                        'section_id'    => null, // unassigned, waiting for manager to seat them
-                        'role_title'    => 'عضو إدارة',
-                        'status'        => 'active',
-                        'joined_at'     => now(),
-                    ]
-                );
-            }
-
-            // 8. Stamp the volunteer request with conversion metadata.
-            $volunteerRequest->update([
-                'status'                 => 'converted_to_member',
-                'converted_to_member_at' => now(),
-                'converted_member_id'    => $member->id,
-                'converted_by'           => $request->user()->id,
-            ]);
-
-            // 9. Notify admins and department leader.
-            NotificationService::volunteerConvertedToMember(
-                $volunteerRequest->id,
-                $member->id,
-                $volunteerRequest->full_name,
-                $volunteerRequest->desired_department ?? '',
-                $dept?->leader_id,
-            );
-
+            return response()->json($payload, $e->status);
         } catch (\Throwable $e) {
-            \Illuminate\Support\Facades\Log::error('convertToMember failed', [
+            Log::error('convertToMember failed', [
                 'volunteer_request_id' => $volunteerRequest->id,
                 'error'                => $e->getMessage(),
             ]);
 
             return response()->json([
                 'success' => false,
-                'message' => 'فشل تحويل المتطوع: ' . $e->getMessage(),
+                'message' => 'فشل تحويل المتطوع. لم يتم حفظ أي تغيير، حاول مرة أخرى.',
             ], 500);
+        }
+
+        /** @var \App\Models\TeamProfile $member */
+        $member   = $result['member'];
+        $account  = $result['account'];
+        // The department the member really landed in: an existing placement wins over the one HR picked.
+        $placed   = $result['department'];
+        $deptName = (string) ($placed->name_ar ?? $placed->name);
+
+        // ── After commit: nothing below may undo or fail the conversion ──
+        $emailSent = $conversion->sendAcceptedMail($account, $deptName, $result['temporary_password']);
+
+        try {
+            NotificationService::volunteerConvertedToMember(
+                $volunteerRequest->id,
+                $member->id,
+                $volunteerRequest->full_name,
+                $deptName,
+                $placed->leader_id,
+            );
+        } catch (\Throwable $e) {
+            Log::warning('convertToMember notification failed', ['volunteer_request_id' => $volunteerRequest->id, 'error' => $e->getMessage()]);
+        }
+
+        try {
+            AuditLogService::log(
+                action:      'CONVERT_TO_MEMBER',
+                entityType:  'VolunteerRequest',
+                entityId:    $volunteerRequest->id,
+                entityName:  $volunteerRequest->full_name,
+                oldValues:   ['status' => 'accepted'],
+                newValues:   ['status' => 'converted_to_member', 'department_id' => $placed->id, 'user_id' => $account->id],
+                extra:       ['account_created' => $result['account_created'], 'credentials_reissued' => $result['credentials_reissued'], 'requested_department_id' => $department->id, 'email_sent' => $emailSent],
+                request:     $request,
+                description: $actor->name . ' converted volunteer "' . $volunteerRequest->full_name . '" to a member of "' . $deptName . '"',
+            );
+        } catch (\Throwable $e) {
+            Log::warning('convertToMember audit log failed', ['volunteer_request_id' => $volunteerRequest->id, 'error' => $e->getMessage()]);
         }
 
         $updatedVr = $volunteerRequest->fresh()->load('reviewer');
 
         return response()->json([
             'success'           => true,
-            'message'           => 'تم تحويل المتطوع إلى عضو بنجاح.',
+            'message'           => $emailSent
+                ? 'تم تحويل المتطوع إلى عضو وإنشاء حسابه وإرسال بيانات الدخول إلى بريده.'
+                : 'تم تحويل المتطوع إلى عضو. تعذّر إرسال البريد، يمكنك إعادة إرسال بيانات الدخول لاحقاً.',
             // Frontend convertVolunteerToMember() reads raw.volunteer_request first.
             'volunteer_request' => new VolunteerRequestResource($updatedVr),
-            // Backward-compatible data key with the member snapshot.
+            // The temporary password is never part of any response.
             'data'              => [
-                'id'              => $member->id,
-                'name_ar'         => $member->name_ar,
-                'position_ar'     => $member->position_ar,
-                'role_key'        => $member->role_key,
-                'department_id'   => $member->department_id,
-                'department_name' => $dept?->name_ar,
-                'member_type'     => $member->member_type,
-                'source'          => $member->source,
-                'source_id'       => $member->source_id,
-                'is_new_member'   => $member->is_new_member,
-                'joined_at'       => $member->joined_at,
-                'is_active'       => $member->is_active,
-                'has_user_account'=> false,
+                'id'               => $member->id,
+                'name_ar'          => $member->name_ar,
+                'position_ar'      => $member->position_ar,
+                'role_key'         => $member->role_key,
+                'department_id'    => $placed->id,
+                'department_name'  => $deptName,
+                // true when the account already belonged to another department and keeps it instead of the one chosen
+                'department_kept_existing' => $placed->id !== $department->id,
+                'member_type'      => $member->member_type,
+                'source'           => $member->source,
+                'source_id'        => $member->source_id,
+                'is_new_member'    => $member->is_new_member,
+                'joined_at'        => $member->joined_at,
+                'is_active'        => $member->is_active,
+                'has_user_account' => true,
+                'user_id'          => $account->id,
+                'account_created'  => $result['account_created'],
+                'account_existing' => $result['account_existing'],
+                'credentials_reissued' => $result['credentials_reissued'],
+                'email_sent'       => $emailSent,
             ],
         ], 201);
+    }
+
+    // POST /api/admin/volunteer-requests/{id}/resend-credentials
+    //
+    // For a converted volunteer whose account still has the temporary password: issues a NEW one and mails it again.
+    public function resendCredentials(Request $request, VolunteerRequest $volunteerRequest, VolunteerConversionService $conversion): JsonResponse
+    {
+        $actor = $request->user();
+        if (! in_array($actor->role, self::CONVERT_ROLES, true)) {
+            return response()->json(['success' => false, 'message' => 'غير مصرح لك بهذا الإجراء.'], 403);
+        }
+
+        // Per-target allowance: one delivered resend per 10 minutes, ten per day, whoever asks. It is only COUNTED after a mail was
+        // really delivered (below), so a failed send leaves it untouched; it is checked here, before anything is reissued.
+        $cooldownKey = 'vr-resend-target:' . $volunteerRequest->id;
+        $dayKey      = 'vr-resend-day:' . $volunteerRequest->id;
+        foreach ([[$cooldownKey, 1], [$dayKey, 10]] as [$key, $max]) {
+            if (RateLimiter::tooManyAttempts($key, $max)) {
+                return ThrottleResponse::make(RateLimiter::availableIn($key));
+            }
+        }
+
+        try {
+            $issued = $conversion->reissueCredentials($volunteerRequest);
+        } catch (VolunteerConversionException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], $e->status);
+        }
+
+        $emailSent = $conversion->sendAcceptedMail($issued['account'], $issued['department_name'], $issued['temporary_password']);
+
+        if ($emailSent) {
+            RateLimiter::hit($cooldownKey, 600);
+            RateLimiter::hit($dayKey, 86400);
+        }
+
+        try {
+            AuditLogService::log(
+                action:      'RESEND_CREDENTIALS',
+                entityType:  'VolunteerRequest',
+                entityId:    $volunteerRequest->id,
+                entityName:  $volunteerRequest->full_name,
+                newValues:   ['user_id' => $issued['account']->id],
+                extra:       ['email_sent' => $emailSent],
+                request:     $request,
+                description: $actor->name . ' re-issued the temporary password of volunteer "' . $volunteerRequest->full_name . '"',
+            );
+        } catch (\Throwable $e) {
+            Log::warning('resendCredentials audit log failed', ['volunteer_request_id' => $volunteerRequest->id, 'error' => $e->getMessage()]);
+        }
+
+        return response()->json([
+            'success'    => true,
+            'email_sent' => $emailSent,
+            'message'    => $emailSent
+                ? 'تم إنشاء كلمة مرور مؤقتة جديدة وإرسالها إلى بريد المتطوع.'
+                : 'تم إنشاء كلمة مرور مؤقتة جديدة لكن تعذّر إرسال البريد. حاول مرة أخرى.',
+        ]);
     }
 }

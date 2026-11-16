@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Services\VolunteerDepartmentMatcher;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Support\Facades\URL;
@@ -11,6 +12,10 @@ class VolunteerRequestResource extends JsonResource
     public function toArray(Request $request): array
     {
         $cvViewUrl = $this->signedCvUrl('admin.volunteer-requests.cv.view');
+
+        // The department the applicant asked for, resolved to a real one (same matcher convert-to-member uses), so the HR
+        // "convert to member" popup can be prefilled. Null when the free text matches nothing.
+        $suggested = app(VolunteerDepartmentMatcher::class)->match($this->desired_department, $request);
 
         return [
             'id'                  => $this->id,
@@ -57,6 +62,8 @@ class VolunteerRequestResource extends JsonResource
             'suggestions'         => $this->suggestions,
             'assessment_data'     => $this->assessment_data,
             'desired_department'  => $this->desired_department,
+            'suggested_department_id'   => $suggested?->id,
+            'suggested_department_name' => $suggested ? ($suggested->name_ar ?? $suggested->name) : null,
             'experience_level'    => $this->experience_level,
             'skills'              => $this->skills,
             'availability'        => $this->availability,

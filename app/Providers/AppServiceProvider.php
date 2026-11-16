@@ -252,6 +252,27 @@ class AppServiceProvider extends ServiceProvider
 
     private function configureRateLimiting(): void
     {
+        // Re-issuing a volunteer's temporary password (and mailing it): 20 per hour per acting user lives here. The per-TARGET
+        // allowance (1 per 10 minutes, 10 per day, whoever asks) is counted by the controller only after a mail was actually delivered,
+        // so a failed send does not burn it. Every 429 here is the Arabic ThrottleResponse.
+        RateLimiter::for('volunteer_resend', function (Request $request) {
+            // Throttling runs before the role gate: an account that may not do this at all must not be able to burn the quota of
+            // the people who may, so it gets its own small bucket (and a 403 from the role gate).
+            if (! in_array($request->user()?->role, ['super_admin', 'tech_admin', 'admin', 'hr_manager'], true)) {
+                return Limit::perMinute(10)->by('vr-resend-denied:' . ($request->user()?->id ?: $request->ip()))
+                    ->response(\App\Support\ThrottleResponse::forLimit());
+            }
+
+            return Limit::perHour(20)->by('vr-resend-actor:' . ($request->user()?->id ?: $request->ip()))
+                ->response(\App\Support\ThrottleResponse::forLimit());
+        });
+
+        // Changing one's own password: 5 attempts per 15 minutes per user (guessing the current password is the abuse case).
+        RateLimiter::for('change_password', function (Request $request) {
+            return Limit::perMinutes(15, 5)->by('change-password:' . ($request->user()?->id ?: $request->ip()))
+                ->response(\App\Support\ThrottleResponse::forLimit());
+        });
+
         // General API — 60 req/min per authenticated user or IP
         RateLimiter::for('api', function (Request $request) {
             return Limit::perMinute(60)

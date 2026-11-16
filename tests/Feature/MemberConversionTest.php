@@ -45,6 +45,19 @@ class MemberConversionTest extends TestCase
         ], $overrides));
     }
 
+    /** The request body HR sends: the department picked in the convert popup (created on first use). */
+    private function chosen(?Department $dept = null): array
+    {
+        return ['department_id' => ($dept ?? $this->defaultDept())->id];
+    }
+
+    private ?Department $defaultDept = null;
+
+    private function defaultDept(): Department
+    {
+        return $this->defaultDept ??= Department::where('name_ar', 'التقنية')->first() ?? $this->dept('التقنية');
+    }
+
     private function dept(string $nameAr = 'التقنية'): Department
     {
         return Department::create([
@@ -65,12 +78,12 @@ class MemberConversionTest extends TestCase
         $vr    = $this->acceptedVr(['desired_department' => 'التقنية']);
 
         $response = $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->chosen())
             ->assertCreated()
             ->assertJson(['success' => true])
             ->assertJsonPath('data.member_type', 'volunteer')
             ->assertJsonPath('data.source', 'volunteer_request')
-            ->assertJsonPath('data.role_key', 'volunteer');
+            ->assertJsonPath('data.role_key', 'department_member');
 
         $memberId = $response->json('data.id');
         $this->assertNotNull($memberId);
@@ -84,30 +97,27 @@ class MemberConversionTest extends TestCase
             'source'        => 'volunteer_request',
             'source_id'     => $vr->id,
             'is_new_member' => true,
-            'role_key'      => 'volunteer',
-            'position_ar'   => 'متطوع',
+            'role_key'      => 'department_member',
+            'position_ar'   => 'عضو إدارة',
             'member_type'   => 'volunteer',
         ]);
     }
 
-    public function test_conversion_without_matching_department_still_succeeds(): void
+    public function test_conversion_succeeds_when_the_requested_text_matches_no_department(): void
     {
-        $admin = $this->admin();
-        // No department created → $dept will be null
-        $vr = $this->acceptedVr(['desired_department' => 'قسم غير موجود']);
+        // Since the convert popup, HR always names the department; a free-text request that matches nothing is no obstacle.
+        $admin  = $this->admin();
+        $chosen = $this->dept('الإعلام');
+        $vr     = $this->acceptedVr(['desired_department' => 'قسم غير موجود']);
 
         $response = $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->chosen($chosen))
             ->assertCreated()
             ->assertJson(['success' => true]);
 
-        $memberId = $response->json('data.id');
-        $this->assertNotNull($memberId);
-
-        // department_id is null because no match was found
         $this->assertDatabaseHas('team_profiles', [
-            'id'            => $memberId,
-            'department_id' => null,
+            'id'            => $response->json('data.id'),
+            'department_id' => $chosen->id,
             'source'        => 'volunteer_request',
         ]);
     }
@@ -118,7 +128,7 @@ class MemberConversionTest extends TestCase
         $vr    = $this->acceptedVr();
 
         $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->chosen())
             ->assertCreated();
 
         $fresh = $vr->fresh();
@@ -132,7 +142,7 @@ class MemberConversionTest extends TestCase
         $vr    = $this->acceptedVr();
 
         $response = $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->chosen())
             ->assertCreated();
 
         // volunteer_request key must have the conversion timestamps
@@ -151,11 +161,11 @@ class MemberConversionTest extends TestCase
         $vr    = $this->acceptedVr();
 
         $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->chosen())
             ->assertCreated();
 
         $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->chosen())
             ->assertStatus(409)
             ->assertJson(['success' => false, 'already_converted' => true]);
     }
@@ -182,7 +192,7 @@ class MemberConversionTest extends TestCase
         ]);
 
         $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr2->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr2->id}/convert-to-member", $this->chosen())
             ->assertStatus(422)
             ->assertJson(['success' => false]);
     }
@@ -195,7 +205,7 @@ class MemberConversionTest extends TestCase
         $vr    = $this->acceptedVr(['full_name' => 'نور الهدى', 'email' => 'nour@example.com']);
 
         $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->chosen())
             ->assertCreated();
 
         $response = $this->actingAs($admin, 'sanctum')
@@ -214,7 +224,7 @@ class MemberConversionTest extends TestCase
         $vr    = $this->acceptedVr(['desired_department' => 'التقنية']);
 
         $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->chosen())
             ->assertCreated();
 
         $response = $this->actingAs($admin, 'sanctum')
@@ -239,7 +249,7 @@ class MemberConversionTest extends TestCase
         $vr    = $this->acceptedVr();
 
         $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->chosen())
             ->assertCreated();
 
         // Fetch the VR; can_convert_to_member must now be false
@@ -259,7 +269,7 @@ class MemberConversionTest extends TestCase
         $vr         = $this->acceptedVr();
 
         $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->chosen())
             ->assertCreated();
 
         $this->assertDatabaseHas('platform_notifications', [
@@ -280,7 +290,7 @@ class MemberConversionTest extends TestCase
         $vr      = $this->acceptedVr();
 
         $this->actingAs($student, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->chosen())
             ->assertStatus(403);
     }
 
@@ -289,14 +299,12 @@ class MemberConversionTest extends TestCase
     public function test_user_account_can_be_created_from_team_profile(): void
     {
         $admin  = $this->admin();
-        $vr     = $this->acceptedVr(['email' => 'newuser@example.com']);
-
-        // Convert first
-        $convResponse = $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
-            ->assertCreated();
-
-        $memberId = $convResponse->json('data.id');
+        // A legacy converted volunteer: team profile only, no account (made before conversion created accounts).
+        $profile = TeamProfile::create([
+            'name_ar' => 'Legacy Volunteer', 'position_ar' => 'متطوع', 'email' => 'newuser@example.com',
+            'member_type' => 'volunteer', 'source' => 'volunteer_request', 'sort_order' => 1,
+        ]);
+        $memberId = $profile->id;
 
         // Create user account
         $response = $this->actingAs($admin, 'sanctum')
@@ -322,17 +330,33 @@ class MemberConversionTest extends TestCase
         ]);
     }
 
+    public function test_conversion_already_links_the_account_so_create_user_account_reports_already_linked(): void
+    {
+        $admin = $this->admin();
+        $vr    = $this->acceptedVr(['email' => 'fresh@example.com']);
+
+        $memberId = $this->actingAs($admin, 'sanctum')
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->chosen())
+            ->assertCreated()
+            ->json('data.id');
+
+        $this->actingAs($admin, 'sanctum')
+            ->postJson("/api/admin/team-profiles/{$memberId}/create-user-account")
+            ->assertOk()
+            ->assertJson(['success' => true, 'data' => ['already_linked' => true]]);
+
+        $this->assertSame(1, User::where('email', 'fresh@example.com')->count());
+    }
+
     public function test_existing_user_is_linked_not_duplicated(): void
     {
-        $admin       = $this->admin();
+        $admin        = $this->admin();
         $existingUser = User::factory()->create(['email' => 'existing@example.com', 'role' => 'student']);
-        $vr          = $this->acceptedVr(['email' => 'existing@example.com']);
-
-        $convResponse = $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
-            ->assertCreated();
-
-        $memberId = $convResponse->json('data.id');
+        $profile      = TeamProfile::create([
+            'name_ar' => 'Legacy Volunteer', 'position_ar' => 'متطوع', 'email' => 'existing@example.com',
+            'member_type' => 'volunteer', 'source' => 'volunteer_request', 'sort_order' => 1,
+        ]);
+        $memberId = $profile->id;
 
         $response = $this->actingAs($admin, 'sanctum')
             ->postJson("/api/admin/team-profiles/{$memberId}/create-user-account")

@@ -33,6 +33,8 @@ class VolunteerProfileHrEditTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // The legacy HR-profile pipeline is switched off by default (cancelled path); these tests prove its legacy code, so turn it on.
+        config(['volunteer_onboarding.hr_profile_pipeline_enabled' => true]);
         Storage::fake('private');
         Storage::fake('public');
         $this->dept = $this->department('التقنية');

@@ -122,6 +122,97 @@ class AuthController extends Controller
         ]);
     }
 
+    /**
+     * POST /api/auth/change-password
+     *
+     * The signed-in user replaces their own password (this is also how a temporary password, users.must_change_password,
+     * is retired). The current password is required. On success the flag is cleared and every OTHER API token of the account is
+     * revoked; the token that made the call keeps working.
+     */
+    public function changePassword(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        // Whoever impersonates an account must never be able to set that account's password.
+        if ($request->attributes->get('is_impersonating', false)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'لا يمكن تغيير كلمة المرور أثناء الدخول بحساب مستخدم آخر.',
+            ], 403);
+        }
+
+        $data = $request->validate([
+            'current_password' => ['required', 'string', 'max:128'],
+            'password'         => ['required', 'string', 'min:8', 'max:128', 'confirmed', 'different:current_password'],
+        ], [
+            'current_password.required' => 'كلمة المرور الحالية مطلوبة',
+            'password.required'         => 'كلمة المرور الجديدة مطلوبة',
+            'password.min'              => 'كلمة المرور يجب أن تكون 8 أحرف على الأقل',
+            'password.max'              => 'كلمة المرور يجب ألا تتجاوز 128 حرفاً',
+            'password.confirmed'        => 'تأكيد كلمة المرور غير متطابق',
+            'password.different'        => 'كلمة المرور الجديدة يجب أن تختلف عن الحالية',
+        ]);
+
+        if (! Hash::check($data['current_password'], $user->password)) {
+            $this->auditPasswordChange($request, $user, 'PASSWORD_CHANGE_FAILED', 'Failed password change attempt (wrong current password)');
+
+            throw ValidationException::withMessages([
+                'current_password' => ['كلمة المرور الحالية غير صحيحة'],
+            ]);
+        }
+
+        $wasTemporary = (bool) $user->must_change_password;
+
+        $user->forceFill([
+            'password'             => Hash::make($data['password']),
+            'must_change_password' => false,
+            'remember_token'       => \Illuminate\Support\Str::random(60),
+        ])->save();
+
+        // Revoke every other API token; keep the one used for this call. A cookie session has no personal token to keep.
+        $current = $user->currentAccessToken();
+        $keepId  = $current instanceof \Laravel\Sanctum\PersonalAccessToken ? $current->getKey() : null;
+        $user->tokens()->when($keepId !== null, fn ($q) => $q->where('id', '!=', $keepId))->delete();
+
+        // A cookie-session client stays signed in: Sanctum's AuthenticateSession (applied to stateful requests) re-stores the session's
+        // password hash from the UPDATED user after this response, so the next request still matches (see ForcedPasswordChangeTest).
+
+        $this->auditPasswordChange(
+            $request,
+            $user,
+            'PASSWORD_CHANGED',
+            'User changed their own password' . ($wasTemporary ? ' (temporary password replaced)' : ''),
+            ['was_temporary' => $wasTemporary],
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم تغيير كلمة المرور بنجاح.',
+            'data'    => [
+                'user'                 => new UserResource($user->fresh()),
+                'must_change_password' => false,
+            ],
+        ]);
+    }
+
+    /** Audit entry for a password change attempt. Never carries a password value; never turns the request into an error. */
+    private function auditPasswordChange(Request $request, User $user, string $action, string $description, array $extra = []): void
+    {
+        try {
+            AuditLogService::log(
+                action:      $action,
+                entityType:  'User',
+                entityId:    $user->id,
+                entityName:  $user->name,
+                extra:       $extra ?: null,
+                request:     $request,
+                description: $description,
+            );
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('change-password audit log failed', ['user_id' => $user->id, 'error' => $e->getMessage()]);
+        }
+    }
+
     public function me(Request $request): JsonResponse
     {
         $user            = $request->user();
@@ -143,6 +234,7 @@ class AuthController extends Controller
             'role'                 => $user->role,
             'permissions'          => $user->allPermissions(),
             'is_department_leader' => $isDepartmentLeader,
+            'must_change_password' => (bool) $user->must_change_password,
             'is_impersonating'     => $isImpersonating,
             'has_english_courses'  => $this->hasEnglishCourses($user),
         ];
