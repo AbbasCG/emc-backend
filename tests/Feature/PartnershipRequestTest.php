@@ -310,6 +310,10 @@ class PartnershipRequestTest extends TestCase
 
         $partnerId = (int) $approval->json('onboarding.partner_id');
         $partnerUser = User::findOrFail((int) $approval->json('onboarding.user_id'));
+        // The approved partner's account starts with must_change_password = true (credential_setup = password_reset). Until they set
+        // their own password every authenticated route answers 403 PASSWORD_CHANGE_REQUIRED; the password-reset link clears the flag.
+        // This test is about the dashboard, so it starts from a partner who has completed that step.
+        $partnerUser->forceFill(['must_change_password' => false])->save();
         PartnerProgram::create([
             'partner_id' => $partnerId,
             'title' => 'برنامج قيادي مشترك',

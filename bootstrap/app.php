@@ -34,6 +34,10 @@ return Application::configure(basePath: dirname(__DIR__))
             // Entry to the learner experience for ANY authenticated, active account (replaces role:student).
             'learner'            => \App\Http\Middleware\EnsureLearnerAccess::class,
             'placement.required' => \App\Http\Middleware\PlacementTestRequired::class,
+            // Write endpoints of the cancelled volunteer HR-profile pipeline: 410 unless volunteer_onboarding.hr_profile_pipeline_enabled.
+            'volunteer.hr_pipeline' => \App\Http\Middleware\EnsureVolunteerHrPipelineEnabled::class,
+            // Temporary-password gate. It is appended to the whole api group below; the alias exists for tests / explicit use.
+            'password.changed'   => \App\Http\Middleware\EnsurePasswordIsChanged::class,
         ]);
 
         // Authorization BEFORE route-model binding. SubstituteBindings (in the api group) turns {param} into a record and answers 404 when
@@ -58,6 +62,12 @@ return Application::configure(basePath: dirname(__DIR__))
         // EnsureUserIsActive is a no-op when $request->user() is null,
         // so it is safe to append globally — unauthenticated public routes are unaffected.
         $middleware->appendToGroup('api', \App\Http\Middleware\EnsureUserIsActive::class);
+
+        // Force a temporary password to be replaced before anything else is reachable. One place, every authenticated api route;
+        // must come after ImpersonationMiddleware (it skips impersonation sessions) and EnsureUserIsActive.
+        $middleware->appendToGroup('api', \App\Http\Middleware\EnsurePasswordIsChanged::class);
+        // ... and BEFORE route-model binding, like the other gates: a flagged account must not learn which record ids exist (404 vs 403).
+        $middleware->prependToPriorityList(before: \Illuminate\Routing\Middleware\SubstituteBindings::class, prepend: \App\Http\Middleware\EnsurePasswordIsChanged::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
 

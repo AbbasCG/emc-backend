@@ -180,6 +180,8 @@ Route::prefix('auth')->middleware(['auth:sanctum', 'throttle:api'])->group(funct
     // A signed-in, still-unverified user asks for a fresh verification link for THEMSELF.
     Route::post('email/resend', [\App\Http\Controllers\Auth\EmailVerificationController::class, 'resendMine']);
     Route::post('/logout', [AuthController::class, 'logout']);
+    // The user replaces their own password (retires a temporary one: users.must_change_password). Allow-listed in EnsurePasswordIsChanged.
+    Route::post('/change-password', [AuthController::class, 'changePassword'])->middleware('throttle:change_password');
     Route::get('/me',      [AuthController::class, 'me']);
     Route::get('/me/access-manifest', \App\Http\Controllers\AccessManifestController::class);
     // Phase 2D — the caller's own EFFECTIVE PAGE ACCESS (read-only).
@@ -367,7 +369,7 @@ Route::middleware('auth:sanctum')->prefix('admin')->group(function () {
 Route::get(
     '/instructor/submissions/{submission}/file',
     [\App\Http\Controllers\SubmissionDownloadController::class, 'instructorFile']
-)->middleware('throttle:submission_download')->name('instructor.submissions.file');
+)->middleware(['auth:sanctum', 'throttle:submission_download'])->name('instructor.submissions.file');
 
 // ─── Realtime broadcasting auth (Ticket 8 completion pass) ─────────────────────
 // The framework auto-registers GET/POST /broadcasting/auth under the "web"
@@ -776,10 +778,12 @@ Route::post('/consultant-applications', [PublicConsultantApplicationController::
     ->middleware('throttle:workshop');
 
 // ─── Public: Ambassador applications ─────────────────────────────────────────
+// optional.sanctum on these write routes: they record the signed-in user when there is one, so a still-temporary-password account is
+// stopped by the same gate as every other authenticated write (see EnsurePasswordIsChanged).
 Route::post('/ambassador-applications', [PublicAmbassadorController::class, 'store'])
-    ->middleware('throttle:workshop');
+    ->middleware(['throttle:workshop', 'optional.sanctum']);
 Route::post('/ambassador-applications/draft', [PublicAmbassadorController::class, 'saveDraft'])
-    ->middleware('throttle:60,1');
+    ->middleware(['throttle:60,1', 'optional.sanctum']);
 Route::get('/ambassador-applications/draft/{token}', [PublicAmbassadorController::class, 'getDraft'])
     ->middleware('throttle:30,1');
 
@@ -842,7 +846,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,ai_manager
 
 // ─── Public: Support tickets ─────────────────────────────────────────────────
 Route::post('/support-tickets', [PublicSupportTicketController::class, 'store'])
-    ->middleware('throttle:workshop');
+    ->middleware(['throttle:workshop', 'optional.sanctum']);
 
 // ─── HR + Admin: accepted volunteers list & volunteer conversion ──────────────
 // Registered BEFORE the admin group so hr_manager is not blocked by the
@@ -850,6 +854,8 @@ Route::post('/support-tickets', [PublicSupportTicketController::class, 'store'])
 Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin'])->prefix('admin')->group(function () {
     Route::get('volunteers/accepted',                                        [AdminVolunteerRequestController::class, 'acceptedIndex']);
     Route::post('volunteer-requests/{volunteerRequest}/convert-to-member',   [AdminVolunteerRequestController::class, 'convertToMember']);
+    // Re-issues + re-mails the temporary password of a converted volunteer who has not changed it yet.
+    Route::post('volunteer-requests/{volunteerRequest}/resend-credentials',  [AdminVolunteerRequestController::class, 'resendCredentials'])->middleware('throttle:volunteer_resend');
 });
 
 // Ambassador applications personal-data export center removed — privacy
@@ -1745,7 +1751,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
 // ─── Support public alias (frontend uses /support/tickets) ───────────────────
 Route::post('support/tickets', [PublicSupportTicketController::class, 'store'])
-    ->middleware('throttle:workshop');
+    ->middleware(['throttle:workshop', 'optional.sanctum']);
 
 // ─── Contact form (public) ───────────────────────────────────────────────────
 Route::post('contact', function (\App\Http\Requests\ContactFormRequest $request) {
@@ -1836,7 +1842,7 @@ Route::post('contact', function (\App\Http\Requests\ContactFormRequest $request)
             'message' => 'تعذر إرسال الرسالة حالياً. يرجى المحاولة لاحقاً.',
         ], 500);
     }
-})->middleware('throttle:5,1');
+})->middleware(['throttle:5,1', 'optional.sanctum']);
 
 // ─── Platform scale (admin / tech admin infrastructure + counts) ─────────────
 Route::get('platform/scale', [PlatformScaleController::class, 'show'])
@@ -1867,8 +1873,9 @@ Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin
 // ─── Volunteer HR profile — self-service (any authenticated user) ───────────
 Route::middleware(['auth:sanctum'])->prefix('volunteer')->group(function () {
     Route::get('hr-profile',                    [VolunteerHrProfileController::class, 'show']);
-    Route::post('hr-profile',                   [VolunteerHrProfileController::class, 'store']);
-    Route::put('hr-profile/{volunteerHrProfile}', [VolunteerHrProfileController::class, 'update']);
+    // Cancelled pipeline: the two WRITE endpoints answer 410 unless volunteer_onboarding.hr_profile_pipeline_enabled is on.
+    Route::post('hr-profile',                   [VolunteerHrProfileController::class, 'store'])->middleware('volunteer.hr_pipeline');
+    Route::put('hr-profile/{volunteerHrProfile}', [VolunteerHrProfileController::class, 'update'])->middleware('volunteer.hr_pipeline');
 });
 
 // Reference data: department -> job-title options, used by both the
@@ -1895,10 +1902,12 @@ Route::middleware(['auth:sanctum', 'role:hr_manager,admin,super_admin,tech_admin
     Route::get('volunteer-hr-profiles',                                [HrVolunteerProfileController::class, 'index']);
     Route::get('volunteer-hr-profiles/filter-options',                 [HrVolunteerProfileController::class, 'filterOptions']);
     Route::get('volunteer-hr-profiles/{volunteerHrProfile}',            [HrVolunteerProfileController::class, 'show']);
-    Route::put('volunteer-hr-profiles/{volunteerHrProfile}',            [HrVolunteerProfileController::class, 'update'])->middleware('throttle:30,1');
-    Route::patch('volunteer-hr-profiles/{volunteerHrProfile}/review',   [HrVolunteerProfileController::class, 'review']);
-    Route::post('volunteer-hr-profiles/{volunteerHrProfile}/approve',   [HrVolunteerProfileController::class, 'approve']);
-    Route::post('volunteer-hr-profiles/{volunteerHrProfile}/reject',    [HrVolunteerProfileController::class, 'reject']);
+    // Cancelled pipeline: the HR edit is a write too, so it answers 410 unless volunteer_onboarding.hr_profile_pipeline_enabled is on.
+    Route::put('volunteer-hr-profiles/{volunteerHrProfile}',            [HrVolunteerProfileController::class, 'update'])->middleware(['volunteer.hr_pipeline', 'throttle:30,1']);
+    // Cancelled pipeline: review / approve / reject answer 410 unless volunteer_onboarding.hr_profile_pipeline_enabled is on.
+    Route::patch('volunteer-hr-profiles/{volunteerHrProfile}/review',   [HrVolunteerProfileController::class, 'review'])->middleware('volunteer.hr_pipeline');
+    Route::post('volunteer-hr-profiles/{volunteerHrProfile}/approve',   [HrVolunteerProfileController::class, 'approve'])->middleware('volunteer.hr_pipeline');
+    Route::post('volunteer-hr-profiles/{volunteerHrProfile}/reject',    [HrVolunteerProfileController::class, 'reject'])->middleware('volunteer.hr_pipeline');
     // Blob-fetched via axios (Authorization header), not a signed browser-nav
     // link — matches AdminAmbassadorApplicationFileController's convention.
     Route::get('volunteers/{volunteerHrProfile}/cv/preview',            [HrVolunteerProfileController::class, 'previewCv']);

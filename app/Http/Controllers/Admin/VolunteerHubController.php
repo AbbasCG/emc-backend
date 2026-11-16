@@ -13,6 +13,7 @@ use App\Models\VolunteerStatusLog;
 use App\Models\WeeklyReportRating;
 use App\Services\ActivityLogger;
 use App\Services\DepartmentRosterService;
+use App\Services\VolunteerHubSyncService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -23,19 +24,13 @@ class VolunteerHubController extends Controller
     /**
      * قائمة المتطوعين الموحدة مع إحصائيات النقاط والتقييمات والملخص التفاعلي
      */
-    public function index(Request $request): JsonResponse
+    public function index(Request $request, VolunteerHubSyncService $sync): JsonResponse
     {
-        // ضمان وجود ملف تطوعي لكل مستخدم مسجل كمتطوع
-        $unlinkedUsers = User::where('role', 'volunteer')
-            ->whereNotIn('id', VolunteerProfile::pluck('user_id'))
-            ->get();
-        foreach ($unlinkedUsers as $u) {
-            VolunteerProfile::create([
-                'user_id'       => $u->id,
-                'department_id' => $u->department_id,
-                'status'        => 'active',
-            ]);
-        }
+        // ضمان وجود ملف تطوعي لكل متطوع: دور volunteer، أو عضو فريق من نوع متطوع له حساب، أو طلب تطوع تم تحويله
+        // (at most once a minute; null = it ran recently and was skipped)
+        $syncResult = $sync->ensureProfilesThrottled();
+
+        $withoutAccount = $sync->withoutAccountCount();
 
         $query = VolunteerProfile::query()
             ->with(['user', 'department', 'section']);
@@ -78,12 +73,21 @@ class VolunteerHubController extends Controller
                             'on_leave'  => 0,
                             'withdrawn' => 0,
                         ],
+                        'without_account'     => $withoutAccount,
                     ],
                 ],
             ]);
         }
 
         $userIds = $allMatching->pluck('user_id')->filter()->unique()->all();
+
+        // الإدارة عند غيابها من الملف التطوعي: ملف الفريق ثم الإدارة الأساسية ثم نص users.department
+        // (free-text guesses are display-only; reliable sources were already written by the sync.) When the sync ran in this very
+        // request it already examined these users, so they are not derived a second time.
+        $blankUserIds = $allMatching->whereNull('department_id')->pluck('user_id')->filter()->map(fn ($id) => (int) $id)->all();
+        $alreadyExamined = $syncResult ? array_flip($syncResult['examined']) : [];
+        $derivedDepartments = ($syncResult['derived'] ?? [])
+            + $sync->derivedDepartments(array_values(array_filter($blankUserIds, fn ($id) => ! isset($alreadyExamined[$id]))));
 
         // 1. حساب النقاط الفعلية (مجموع الموجب في الليدجر)
         $actualPointsMap = VolunteerPointAward::query()
@@ -128,7 +132,8 @@ class VolunteerHubController extends Controller
             $redemptionsMap,
             $lastRatingsMap,
             $leaderDeptIds,
-            $leaderTeamIds
+            $leaderTeamIds,
+            $derivedDepartments
         ) {
             $uId = $v->user_id;
             $actual = (int) ($actualPointsMap[$uId] ?? 0);
@@ -146,14 +151,16 @@ class VolunteerHubController extends Controller
 
             $isLeader = isset($leaderDeptIds[$uId]) || isset($leaderTeamIds[$uId]);
 
+            $department = $v->department ?? ($derivedDepartments[$uId] ?? null);
+
             return [
                 'id'                 => $v->id,
                 'user_id'            => $uId,
                 'name'               => $v->user?->name ?? 'متطوع',
                 'email'              => $v->user?->email,
                 'avatar'             => $v->user?->avatar,
-                'department_id'      => $v->department_id,
-                'department_name'    => $v->department?->name ?? 'غير محدد',
+                'department_id'      => $department?->id,
+                'department_name'    => $department ? ($department->name ?? $department->name_ar ?? 'غير محدد') : 'غير محدد',
                 'is_leader'          => $isLeader,
                 'status'             => $st,
                 'hours_logged'       => (float) $v->hours_logged,
@@ -190,6 +197,8 @@ class VolunteerHubController extends Controller
                 'on_leave'  => $volunteers->where('status', 'on_leave')->count(),
                 'withdrawn' => $volunteers->where('status', 'withdrawn')->count(),
             ],
+            // متطوعون فعّالون في الفريق بلا حساب مستخدم: لا يمكنهم الاحتفاظ بنقاط أثر
+            'without_account'     => $withoutAccount,
         ];
 
         return response()->json([
@@ -292,7 +301,7 @@ class VolunteerHubController extends Controller
         $userId = $volunteer->user_id;
 
         $awards = VolunteerPointAward::where('user_id', $userId)
-            ->with('awardedBy:id,name')
+            ->with('awarder:id,name')
             ->get();
 
         $redemptions = VolunteerPointRedemption::where('user_id', $userId)
@@ -311,7 +320,7 @@ class VolunteerHubController extends Controller
                 'points'      => $pts,
                 'type'        => $pts >= 0 ? 'earn' : 'deduction',
                 'source'      => $a->source_type ? class_basename($a->source_type) : 'منح إداري/آلي',
-                'creator'     => $a->awardedBy?->name ?? 'النظام',
+                'creator'     => $a->awarder?->name ?? 'النظام',
             ];
         }
 

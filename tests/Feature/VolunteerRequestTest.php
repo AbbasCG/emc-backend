@@ -453,14 +453,27 @@ class VolunteerRequestTest extends TestCase
             'converted_member_id'    => $member->id,
         ]));
 
-        $response = $this->actingAs($admin, 'sanctum')
+        // A converted request is final: a status change is refused (it used to be accepted, leaving "accepted" + converted_member_id).
+        $this->actingAs($admin, 'sanctum')
             ->patchJson("/api/admin/volunteer-requests/{$vr->id}/status", ['status' => 'accepted'])
-            ->assertOk();
+            ->assertStatus(409)
+            ->assertJsonPath('already_converted', true);
 
-        $this->assertFalse($response->json('can_convert_to_member'));
+        $response = $this->actingAs($admin, 'sanctum')->getJson("/api/admin/volunteer-requests/{$vr->id}")->assertOk();
+
+        $this->assertFalse($response->json('data.can_convert_to_member'));
     }
 
     // ─── Convert to member ────────────────────────────────────────────────────
+
+    /** The convert popup sends the department HR picked. */
+    private function convertBody(): array
+    {
+        $dept = Department::where('slug', 'convert-test')->first()
+            ?? Department::create(['name' => 'الإعلام', 'name_ar' => 'الإعلام', 'slug' => 'convert-test', 'is_active' => true, 'sort_order' => 9]);
+
+        return ['department_id' => $dept->id];
+    }
 
     private function makeAcceptedVr(array $overrides = []): VolunteerRequest
     {
@@ -481,7 +494,7 @@ class VolunteerRequestTest extends TestCase
         $vr = $this->makeAcceptedVr(['desired_department' => 'التقنية']);
 
         $response = $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", ['department_id' => $dept->id])
             ->assertCreated()
             ->assertJson(['success' => true])
             ->assertJsonPath('data.member_type', 'volunteer')
@@ -512,7 +525,7 @@ class VolunteerRequestTest extends TestCase
         $vr    = VolunteerRequest::create(array_merge($this->validPayload(['agree_terms' => null]), ['status' => 'pending']));
 
         $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->convertBody())
             ->assertStatus(422)
             ->assertJson(['success' => false]);
     }
@@ -524,12 +537,12 @@ class VolunteerRequestTest extends TestCase
 
         // First conversion succeeds
         $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->convertBody())
             ->assertCreated();
 
         // Second conversion blocked with 409
         $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->convertBody())
             ->assertStatus(409)
             ->assertJson(['success' => false]);
     }
@@ -540,7 +553,7 @@ class VolunteerRequestTest extends TestCase
         $vr    = $this->makeAcceptedVr();
 
         $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->convertBody())
             ->assertCreated();
 
         $this->assertNotNull($vr->fresh()->converted_to_member_at);
@@ -552,7 +565,7 @@ class VolunteerRequestTest extends TestCase
         $vr    = $this->makeAcceptedVr(['full_name' => 'نور الهدى', 'email' => 'nour@example.com']);
 
         $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->convertBody())
             ->assertCreated();
 
         $this->assertDatabaseHas('team_profiles', ['name_ar' => 'نور الهدى', 'email' => 'nour@example.com']);
@@ -571,7 +584,7 @@ class VolunteerRequestTest extends TestCase
         $vr         = $this->makeAcceptedVr();
 
         $this->actingAs($admin, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->convertBody())
             ->assertCreated();
 
         $this->assertDatabaseHas('platform_notifications', [
@@ -591,7 +604,7 @@ class VolunteerRequestTest extends TestCase
         $vr      = $this->makeAcceptedVr();
 
         $this->actingAs($student, 'sanctum')
-            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member")
+            ->postJson("/api/admin/volunteer-requests/{$vr->id}/convert-to-member", $this->convertBody())
             ->assertStatus(403);
     }
 }

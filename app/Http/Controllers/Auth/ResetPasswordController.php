@@ -32,6 +32,8 @@ class ResetPasswordController extends Controller
             function (User $user, string $password) {
                 $user->forceFill([
                     'password'       => Hash::make($password),
+                    // The user just chose this password themselves, so any temporary-password flag is retired.
+                    'must_change_password' => false,
                     'remember_token' => Str::random(60),
                 ])->save();
 
