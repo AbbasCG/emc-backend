@@ -89,8 +89,11 @@ class AdminVolunteerRequestController extends Controller
     // GET /api/admin/volunteers/accepted
     public function acceptedIndex(Request $request): JsonResponse
     {
+        // Everyone who was accepted: still waiting for conversion ('accepted') and already converted ('converted_to_member').
+        $listed = ['accepted', 'converted_to_member'];
+
         $query = VolunteerRequest::with(['reviewer', 'acceptedBy'])
-            ->where('status', 'accepted')
+            ->whereIn('status', $listed)
             ->when($request->filled('search'), function ($q) use ($request) {
                 $term = $request->search;
                 $q->where(function ($sub) use ($term) {
@@ -128,19 +131,51 @@ class AdminVolunteerRequestController extends Controller
             'success' => true,
             'data'    => VolunteerRequestResource::collection($items)->response()->getData(true),
             'meta'    => [
+                // still waiting for conversion
                 'total_accepted'      => VolunteerRequest::where('status', 'accepted')->count(),
                 'total_converted'     => VolunteerRequest::where('status', 'converted_to_member')->count(),
-                'accepted_this_month' => VolunteerRequest::where('status', 'accepted')
+                // both statuses: everyone accepted this month / the department most accepted volunteers asked for
+                'accepted_this_month' => VolunteerRequest::whereIn('status', $listed)
                     ->whereMonth('accepted_at', now()->month)
                     ->whereYear('accepted_at',  now()->year)
                     ->count(),
-                'top_department' => VolunteerRequest::where('status', 'accepted')
+                'top_department' => VolunteerRequest::whereIn('status', $listed)
+                    ->whereNotNull('desired_department')
+                    ->where('desired_department', '!=', '')
                     ->select('desired_department', \Illuminate\Support\Facades\DB::raw('count(*) as cnt'))
                     ->groupBy('desired_department')
                     ->orderByDesc('cnt')
+                    ->orderBy('desired_department')
                     ->value('desired_department'),
+                // Values really stored on the accepted + converted set (NOT narrowed by this request's filters), for filter dropdowns.
+                'filters' => [
+                    'departments'    => $this->distinctValues($listed, 'desired_department'),
+                    'cities'         => $this->distinctValues($listed, 'city'),
+                    'availabilities' => $this->distinctValues($listed, 'availability'),
+                ],
             ],
         ]);
+    }
+
+    /**
+     * Distinct, non-empty values of one column over the given statuses, sorted, capped.
+     *
+     * @param  list<string>  $statuses
+     * @return list<string>
+     */
+    private function distinctValues(array $statuses, string $column, int $cap = 200): array
+    {
+        return VolunteerRequest::query()
+            ->whereIn('status', $statuses)
+            ->whereNotNull($column)
+            ->where($column, '!=', '')
+            ->distinct()
+            ->orderBy($column)
+            ->limit($cap)
+            ->pluck($column)
+            ->map(fn ($v) => (string) $v)
+            ->values()
+            ->all();
     }
 
     // PATCH /api/admin/volunteer-requests/{id}/status

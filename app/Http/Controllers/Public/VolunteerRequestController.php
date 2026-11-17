@@ -55,6 +55,46 @@ class VolunteerRequestController extends Controller
             'portfolio_link_status'      => 'nullable|string|max:100',
             'portfolio_url'              => 'nullable|string|max:255',
 
+            // بيانات مهنية اختيارية (كانت في الملف التطوعي القديم): ما لم يُجب عنه المتقدم يبقى NULL ولا يُفترض له جواب.
+            // languages: مصفوفة أو نص JSON لمصفوفة نصوص قصيرة؛ الموافقة ثلاثية القيمة (NULL = لم يُجب).
+            'languages'                  => ['nullable', function ($attribute, $value, $fail) {
+                $list = is_string($value) ? json_decode($value, true) : $value;
+                if (! is_array($list) || ! array_is_list($list)) {
+                    return $fail('اللغات يجب أن تكون قائمة.');
+                }
+                if (count($list) > 20) {
+                    return $fail('لا يمكن اختيار أكثر من 20 لغة.');
+                }
+                foreach ($list as $item) {
+                    if (! is_string($item) || trim($item) === '' || mb_strlen($item) > 50) {
+                        return $fail('كل لغة يجب أن تكون نصًا لا يتجاوز 50 حرفًا.');
+                    }
+                    if (preg_match('/<\s*\/?\s*[a-z!?]/i', $item)) {
+                        return $fail('لا يُسمح بإدخال وسوم HTML في هذا الحقل.');
+                    }
+                }
+            }],
+            // `bail` + `string` first: an array / object sent for a text field is a normal 422, never a 500 from a later rule.
+            'linkedin_url'               => ['nullable', 'bail', 'string', 'max:255', 'url:http,https', function ($attribute, $value, $fail) {
+                $parts = parse_url($value);
+                $host  = is_array($parts) ? strtolower((string) ($parts['host'] ?? '')) : '';
+                $ok = is_array($parts)
+                    && in_array(strtolower((string) ($parts['scheme'] ?? '')), ['http', 'https'], true)
+                    && ! isset($parts['user']) && ! isset($parts['pass'])
+                    && ! preg_match('/[\s\x5c\x00-\x1f\x7f]/', $value)
+                    && ($host === 'linkedin.com' || str_ends_with($host, '.linkedin.com'));
+                if (! $ok) {
+                    $fail('رابط لينكدإن يجب أن يكون على نطاق linkedin.com وبدون اسم مستخدم أو كلمة مرور.');
+                }
+            }],
+            'professional_bio'           => ['nullable', 'bail', 'string', 'max:500', function ($attribute, $value, $fail) {
+                // A real tag (<b>, </p>, <!--, <?php) is refused; a lone "<" as in "I <3 it" or "<5 سنوات" is plain text.
+                if (preg_match('/<\s*\/?\s*[a-z!?]/i', $value)) {
+                    $fail('لا يُسمح بإدخال وسوم HTML في هذا الحقل.');
+                }
+            }],
+            'professional_profile_consent' => 'nullable|bail|boolean',
+
             // المستوى الرابع
             'motivation_ratings'         => 'nullable',
             'commitment_ratings'         => 'nullable',
@@ -85,6 +125,9 @@ class VolunteerRequestController extends Controller
             'agree_terms'         => 'accepted',
         ], [
             'opportunity_id.prohibited' => 'للتقديم على فرصة تطوعية محددة استخدم صفحة الفرصة نفسها.',
+            'professional_bio.max'      => 'النبذة التعريفية يجب ألا تتجاوز 500 حرف',
+            'linkedin_url.url'          => 'رابط لينكدإن غير صالح، يجب أن يبدأ بـ http:// أو https://',
+            'professional_profile_consent.boolean' => 'يرجى اختيار الموافقة أو عدم الموافقة على عرض البيانات المهنية',
         ]);
 
         $cvPath = null;
@@ -101,6 +144,15 @@ class VolunteerRequestController extends Controller
             }
             return null;
         };
+
+        // Languages: trimmed, duplicates in any case dropped (the first spelling is kept); an empty list is "no answer".
+        $languages = $parseJsonOrArray($data['languages'] ?? null);
+        $languages = is_array($languages) && $languages !== []
+            ? array_values(array_intersect_key(
+                $trimmed = array_map(fn ($l) => trim($l), $languages),
+                array_unique(array_map(fn ($l) => mb_strtolower($l), $trimmed)),
+            ))
+            : null;
 
         $volunteerRequest = VolunteerRequest::create([
             'full_name'           => $data['full_name'],
@@ -135,6 +187,11 @@ class VolunteerRequestController extends Controller
             'value_add_contributions'    => $data['value_add_contributions'] ?? null,
             'portfolio_link_status'      => $data['portfolio_link_status'] ?? null,
             'portfolio_url'              => $data['portfolio_url'] ?? null,
+            'languages'                  => $languages,
+            'linkedin_url'               => $data['linkedin_url'] ?? null,
+            'professional_bio'           => isset($data['professional_bio']) && trim($data['professional_bio']) !== '' ? trim($data['professional_bio']) : null,
+            // NULL = لم يُجب؛ لا يُحوَّل الغياب إلى false أبدًا.
+            'professional_profile_consent' => isset($data['professional_profile_consent']) ? filter_var($data['professional_profile_consent'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) : null,
 
             // المستوى الرابع
             'motivation_ratings'         => $parseJsonOrArray($data['motivation_ratings'] ?? null),

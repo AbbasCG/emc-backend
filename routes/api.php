@@ -1537,6 +1537,9 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
     Route::get('volunteers/hub',                        [VolunteerHubController::class, 'index']);
     Route::put('volunteers/{volunteer}/status',         [VolunteerHubController::class, 'updateStatus']);
     Route::get('volunteers/{volunteer}/status-logs',    [VolunteerHubController::class, 'statusLogs']);
+    // Personal data of a volunteer: the same audience as admin/volunteer-requests/{id} (not executive_admin). Throttled; every read is audited.
+    Route::get('volunteers/{volunteer}/profile',        [VolunteerHubController::class, 'profile'])->middleware(['role:admin,super_admin,tech_admin,hr_manager', 'throttle:60,1']);
+    Route::get('volunteers/{volunteer}/activity',       [VolunteerHubController::class, 'activity'])->middleware('throttle:60,1');
     Route::get('volunteers/{volunteer}/points-ledger',  [VolunteerHubController::class, 'pointsLedger']);
     Route::get('volunteers/{volunteer}/weekly-ratings', [VolunteerHubController::class, 'weeklyRatings']);
     Route::get('volunteers',                            [VolunteerController::class, 'index']);
