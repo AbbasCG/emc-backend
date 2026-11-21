@@ -25,10 +25,10 @@ class ApiTokenController extends Controller
 
     public function index(Request $request): JsonResponse
     {
+        // Only the caller's own tokens. Do not add a top-level orWhere here: it is not wrapped in the
+        // tokenable_type/tokenable_id scope and would leak every user's tokens (impersonation ones included).
         $tokens = $request->user()
             ->tokens()
-            ->whereNull('last_used_at')
-            ->orWhereNotNull('last_used_at')
             ->latest()
             ->get()
             ->map(fn ($token) => [
