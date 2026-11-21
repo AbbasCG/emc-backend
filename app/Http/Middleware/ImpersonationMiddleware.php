@@ -39,18 +39,40 @@ class ImpersonationMiddleware
             $expiresAt = (int) $request->session()->get('emc_impersonation_expires_at', 0);
 
             if ($expiresAt > 0 && now()->timestamp > $expiresAt) {
+                // The preview has expired. This request was authenticated as the TARGET (the sanctum guard has already
+                // cached that user), so it must never run: once the markers below are gone nothing would know it is an
+                // impersonation, and a gate such as credential.first_party would let the target's account mint a token
+                // or start another impersonation. Restore the administrator for the NEXT request and stop this one.
+                $request->session()->forget([
+                    'emc_impersonator_id',
+                    'emc_impersonation_target_id',
+                    'emc_impersonation_expires_at',
+                ]);
+
                 $actor = \App\Models\User::find($actorId);
                 if ($actor && $actor->is_active && ! $actor->trashed()) {
                     Auth::guard('web')->login($actor);
-                    $request->session()->forget([
-                        'emc_impersonator_id',
-                        'emc_impersonation_target_id',
-                        'emc_impersonation_expires_at',
-                    ]);
                     $request->session()->regenerate();
+
+                    return response()->json([
+                        'success' => false,
+                        'code' => 'impersonation_expired',
+                        'message' => 'انتهت مدة المعاينة بحساب المستخدم وأُعيدت جلستك. أعد تحميل الصفحة.',
+                        'message_en' => 'The impersonation preview has expired and your own session was restored. Reload the page.',
+                    ], 409);
                 }
 
-                return $next($request);
+                // The administrator is gone or suspended: end the session entirely rather than leave it on the target.
+                Auth::guard('web')->logout();
+                $request->session()->invalidate();
+                $request->session()->regenerateToken();
+
+                return response()->json([
+                    'success' => false,
+                    'code' => 'impersonation_expired',
+                    'message' => 'انتهت الجلسة. سجّل الدخول من جديد.',
+                    'message_en' => 'Unauthenticated.',
+                ], 401);
             }
 
             $request->attributes->set('is_impersonating', true);

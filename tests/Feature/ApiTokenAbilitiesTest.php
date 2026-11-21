@@ -12,9 +12,12 @@ use Tests\TestCase;
 /**
  * The `abilities` / `ability` aliases exist and behave as Sanctum documents, so scoped API tokens CAN be enforced.
  *
- * They are not attached to any production route yet (that is a separate, reviewed decision). What is locked in here
- * is the contract any such route will rely on: a first-party login token (created with no abilities = ["*"]) passes
- * every check, a scoped token passes only its own scopes, an impersonation token passes no scope.
+ * What is locked in here is the contract any scoped route relies on: a first-party login token (created with no
+ * abilities = ["*"]) passes every check, a scoped token passes only its own scopes, an impersonation token passes no scope.
+ *
+ * Since the fail-closed gate (EnforceScopedTokenAccess, see ScopedTokenGateTest) a scoped token only reaches a route that
+ * opts in with `token.scope:`; raw `abilities:` alone is no longer enough. The probes therefore declare `token.scope:read:courses`
+ * and test the combined chain (our gate, then Sanctum): a refusal of a token without read:courses may come from either.
  */
 class ApiTokenAbilitiesTest extends TestCase
 {
@@ -24,11 +27,11 @@ class ApiTokenAbilitiesTest extends TestCase
     {
         parent::setUp();
 
-        Route::middleware(['api', 'auth:sanctum', 'abilities:read:courses'])
+        Route::middleware(['api', 'auth:sanctum', 'abilities:read:courses', 'token.scope:read:courses'])
             ->get('/api/__ability-probe/all', fn () => response()->json(['ok' => true]));
-        Route::middleware(['api', 'auth:sanctum', 'abilities:read:courses,read:reports'])
+        Route::middleware(['api', 'auth:sanctum', 'abilities:read:courses,read:reports', 'token.scope:read:courses'])
             ->get('/api/__ability-probe/both', fn () => response()->json(['ok' => true]));
-        Route::middleware(['api', 'auth:sanctum', 'ability:read:courses,read:reports'])
+        Route::middleware(['api', 'auth:sanctum', 'ability:read:courses,read:reports', 'token.scope:read:courses'])
             ->get('/api/__ability-probe/any', fn () => response()->json(['ok' => true]));
     }
 
@@ -70,6 +73,19 @@ class ApiTokenAbilitiesTest extends TestCase
 
         $this->assertSame(403, $this->probe($other, 'all'));
         $this->assertSame(403, $this->probe($other, 'any'));
+    }
+
+    public function test_raw_abilities_without_a_token_scope_declaration_refuse_scoped_tokens(): void
+    {
+        // Fail-closed: a route that only carries Sanctum's `abilities:` has not opted in to scoped tokens.
+        Route::middleware(['api', 'auth:sanctum', 'abilities:read:courses'])
+            ->get('/api/__ability-probe/raw', fn () => response()->json(['ok' => true]));
+
+        $scoped = User::factory()->create(['is_active' => true])->createToken('integration', ['read:courses'])->plainTextToken;
+        $login = User::factory()->create(['is_active' => true])->createToken('api-token')->plainTextToken;
+
+        $this->assertSame(403, $this->probe($scoped, 'raw'));
+        $this->assertSame(200, $this->probe($login, 'raw'));
     }
 
     public function test_an_impersonation_token_passes_no_scope(): void

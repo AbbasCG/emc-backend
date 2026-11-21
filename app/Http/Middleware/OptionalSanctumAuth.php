@@ -36,6 +36,9 @@ class OptionalSanctumAuth
         }
 
         if ($user) {
+            // Attach the token, exactly as Sanctum's own guard does, so currentAccessToken() tells a scoped / impersonation
+            // token from a first-party one (App\Support\ApiCredential). Without it the request would look like a cookie session.
+            $user->withAccessToken($accessToken);
             Auth::guard('sanctum')->setUser($user);
             Auth::shouldUse('sanctum');
         }

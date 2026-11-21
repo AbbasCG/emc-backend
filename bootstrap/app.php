@@ -44,6 +44,12 @@ return Application::configure(basePath: dirname(__DIR__))
             // Sanctum token at all (guest, web-guard actingAs) is answered 401. Not attached to any route yet — see tests/Feature/ApiTokenAbilitiesTest.php.
             'abilities'          => \Laravel\Sanctum\Http\Middleware\CheckAbilities::class,
             'ability'            => \Laravel\Sanctum\Http\Middleware\CheckForAnyAbility::class,
+            // Opt-in for scoped API tokens: `token.scope:read:courses` lets a scoped token holding EVERY listed scope through.
+            // Without it a scoped token is refused everywhere (EnforceScopedTokenAccess, appended to the api group below).
+            // Use this, not raw `abilities:`, on routes the SPA also calls: `abilities:` answers 403 to impersonation tokens.
+            'token.scope'        => \App\Http\Middleware\EnforceScopedTokenAccess::class,
+            // Token management / impersonation start: the real user's own SPA session or "*" login token only.
+            'credential.first_party' => \App\Http\Middleware\RequireFirstPartyCredential::class,
         ]);
 
         // Authorization BEFORE route-model binding. SubstituteBindings (in the api group) turns {param} into a record and answers 404 when
@@ -55,9 +61,15 @@ return Application::configure(basePath: dirname(__DIR__))
             \App\Http\Middleware\DepartmentLeaderOrRoleMiddleware::class,
             \App\Http\Middleware\PermissionMiddleware::class,
             \App\Http\Middleware\EnsureLearnerAccess::class,
+            \App\Http\Middleware\EnforceScopedTokenAccess::class,
+            \App\Http\Middleware\RequireFirstPartyCredential::class,
         ] as $gate) {
             $middleware->prependToPriorityList(before: \Illuminate\Routing\Middleware\SubstituteBindings::class, prepend: $gate);
         }
+
+        // The gates above sort ahead of SubstituteBindings, which would also put them ahead of ImpersonationMiddleware. It must
+        // see the request first: it annotates impersonation and stops the request that crosses a cookie preview's expiry.
+        $middleware->prependToPriorityList(before: \App\Http\Middleware\RoleMiddleware::class, prepend: \App\Http\Middleware\ImpersonationMiddleware::class);
 
         // Run on every api/* request — detects impersonation tokens and annotates
         // the request with is_impersonating + impersonator_id attributes.
@@ -68,6 +80,10 @@ return Application::configure(basePath: dirname(__DIR__))
         // EnsureUserIsActive is a no-op when $request->user() is null,
         // so it is safe to append globally — unauthenticated public routes are unaffected.
         $middleware->appendToGroup('api', \App\Http\Middleware\EnsureUserIsActive::class);
+
+        // Fail-closed for scoped API tokens: refused on every api route that does not opt in with `token.scope:`.
+        // SPA sessions, "*" login tokens, impersonation tokens and guests pass untouched (see the class).
+        $middleware->appendToGroup('api', \App\Http\Middleware\EnforceScopedTokenAccess::class);
 
         // Force a temporary password to be replaced before anything else is reachable. One place, every authenticated api route;
         // must come after ImpersonationMiddleware (it skips impersonation sessions) and EnsureUserIsActive.

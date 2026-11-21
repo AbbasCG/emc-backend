@@ -134,10 +134,12 @@ class AuthController extends Controller
         $user = $request->user();
 
         // Whoever impersonates an account must never be able to set that account's password.
-        if ($request->attributes->get('is_impersonating', false)) {
+        if (\App\Support\ApiCredential::isImpersonating($request)) {
             return response()->json([
                 'success' => false,
+                'code' => 'impersonation_forbidden',
                 'message' => 'لا يمكن تغيير كلمة المرور أثناء الدخول بحساب مستخدم آخر.',
+                'message_en' => 'The password cannot be changed while impersonating another user.',
             ], 403);
         }
 
