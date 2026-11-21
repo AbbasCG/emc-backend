@@ -38,6 +38,12 @@ return Application::configure(basePath: dirname(__DIR__))
             'volunteer.hr_pipeline' => \App\Http\Middleware\EnsureVolunteerHrPipelineEnabled::class,
             // Temporary-password gate. It is appended to the whole api group below; the alias exists for tests / explicit use.
             'password.changed'   => \App\Http\Middleware\EnsurePasswordIsChanged::class,
+            // Sanctum token scopes (ApiTokenController::ALLOWED_SCOPES). `abilities:a,b` needs every listed ability, `ability:a,b` any
+            // one. A first-party login token (abilities ["*"]) and a cookie session resolved by the sanctum guard (TransientToken)
+            // pass every check; an impersonation bearer token (["via-impersonation"]) fails every check (403); a request with no
+            // Sanctum token at all (guest, web-guard actingAs) is answered 401. Not attached to any route yet — see tests/Feature/ApiTokenAbilitiesTest.php.
+            'abilities'          => \Laravel\Sanctum\Http\Middleware\CheckAbilities::class,
+            'ability'            => \Laravel\Sanctum\Http\Middleware\CheckForAnyAbility::class,
         ]);
 
         // Authorization BEFORE route-model binding. SubstituteBindings (in the api group) turns {param} into a record and answers 404 when
