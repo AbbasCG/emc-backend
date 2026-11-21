@@ -783,7 +783,10 @@ class TicketOperationsCenterTest extends TestCase
         $this->assertSame('ASSIGNED', $t2->fresh()->status);
         $this->assertNull($t2->fresh()->accepted_at, 'the new assignee must accept');
         $this->assertSame('PENDING_APPROVAL', $pending->fresh()->status, 'a pending ticket is approved, not reassigned');
-        $this->assertSame($notifications, PlatformNotification::count(), 'no notification storm');
+        // No storm: exactly one "assigned to you" per reassigned ticket, to the new assignee only
+        // (TicketAssignmentObserver); nobody else and nothing for the refused pending ticket.
+        $this->assertSame($notifications + 2, PlatformNotification::count(), 'no notification storm');
+        $this->assertSame(2, PlatformNotification::where('type', 'ticket_assigned')->where('user_id', $emp->id)->count());
 
         $bad = $this->actingAs($this->leaderA)->postJson(self::API.'/bulk', ['action' => 'reassign', 'assigned_to_id' => $outsider->id, 'ticket_ids' => [$t1->id]])->json('data');
         $this->assertSame(0, $bad['succeeded']);
