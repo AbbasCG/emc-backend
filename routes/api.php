@@ -1172,9 +1172,12 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
         Route::get('integrations',                       [IntegrationSettingController::class, 'index']);
         Route::put('integrations/{key}',                 [IntegrationSettingController::class, 'upsert']);
 
-        Route::get('api-tokens',                         [ApiTokenController::class, 'index']);
-        Route::post('api-tokens',                        [ApiTokenController::class, 'store']);
-        Route::delete('api-tokens/{id}',                 [ApiTokenController::class, 'destroy']);
+        // Token management: the admin's own SPA session or login token only — never a scoped token or an impersonation.
+        Route::middleware('credential.first_party')->group(function () {
+            Route::get('api-tokens',                     [ApiTokenController::class, 'index']);
+            Route::post('api-tokens',                    [ApiTokenController::class, 'store']);
+            Route::delete('api-tokens/{id}',             [ApiTokenController::class, 'destroy']);
+        });
     });
 
     // ── Email settings & logs ─────────────────────────────────────────────────
@@ -1737,7 +1740,7 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('integrations')->group
 });
 
 // ─── Developer API token aliases (frontend uses /developer/api-tokens) ───────
-Route::middleware(['auth:sanctum', 'role:admin'])->prefix('developer')->group(function () {
+Route::middleware(['auth:sanctum', 'role:admin', 'credential.first_party'])->prefix('developer')->group(function () {
     Route::get('api-tokens',          [ApiTokenController::class, 'index']);
     Route::post('api-tokens',         [ApiTokenController::class, 'store']);
     Route::delete('api-tokens/{id}',  [ApiTokenController::class, 'destroy']);
@@ -2252,7 +2255,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
 });
 // Start: role:super_admin,admin,tech_admin — permission check (users.impersonate) is enforced
 // in the controller, so having the role alone is not sufficient.
-Route::middleware(['auth:sanctum', 'role:super_admin,admin,tech_admin'])->group(function () {
+Route::middleware(['auth:sanctum', 'role:super_admin,admin,tech_admin', 'credential.first_party'])->group(function () {
     Route::post('/admin/impersonate/{user}', [ImpersonationController::class, 'start'])
         ->whereNumber('user');
 });
@@ -2267,7 +2270,8 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('/profile',        [ProfileController::class, 'show']);
     Route::match(['put', 'patch'], '/profile', [ProfileController::class, 'update']);
     Route::post('/profile/avatar', [ProfileController::class, 'uploadAvatar']);
-    Route::delete('/profile',     [ProfileController::class, 'destroy']);
+    // Deleting the account is never something an impersonator or a scoped token may do.
+    Route::delete('/profile',     [ProfileController::class, 'destroy'])->middleware('credential.first_party');
 });
 
 // ─── Placement tests — admin management ──────────────────────────────────────

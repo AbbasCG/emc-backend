@@ -62,6 +62,18 @@ class ProfileController extends Controller
         }
 
         $emailChanged = isset($data['email']) && $data['email'] !== $user->email;
+
+        // The sign-in address is a credential: changing it, then using "forgot password", would hand the impersonator the
+        // account for good. Name, phone and the rest stay editable during a preview.
+        if ($emailChanged && \App\Support\ApiCredential::isImpersonating($request)) {
+            return response()->json([
+                'success' => false,
+                'code' => 'impersonation_forbidden',
+                'message' => 'لا يمكن تغيير البريد الإلكتروني أثناء الدخول بحساب مستخدم آخر.',
+                'message_en' => 'The email address cannot be changed while impersonating another user.',
+            ], 403);
+        }
+
         if ($emailChanged) {
             // Clear verification — user must re-verify the new address
             $data['email_verified_at'] = null;
