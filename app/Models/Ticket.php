@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Observers\TicketAssignmentObserver;
 use App\Observers\TicketStatusObserver;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -10,7 +11,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
-#[ObservedBy([TicketStatusObserver::class])]
+#[ObservedBy([TicketStatusObserver::class, TicketAssignmentObserver::class])]
 class Ticket extends Model
 {
     use HasFactory, SoftDeletes;

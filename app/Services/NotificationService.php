@@ -1795,6 +1795,114 @@ class NotificationService
         return mb_strimwidth(trim($title), 0, 120, '…');
     }
 
+    // ── Ticket assignment: the person a ticket is handed to ──────────────────
+    //
+    // TicketAssignmentObserver decides WHEN this fires (assigned_to_id really
+    // changed to someone, after commit); this only decides WHAT is said. A
+    // ticket can legitimately be handed to the same person again later (A -> B
+    // -> A), so the key is per assignment event, not per ticket (Class C).
+    // The type name is shared with SupportTicketController's in-app row for
+    // support tickets (same meaning; entity_type tells them apart).
+
+    /**
+     * A ticket was assigned (approve with an assignee, or a reassign) to $assigneeId.
+     *
+     * $assignmentRef identifies this one assignment event (previous assignee + the
+     * moment it was written), so a retried job dedups but a later real reassignment
+     * to the same person notifies again.
+     */
+    public static function ticketAssigned(
+        int $assigneeId,
+        int $ticketId,
+        string $ticketTitle,
+        string $assignmentRef,
+        ?int $assignedById = null,
+        ?\DateTimeInterface $assignedAt = null,
+    ): void {
+        $title = self::shortTitle($ticketTitle);
+        $key = NotificationIdempotencyKey::fromComponents('ticket_assigned', [$ticketId, $assigneeId, $assignmentRef]);
+
+        self::send($assigneeId, 'ticket_assigned',
+            'أُسندت إليك تذكرة',
+            "أُسندت إليك التذكرة \"{$title}\" وهي بانتظار مراجعتك وقبولك. اضغط لمراجعتها.",
+            [
+                'entity_type'     => 'ticket',
+                'entity_id'       => $ticketId,
+                'idempotency_key' => $key,
+                'action_url'      => "/dashboard/tickets/{$ticketId}?review=assigned",
+                'icon'            => 'user-check',
+                'color'           => 'blue',
+                'created_by'      => $assignedById,
+            ]
+        );
+
+        self::sendTicketAssignedEmail($assigneeId, $ticketId, $key, $assignedById, $assignedAt);
+    }
+
+    /**
+     * The logged email that accompanies ticket_assigned. Dedup is per assignment
+     * event (the same key as the in-app row), never per ticket. Carries what the
+     * assignee needs to triage from the inbox — number, title, type, priority,
+     * department/unit, deadline, who assigned it and a short excerpt of the
+     * description — but never internal notes, attachments or the reporter's email.
+     */
+    private static function sendTicketAssignedEmail(int $assigneeId, int $ticketId, string $assignmentKey, ?int $assignedById, ?\DateTimeInterface $assignedAt): void
+    {
+        $user = User::find($assigneeId);
+        if (! $user?->email) {
+            return;
+        }
+
+        $alreadyEmailed = \App\Models\NotificationLog::query()
+            ->where('channel', 'email')
+            ->where('type', 'ticket_assigned')
+            ->where('user_id', $assigneeId)
+            ->where('payload->assignment_key', $assignmentKey)
+            ->exists();
+
+        if ($alreadyEmailed) {
+            return;
+        }
+
+        $ticket = \App\Models\Ticket::with(['department:id,name,name_ar', 'unit:id,name_ar'])->find($ticketId);
+        if (! $ticket) {
+            return;
+        }
+
+        $frontend = rtrim((string) config('app.frontend_url', config('app.url')), '/');
+        $assigner = $assignedById ? User::find($assignedById) : null;
+        $format = fn ($date) => $date?->copy()->timezone(config('app.timezone'))->locale('ar')->translatedFormat('j F Y، h:i A');
+        $title = self::shortTitle((string) $ticket->title);
+
+        $mail = new \App\Mail\TicketAssignedMail(
+            recipientName: (string) $user->name,
+            itemTitle: $title,
+            ticketNumber: $ticket->ticket_number,
+            isSuggestion: $ticket->ticket_category === 'NEW_SUGGESTION',
+            priorityLabel: \App\Services\TicketActions::PRIORITY_LABELS[$ticket->priority] ?? null,
+            priority: $ticket->priority,
+            departmentName: $ticket->department?->name_ar ?: $ticket->department?->name,
+            unitName: $ticket->unit?->name_ar,
+            deadline: $format($ticket->expected_resolution_time),
+            assignedByName: $assigner?->name,
+            assignedAt: $format(\Illuminate\Support\Carbon::instance($assignedAt ?? now())),
+            excerpt: $ticket->description ? mb_strimwidth(trim(preg_replace('/\s+/u', ' ', (string) $ticket->description)), 0, 280, '…') : null,
+            reviewUrl: "{$frontend}/dashboard/tickets/{$ticketId}?review=assigned",
+            workspaceUrl: "{$frontend}/dashboard/tickets/workspace",
+        );
+
+        EmailService::dispatch(
+            'ticket_assigned',
+            $user->email,
+            $user->name,
+            $assigneeId,
+            $mail,
+            $mail->subjectLine(),
+            ['ticket_id' => $ticketId, 'assignment_key' => $assignmentKey],
+            ['triggered_by_user_id' => $assignedById],
+        );
+    }
+
     /**
      * The logged email that accompanies a ticket status notification.
      *
