@@ -335,6 +335,73 @@ class TicketAssignmentChannelSettingsTest extends TestCase
         $this->postJson("/api/v1/tickets/{$t->id}/accept-task")->assertOk();
     }
 
+    // ═══ Returning an accepted ticket to the same assignee ═══════════════════
+
+    public function test_returning_an_accepted_ticket_to_the_same_person_notifies_once_on_each_allowed_channel(): void
+    {
+        $t = $this->opsTicket(['status' => 'IN_PROGRESS', 'assigned_to_id' => $this->alice->id, 'accepted_at' => now()->subHour()]);
+
+        $this->reassignOps($t, $this->alice)->assertOk();
+
+        $this->assertSame('ASSIGNED', $t->fresh()->status, 'the acceptance is back to awaiting a reply');
+        $this->assertNull($t->fresh()->accepted_at);
+        $this->assertCount(1, $this->inApp($this->alice, Assign::OPERATIONS));
+        $this->assertSame(1, $this->emailCount(TicketAssignedMail::class));
+
+        // Sent again while still awaiting a reply: the acceptance state does not change, so nothing repeats.
+        $this->reassignOps($t, $this->alice)->assertOk();
+        $this->assertCount(1, $this->inApp($this->alice, Assign::OPERATIONS));
+        $this->assertSame(1, $this->emailCount(TicketAssignedMail::class));
+        $this->assertSame(1, NotificationLog::where('type', Assign::OPERATIONS)->count());
+    }
+
+    public function test_an_in_progress_ticket_without_accepted_at_also_counts_as_back_to_awaiting_reply(): void
+    {
+        // Older rows can be IN_PROGRESS with no accepted_at; returning them still asks for a new acceptance.
+        $t = $this->opsTicket(['status' => 'IN_PROGRESS', 'assigned_to_id' => $this->alice->id, 'accepted_at' => null]);
+
+        $this->reassignOps($t, $this->alice)->assertOk();
+
+        $this->assertSame('ASSIGNED', $t->fresh()->status);
+        $this->assertCount(1, $this->inApp($this->alice, Assign::OPERATIONS));
+        $this->assertSame(1, $this->emailCount(TicketAssignedMail::class));
+    }
+
+    public function test_returning_an_accepted_ticket_respects_the_admin_and_the_users_channels(): void
+    {
+        Assign::setAdmin(Assign::OPERATIONS, 'email', false);
+        $a = $this->opsTicket(['status' => 'IN_PROGRESS', 'assigned_to_id' => $this->alice->id, 'accepted_at' => now()]);
+        $this->reassignOps($a, $this->alice)->assertOk();
+
+        $this->assertCount(1, $this->inApp($this->alice, Assign::OPERATIONS), 'admin email off: in-app only');
+        $this->assertSame(0, $this->emailCount(TicketAssignedMail::class));
+        $this->assertSame('skipped_disabled', NotificationLog::where('type', Assign::OPERATIONS)->sole()->status);
+
+        Assign::setAdmin(Assign::OPERATIONS, 'email', true);
+        NotificationPreference::create(['user_id' => $this->bob->id, 'channel' => 'in_app', 'type' => Assign::OPERATIONS, 'enabled' => false]);
+        $b = $this->opsTicket(['status' => 'IN_PROGRESS', 'assigned_to_id' => $this->bob->id, 'accepted_at' => now()]);
+        $this->reassignOps($b, $this->bob)->assertOk();
+
+        $this->assertCount(0, $this->inApp($this->bob, Assign::OPERATIONS), 'user in-app off: email only');
+        $this->assertSame(1, $this->emailCount(TicketAssignedMail::class));
+    }
+
+    public function test_when_the_acceptance_state_does_not_change_nothing_is_sent(): void
+    {
+        $inProgress = $this->opsTicket(['status' => 'IN_PROGRESS', 'assigned_to_id' => $this->alice->id, 'accepted_at' => now()]);
+        $assigned = $this->opsTicket(['assigned_to_id' => $this->alice->id]);
+
+        // Other edits of an accepted ticket, and handing an unaccepted one to the same person again.
+        $inProgress->update(['priority' => 'HIGH', 'internal_notes' => 'متابعة']);
+        Sanctum::actingAs($this->leader);
+        $this->patchJson("/api/v1/tickets/{$inProgress->id}/priority", ['priority' => 'LOW'])->assertSuccessful();
+        $this->reassignOps($assigned, $this->alice)->assertOk();
+
+        $this->assertSame('IN_PROGRESS', $inProgress->fresh()->status);
+        $this->assertSame(0, PlatformNotification::where('type', Assign::OPERATIONS)->count());
+        $this->assertSame(0, NotificationLog::where('type', Assign::OPERATIONS)->count());
+    }
+
     // ═══ Admin decision vs. user preference ════════════════════════════════
 
     public function test_admin_off_shows_unavailable_but_keeps_the_users_choice(): void
