@@ -48,7 +48,9 @@ class SendPlatformNotificationJob implements ShouldQueue
 
         // The administrator can switch in_app off for a whole type (NotificationChannelSetting;
         // no row = on). Off means no new row for anyone; nothing already sent is touched.
-        if (! \App\Models\NotificationChannelSetting::isEnabled($this->type, NotificationService::IN_APP_CHANNEL)) {
+        // Only the assignment types have such a switch, so no other type pays for the lookup.
+        if (\App\Support\TicketAssignmentNotifications::isType($this->type)
+            && ! \App\Models\NotificationChannelSetting::isEnabled($this->type, NotificationService::IN_APP_CHANNEL)) {
             return;
         }
 

@@ -41,7 +41,9 @@ class SupportTicketAssignedMail extends Mailable
     {
         $prefix = in_array($this->priority, ['high', 'urgent'], true) ? "[أولوية {$this->priorityLabel()}] " : '';
 
-        return "{$prefix}تم تعيين تذكرة دعم إليك: {$this->subjectText} ({$this->ticketNumber})";
+        // The customer wrote the ticket subject, so it stays out of the email subject line
+        // (inbox previews, forwarding rules); the body shows it to the assignee.
+        return "{$prefix}تم تعيين تذكرة دعم إليك ({$this->ticketNumber})";
     }
 
     public function envelope(): Envelope
