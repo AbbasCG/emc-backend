@@ -46,6 +46,12 @@ class SendPlatformNotificationJob implements ShouldQueue
             return;
         }
 
+        // The administrator can switch in_app off for a whole type (NotificationChannelSetting;
+        // no row = on). Off means no new row for anyone; nothing already sent is touched.
+        if (! \App\Models\NotificationChannelSetting::isEnabled($this->type, NotificationService::IN_APP_CHANNEL)) {
+            return;
+        }
+
         $ids = $this->excludeUsersWhoDisabledThisType($ids);
         if (empty($ids)) {
             return;

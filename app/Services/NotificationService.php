@@ -1797,15 +1797,21 @@ class NotificationService
 
     // ── Ticket assignment: the person a ticket is handed to ──────────────────
     //
-    // TicketAssignmentObserver decides WHEN this fires (assigned_to_id really
-    // changed to someone, after commit); this only decides WHAT is said. A
-    // ticket can legitimately be handed to the same person again later (A -> B
-    // -> A), so the key is per assignment event, not per ticket (Class C).
-    // The type name is shared with SupportTicketController's in-app row for
-    // support tickets (same meaning; entity_type tells them apart).
+    // Two independent types (App\Support\TicketAssignmentNotifications):
+    //   operations_ticket_assigned — App\Models\Ticket; TicketAssignmentObserver decides WHEN.
+    //   ticket_assigned            — App\Models\SupportTicket; SupportTicketController decides WHEN.
+    // These methods only decide WHAT is said and through which channel. A ticket can be
+    // handed to the same person again later (A -> B -> A), so every key is per assignment
+    // event, not per ticket (Class C), and each channel dedups on that same key.
+    //
+    // Channels: in_app goes through send(), whose job drops the row when the admin has
+    // in_app off for the type or the assignee turned it off. Email goes through
+    // dispatchAssignmentEmail(): admin switch (EmailSetting) first, then the assignee's
+    // own email preference. Either channel can be off without affecting the other, and
+    // neither affects the assignment itself.
 
     /**
-     * A ticket was assigned (approve with an assignee, or a reassign) to $assigneeId.
+     * An operations ticket was assigned (approve with an assignee, reassign, bulk reassign).
      *
      * $assignmentRef identifies this one assignment event (previous assignee + the
      * moment it was written), so a retried job dedups but a later real reassignment
@@ -1819,10 +1825,11 @@ class NotificationService
         ?int $assignedById = null,
         ?\DateTimeInterface $assignedAt = null,
     ): void {
+        $type = \App\Support\TicketAssignmentNotifications::OPERATIONS;
         $title = self::shortTitle($ticketTitle);
-        $key = NotificationIdempotencyKey::fromComponents('ticket_assigned', [$ticketId, $assigneeId, $assignmentRef]);
+        $key = NotificationIdempotencyKey::fromComponents($type, [$ticketId, $assigneeId, $assignmentRef]);
 
-        self::send($assigneeId, 'ticket_assigned',
+        self::send($assigneeId, 'operations_ticket_assigned',
             'أُسندت إليك تذكرة',
             "أُسندت إليك التذكرة \"{$title}\" وهي بانتظار مراجعتك وقبولك. اضغط لمراجعتها.",
             [
@@ -1836,42 +1843,14 @@ class NotificationService
             ]
         );
 
-        self::sendTicketAssignedEmail($assigneeId, $ticketId, $key, $assignedById, $assignedAt);
-    }
-
-    /**
-     * The logged email that accompanies ticket_assigned. Dedup is per assignment
-     * event (the same key as the in-app row), never per ticket. Carries what the
-     * assignee needs to triage from the inbox — number, title, type, priority,
-     * department/unit, deadline, who assigned it and a short excerpt of the
-     * description — but never internal notes, attachments or the reporter's email.
-     */
-    private static function sendTicketAssignedEmail(int $assigneeId, int $ticketId, string $assignmentKey, ?int $assignedById, ?\DateTimeInterface $assignedAt): void
-    {
         $user = User::find($assigneeId);
-        if (! $user?->email) {
-            return;
-        }
-
-        $alreadyEmailed = \App\Models\NotificationLog::query()
-            ->where('channel', 'email')
-            ->where('type', 'ticket_assigned')
-            ->where('user_id', $assigneeId)
-            ->where('payload->assignment_key', $assignmentKey)
-            ->exists();
-
-        if ($alreadyEmailed) {
-            return;
-        }
-
         $ticket = \App\Models\Ticket::with(['department:id,name,name_ar', 'unit:id,name_ar'])->find($ticketId);
-        if (! $ticket) {
+        if (! $user?->email || ! $ticket || self::assignmentAlreadyEmailed($type, $assigneeId, $key)) {
             return;
         }
 
-        $frontend = rtrim((string) config('app.frontend_url', config('app.url')), '/');
+        $frontend = self::frontendUrl();
         $assigner = $assignedById ? User::find($assignedById) : null;
-        $format = fn ($date) => $date?->copy()->timezone(config('app.timezone'))->locale('ar')->translatedFormat('j F Y، h:i A');
         $title = self::shortTitle((string) $ticket->title);
 
         $mail = new \App\Mail\TicketAssignedMail(
@@ -1883,24 +1862,125 @@ class NotificationService
             priority: $ticket->priority,
             departmentName: $ticket->department?->name_ar ?: $ticket->department?->name,
             unitName: $ticket->unit?->name_ar,
-            deadline: $format($ticket->expected_resolution_time),
+            deadline: self::arabicDateTime($ticket->expected_resolution_time),
             assignedByName: $assigner?->name,
-            assignedAt: $format(\Illuminate\Support\Carbon::instance($assignedAt ?? now())),
+            assignedAt: self::arabicDateTime($assignedAt ?? now()),
             excerpt: $ticket->description ? mb_strimwidth(trim(preg_replace('/\s+/u', ' ', (string) $ticket->description)), 0, 280, '…') : null,
             reviewUrl: "{$frontend}/dashboard/tickets/{$ticketId}?review=assigned",
             workspaceUrl: "{$frontend}/dashboard/tickets/workspace",
         );
 
-        EmailService::dispatch(
-            'ticket_assigned',
-            $user->email,
-            $user->name,
-            $assigneeId,
-            $mail,
-            $mail->subjectLine(),
-            ['ticket_id' => $ticketId, 'assignment_key' => $assignmentKey],
-            ['triggered_by_user_id' => $assignedById],
+        self::dispatchAssignmentEmail($type, $user, $mail, $mail->subjectLine(),
+            ['ticket_id' => $ticketId, 'assignment_key' => $key], $assignedById);
+    }
+
+    /**
+     * A support ticket was assigned to $assigneeId (SupportTicketController::assign / updateStatus).
+     * The in-app row keeps the original wording, type and link; the email is new and starts off
+     * (see the 2026_11_22_000002 migration) until an administrator turns it on.
+     */
+    public static function supportTicketAssigned(
+        int $assigneeId,
+        \App\Models\SupportTicket $ticket,
+        string $assignmentRef,
+        ?int $assignedById = null,
+        ?\DateTimeInterface $assignedAt = null,
+    ): void {
+        $type = \App\Support\TicketAssignmentNotifications::SUPPORT;
+        $ticketNumber = $ticket->ticket_number ?? ('#'.$ticket->id);
+        $key = NotificationIdempotencyKey::fromComponents($type, [$ticket->id, $assigneeId, $assignmentRef]);
+
+        self::send($assigneeId, 'ticket_assigned',
+            'تم تعيين تذكرة دعم جديدة إليك',
+            sprintf("تم تعيين التذكرة %s إليك.\nيرجى مراجعتها والرد على العميل.", $ticketNumber),
+            [
+                'entity_type'     => \App\Models\SupportTicket::class,
+                'entity_id'       => $ticket->id,
+                'idempotency_key' => $key,
+                'action_url'      => '/dashboard/admin/support-tickets/'.$ticket->id,
+                'icon'            => 'ticket',
+                'color'           => 'blue',
+                'created_by'      => $assignedById,
+            ]
         );
+
+        $user = User::find($assigneeId);
+        if (! $user?->email || self::assignmentAlreadyEmailed($type, $assigneeId, $key)) {
+            return;
+        }
+
+        $assigner = $assignedById ? User::find($assignedById) : null;
+        $mail = new \App\Mail\SupportTicketAssignedMail(
+            recipientName: (string) $user->name,
+            subjectText: self::shortTitle((string) ($ticket->subject ?: 'تذكرة دعم')),
+            ticketNumber: $ticketNumber,
+            priority: $ticket->priority,
+            assignedByName: $assigner?->name,
+            assignedAt: self::arabicDateTime($assignedAt ?? now()),
+            reviewUrl: self::frontendUrl().'/dashboard/admin/support-tickets/'.$ticket->id,
+        );
+
+        self::dispatchAssignmentEmail($type, $user, $mail, $mail->subjectLine(),
+            ['support_ticket_id' => $ticket->id, 'assignment_key' => $key], $assignedById);
+    }
+
+    /** Any email row already logged for this assignment event (sent, queued or skipped) blocks a repeat. */
+    private static function assignmentAlreadyEmailed(string $type, int $userId, string $assignmentKey): bool
+    {
+        return \App\Models\NotificationLog::query()
+            ->where('channel', 'email')
+            ->where('type', $type)
+            ->where('user_id', $userId)
+            ->where('payload->assignment_key', $assignmentKey)
+            ->exists();
+    }
+
+    /**
+     * Admin switch first (EmailService logs skipped_disabled itself), then the assignee's own
+     * email preference, logged as skipped_user_preference so Email Logs shows why nothing went out.
+     */
+    private static function dispatchAssignmentEmail(
+        string $type,
+        User $user,
+        \Illuminate\Mail\Mailable $mail,
+        string $subject,
+        array $payload,
+        ?int $assignedById,
+    ): void {
+        $channel = \App\Support\TicketAssignmentNotifications::EMAIL;
+
+        if (\App\Models\EmailSetting::isEnabled($type)
+            && ! \App\Support\TicketAssignmentNotifications::userEnabled($user->id, $type, $channel)) {
+            \App\Models\NotificationLog::create([
+                'channel'              => 'email',
+                'type'                 => $type,
+                'recipient'            => $user->email,
+                'recipient_name'       => $user->name,
+                'subject'              => $subject,
+                'status'               => 'skipped_user_preference',
+                'user_id'              => $user->id,
+                'mail_driver'          => config('mail.default'),
+                'payload'              => $payload,
+                'triggered_by_user_id' => $assignedById,
+            ]);
+
+            return;
+        }
+
+        EmailService::dispatch($type, $user->email, $user->name, $user->id, $mail, $subject, $payload,
+            ['triggered_by_user_id' => $assignedById]);
+    }
+
+    private static function frontendUrl(): string
+    {
+        return rtrim((string) config('app.frontend_url', config('app.url')), '/');
+    }
+
+    private static function arabicDateTime(?\DateTimeInterface $date): ?string
+    {
+        return $date
+            ? \Illuminate\Support\Carbon::instance($date)->timezone(config('app.timezone'))->locale('ar')->translatedFormat('j F Y، h:i A')
+            : null;
     }
 
     /**

@@ -96,7 +96,7 @@ class TicketAssignmentNotificationsTest extends TestCase
 
     private function assignedTo(User $u)
     {
-        return PlatformNotification::where('user_id', $u->id)->where('type', 'ticket_assigned')->get();
+        return PlatformNotification::where('user_id', $u->id)->where('type', 'operations_ticket_assigned')->get();
     }
 
     /** @return SendLoggedEmailJob[] */
@@ -141,7 +141,7 @@ class TicketAssignmentNotificationsTest extends TestCase
         $this->assertCount(1, $jobs);
         $this->assertSame('alice@example.com', $jobs[0]->toEmail);
 
-        $log = NotificationLog::where('type', 'ticket_assigned')->sole();
+        $log = NotificationLog::where('type', 'operations_ticket_assigned')->sole();
         $this->assertSame('email', $log->channel);
         $this->assertSame('pending', $log->status);
         $this->assertSame($this->alice->id, (int) $log->user_id);
@@ -179,8 +179,8 @@ class TicketAssignmentNotificationsTest extends TestCase
     {
         $this->approve($this->ticket())->assertOk();
 
-        $this->assertSame(0, PlatformNotification::where('type', 'ticket_assigned')->count());
-        $this->assertSame(0, NotificationLog::where('type', 'ticket_assigned')->count());
+        $this->assertSame(0, PlatformNotification::where('type', 'operations_ticket_assigned')->count());
+        $this->assertSame(0, NotificationLog::where('type', 'operations_ticket_assigned')->count());
     }
 
     // ═══ Reassign ════════════════════════════════════════════════════════════
@@ -217,7 +217,7 @@ class TicketAssignmentNotificationsTest extends TestCase
         $this->reassign($t, $this->alice)->assertOk();
 
         $this->assertCount(0, $this->assignedTo($this->alice));
-        $this->assertSame(0, NotificationLog::where('type', 'ticket_assigned')->count());
+        $this->assertSame(0, NotificationLog::where('type', 'operations_ticket_assigned')->count());
     }
 
     public function test_sending_an_accepted_ticket_back_to_the_same_person_asks_them_again(): void
@@ -275,7 +275,7 @@ class TicketAssignmentNotificationsTest extends TestCase
 
         $this->reassign($t, $this->bob, $this->submitter)->assertForbidden();
 
-        $this->assertSame(0, PlatformNotification::where('type', 'ticket_assigned')->count());
+        $this->assertSame(0, PlatformNotification::where('type', 'operations_ticket_assigned')->count());
         Queue::assertNothingPushed();
     }
 
@@ -302,7 +302,7 @@ class TicketAssignmentNotificationsTest extends TestCase
 
         $t->update(['priority' => 'LOW', 'internal_notes' => 'تعديل']);
 
-        $this->assertSame(0, PlatformNotification::where('type', 'ticket_assigned')->count());
+        $this->assertSame(0, PlatformNotification::where('type', 'operations_ticket_assigned')->count());
         Queue::assertNothingPushed();
     }
 
@@ -310,28 +310,28 @@ class TicketAssignmentNotificationsTest extends TestCase
 
     public function test_turning_the_email_off_keeps_the_in_app_notification_and_logs_a_skip(): void
     {
-        EmailSetting::create(['key' => 'ticket_assigned', 'enabled' => false]);
+        EmailSetting::updateOrCreate(['key' => 'operations_ticket_assigned'], ['enabled' => false]);
         $t = $this->ticket();
 
         $this->approve($t, ['assigned_to_id' => $this->alice->id])->assertOk();
 
         $this->assertCount(1, $this->assignedTo($this->alice));
-        $this->assertSame('skipped_disabled', NotificationLog::where('type', 'ticket_assigned')->sole()->status);
+        $this->assertSame('skipped_disabled', NotificationLog::where('type', 'operations_ticket_assigned')->sole()->status);
         Queue::assertNothingPushed();
     }
 
     public function test_a_retried_notification_for_the_same_assignment_is_not_sent_twice(): void
     {
         NotificationService::ticketAssigned($this->alice->id, $this->ticket()->id, 'عنوان', 'none@2026-11-21T10:00:00.000000', $this->leader->id);
-        $id = (int) PlatformNotification::where('type', 'ticket_assigned')->value('entity_id');
+        $id = (int) PlatformNotification::where('type', 'operations_ticket_assigned')->value('entity_id');
         NotificationService::ticketAssigned($this->alice->id, $id, 'عنوان', 'none@2026-11-21T10:00:00.000000', $this->leader->id);
 
         $this->assertCount(1, $this->assignedTo($this->alice));
-        $this->assertSame(1, NotificationLog::where('type', 'ticket_assigned')->count());
+        $this->assertSame(1, NotificationLog::where('type', 'operations_ticket_assigned')->count());
     }
 
     public function test_the_email_key_is_listed_in_the_admin_email_settings(): void
     {
-        $this->assertArrayHasKey('ticket_assigned', EmailSettingsController::LABELS);
+        $this->assertArrayHasKey('operations_ticket_assigned', EmailSettingsController::LABELS);
     }
 }

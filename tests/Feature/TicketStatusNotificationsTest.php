@@ -524,7 +524,7 @@ class TicketStatusNotificationsTest extends TestCase
         // The submitter hears nothing; only the new assignee is told it was handed to them
         // (TicketAssignmentObserver, covered in TicketAssignmentNotificationsTest).
         $this->assertCount(0, PlatformNotification::where('user_id', $this->submitter->id)->get());
-        $this->assertCount(1, $this->notificationsFor($newAssignee, 'ticket_assigned'));
+        $this->assertCount(1, $this->notificationsFor($newAssignee, 'operations_ticket_assigned'));
         $this->assertSame(1, $this->allNotificationCount());
     }
 

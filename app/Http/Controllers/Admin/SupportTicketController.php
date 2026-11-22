@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Services\NotificationService;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\SupportTicketReplyResource;
 use App\Http\Resources\SupportTicketResource;
@@ -147,7 +148,14 @@ class SupportTicketController extends Controller
             $data['resolved_at'] = now();
         }
 
+        $previousAssignee = $supportTicket->assigned_to ? (int) $supportTicket->assigned_to : null;
+
         $supportTicket->update($data);
+
+        // assigned_to is also accepted here; a real change of assignee is an assignment like assign().
+        if (array_key_exists('assigned_to', $data)) {
+            $this->notifyAssignment($supportTicket, $previousAssignee, $request->user());
+        }
 
         ActivityLogger::log(
             isset($data['status']) ? 'ticket.status_changed' : 'ticket.priority_changed',
@@ -190,25 +198,7 @@ class SupportTicketController extends Controller
             ['assigned_to' => $data['assigned_to'], 'assigned_name' => $assignee?->name]
         );
 
-        // Create in-app notification for the newly assigned user
-        if ($assignee && $assignee->id !== $assigner?->id) {
-            $ticketNumber = $supportTicket->ticket_number ?? ('#' . $supportTicket->id);
-            PlatformNotification::create([
-                'user_id'     => $assignee->id,
-                'type'        => 'ticket_assigned',
-                'title'       => 'تم تعيين تذكرة دعم جديدة إليك',
-                'message'     => sprintf(
-                    "تم تعيين التذكرة %s إليك.\nيرجى مراجعتها والرد على العميل.",
-                    $ticketNumber
-                ),
-                'entity_type' => SupportTicket::class,
-                'entity_id'   => $supportTicket->id,
-                'action_url'  => '/dashboard/admin/support-tickets/' . $supportTicket->id,
-                'icon'        => 'ticket',
-                'color'       => 'blue',
-                'created_by'  => $assigner?->id,
-            ]);
-        }
+        $this->notifyAssignment($supportTicket, $oldAssignee ? (int) $oldAssignee : null, $assigner);
 
         return response()->json([
             'success' => true,
@@ -231,6 +221,32 @@ class SupportTicketController extends Controller
             'message' => 'تم حل التذكرة.',
             'data'    => new SupportTicketResource($supportTicket->load(['user', 'assignedTo'])),
         ]);
+    }
+
+    /**
+     * Tell the person a support ticket was just handed to (in-app + email, each channel decided by
+     * the admin settings and their own preferences — see App\Support\TicketAssignmentNotifications).
+     * Only a real change of assignee notifies; assigning a ticket to yourself, to someone inactive or
+     * unassigning it sends nothing, and a failure to notify never fails the assignment.
+     */
+    private function notifyAssignment(SupportTicket $ticket, ?int $previousAssigneeId, ?User $assigner): void
+    {
+        $assigneeId = $ticket->assigned_to ? (int) $ticket->assigned_to : null;
+        if ($assigneeId === null || $assigneeId === $previousAssigneeId || $assigneeId === $assigner?->id) {
+            return;
+        }
+
+        $assignee = User::find($assigneeId);
+        if (! $assignee || ! $assignee->is_active) {
+            return;
+        }
+
+        $at = now();
+        try {
+            NotificationService::supportTicketAssigned($assignee->id, $ticket, ($previousAssigneeId ?? 'none').'@'.$at->format('Uu'), $assigner?->id, $at);
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 
     public function assignees(): \Illuminate\Http\JsonResponse

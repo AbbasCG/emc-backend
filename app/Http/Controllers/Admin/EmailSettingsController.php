@@ -45,7 +45,8 @@ class EmailSettingsController extends Controller
         'ticket_resolved'                    => ['label' => 'حل بلاغ (لمقدّم البلاغ)',        'description' => 'يُرسل لمقدّم البلاغ عند تحويل بلاغه إلى «تم الحل»',                         'category' => 'support'],
         'suggestion_approved'                => ['label' => 'اعتماد مقترح (لمقدّم المقترح)',  'description' => 'يُرسل لمقدّم المقترح عند اعتماده من قبل الإدارة',                           'category' => 'support'],
         'suggestion_implemented'             => ['label' => 'إضافة مقترح إلى النظام',          'description' => 'يُرسل لمقدّم المقترح عند إضافة مقترحه إلى النظام',                          'category' => 'support'],
-        'ticket_assigned'                    => ['label' => 'إسناد تذكرة (للمكلّف)',          'description' => 'يُرسل للموظف عند إسناد بلاغ أو مقترح إليه لمراجعته وقبوله',                'category' => 'support'],
+        'operations_ticket_assigned'         => ['label' => 'إسناد تذكرة العمليات (للمكلّف)',  'description' => 'يُرسل للموظف عند إسناد بلاغ أو مقترح إليه لمراجعته وقبوله',                'category' => 'support'],
+        'ticket_assigned'                    => ['label' => 'إسناد تذكرة الدعم الفني (للمكلّف)', 'description' => 'يُرسل لعضو فريق الدعم عند تعيين تذكرة دعم فني إليه',                      'category' => 'support'],
         // ── Applications ──────────────────────────────────────────────────────
         'volunteer_confirmation'             => ['label' => 'تأكيد طلب التطوع (للمتقدم)',     'description' => 'يُرسل لمقدم طلب التطوع تأكيداً باستلام طلبه',                             'category' => 'applications'],
         'volunteer_admin_notification'       => ['label' => 'طلب تطوع جديد (للإدارة)',        'description' => 'يُرسل للمشرفين وفريق الموارد البشرية عند ورود طلب تطوع جديد',              'category' => 'applications'],

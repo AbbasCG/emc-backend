@@ -171,7 +171,7 @@
           <tr>
             <td class="px" bgcolor="#FBFAF7" align="center" style="background-color:#FBFAF7;border:1px solid #E7E3DA;border-radius:0 0 16px 16px;padding:22px 40px;">
               <p style="margin:0;font-family:{!! $font !!};font-size:12px;line-height:1.8;color:#94A3B8;text-align:center;">
-                وصلك هذا البريد لأن تذكرة أُسندت إليك على منصة EMC. يُرسل تلقائيًا، يُرجى عدم الرد عليه مباشرة.<br>
+                وصلك هذا البريد لأن تذكرة أُسندت إليك على منصة EMC. يمكنك إيقافه من «تفضيلات الإشعارات» في حسابك، ويُرجى عدم الرد عليه مباشرة.<br>
                 © {{ date('Y') }} منصة EMC
               </p>
             </td>
