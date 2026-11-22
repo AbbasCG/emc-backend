@@ -68,9 +68,10 @@ Maps every real `NotificationService` scenario method (56, verified by `grep -c 
 | 58 | `formSubmissionConfirmed` | Smart Forms | respondent | the signed-in respondent, when the form's confirmation is on | in_app + logged email | A | **Adopted** — `form_submission_confirmed:{submissionId}` |
 | 59 | `formResponseAssigned` | Smart Forms | reviewer or automatic assignment | the assignee (never the person assigning themselves) | in_app | C (re-assignment is a new event) | **Adopted** — `form_response_assigned:{submissionId}:{assigneeId}:{assignedAt}` |
 | 60 | `formResponsesPending` | Smart Forms | scheduler (`forms:remind-pending`, daily) | the assignee of each open response, or the owner for unassigned ones | in_app | C (one per person, form and day) | **Adopted** — `form_responses_pending:{formId}:{userId}:{day}` |
-| 61 | `ticketAssigned` | Tickets | department leader (via `TicketAssignmentObserver`: approve with an assignee, reassign, bulk reassign) | the new assignee (never someone assigning themselves; skipped if inactive) | in_app + logged email | C (a later reassignment to the same person is a new event) | **Adopted** — `ticket_assigned:{ticketId}:{assigneeId}:{previousAssignee}@{assignedAtMicros}` |
+| 61 | `ticketAssigned` | Tickets (operations) | department leader (via `TicketAssignmentObserver`: approve with an assignee, reassign, bulk reassign, re-acceptance) | the new assignee (never someone assigning themselves; skipped if inactive) | in_app + logged email, each gated by admin switch + user preference | C (a later reassignment is a new event) | **Adopted** — `operations_ticket_assigned:{ticketId}:{assigneeId}:{previousAssignee}@{assignedAtMicros}` |
+| 62 | `supportTicketAssigned` | Support tickets | support lead (via `SupportTicketController::assign` / `updateStatus`) | the new assignee (only on a real change; never self; skipped if inactive) | in_app + logged email (email off by default), each gated by admin switch + user preference | C | **Adopted** — `ticket_assigned:{supportTicketId}:{assigneeId}:{previousAssignee}@{assignedAtMicros}` |
 
-`grep -c "public static function" app/Services/NotificationService.php` returns **62** — `send()` (the core dispatcher, not a scenario) plus the **61 real scenario methods** above, one row each.
+`grep -c "public static function" app/Services/NotificationService.php` returns **63** — `send()` (the core dispatcher, not a scenario) plus the **62 real scenario methods** above, one row each.
 
 ## Legitimate-repeat decisions made explicit this pass
 
@@ -148,7 +149,8 @@ Source of truth: `App\Support\NotificationChannelPolicy::POLICY`. Verified this 
 | `form_submission_confirmed` | in_app | false | existing_separate | none | Smart Forms: receipt for the signed-in respondent; FormAutomationService sends the logged email separately (key `form_submission_confirmation`) |
 | `form_response_assigned` | in_app | false | none | none | Smart Forms: response assigned for review (Class C) |
 | `form_responses_pending` | in_app | false | none | none | Smart Forms: daily digest of responses still open after the form's delay |
-| `ticket_assigned` | in_app | false | existing_separate | none | A ticket was assigned to this employee for review; EmailService sends TicketAssignedMail separately (EmailSettingsController key `ticket_assigned`) |
+| `operations_ticket_assigned` | in_app | false | existing_separate | none | Operations ticket assigned for review; TicketAssignedMail sent separately (EmailSettingsController key `operations_ticket_assigned`); admin in-app switch in `notification_channel_settings` |
+| `ticket_assigned` | in_app | false | existing_separate | none | Support ticket assigned (original key); SupportTicketAssignedMail sent separately, off by default (key `ticket_assigned`); admin in-app switch in `notification_channel_settings` |
 | `ambassador_application` | in_app | false | existing_separate | none | AmbassadorApplicationAdminMail already sent |
 | `ambassador_status_changed` | in_app | false | none | none | Applicant email dispatched separately by the controller, not this method |
 | `volunteer_hr_profile_submitted` | in_app | false | none | none | HR review-queue event; visible in the operations workspace and not time-sensitive |

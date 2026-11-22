@@ -1184,6 +1184,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     // Read-only for the broader admin group above; modifying settings is
     // restricted below to super_admin/executive_admin only.
     Route::get('email-settings',            [EmailSettingsController::class, 'index']);
+    Route::get('assignment-notification-settings', [\App\Http\Controllers\Admin\AssignmentNotificationSettingsController::class, 'index']);
     Route::get('email-logs',                [EmailLogsController::class, 'index']);
     Route::get('email-logs/stats',          [EmailLogsController::class, 'stats']);
     Route::get('email-logs/chart',          [EmailLogsController::class, 'chart']);
@@ -1315,6 +1316,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('notifications/preferences/reset', [NotificationPreferenceController::class, 'reset']);
     Route::get('notifications/preferences',   [NotificationPreferenceController::class, 'index']);
     Route::patch('notifications/preferences', [NotificationPreferenceController::class, 'update']);
+    Route::get('notifications/assignment-preferences', [NotificationPreferenceController::class, 'assignmentPreferences']);
+    Route::put('notifications/assignment-preferences', [NotificationPreferenceController::class, 'updateAssignmentPreferences']);
 });
 
 // ─── Program Finance Approvals — finance_manager + admin + super_admin ──────
@@ -2316,6 +2319,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,marketing_
 // the 'admin,super_admin,tech_admin' group above.
 Route::middleware(['auth:sanctum', 'role:super_admin,executive_admin'])->prefix('admin')->group(function () {
     Route::put('email-settings',            [EmailSettingsController::class, 'update']);
+    Route::put('assignment-notification-settings', [\App\Http\Controllers\Admin\AssignmentNotificationSettingsController::class, 'update']);
     Route::post('email-settings/test',      [EmailSettingsController::class, 'test']);
 });
 

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\NotificationPreference;
 use App\Models\NotificationQuietHours;
+use App\Support\TicketAssignmentNotifications;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -58,6 +59,74 @@ class NotificationPreferenceController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Notification preferences saved.',
+        ]);
+    }
+
+    /**
+     * GET /api/notifications/assignment-preferences
+     *
+     * The signed-in user's choices for the two "ticket assigned to you" notifications, per channel,
+     * with whether each choice is saved or the default and whether the administrator has the channel
+     * available right now (App\Support\TicketAssignmentNotifications).
+     */
+    public function assignmentPreferences(Request $request): JsonResponse
+    {
+        return response()->json([
+            'success' => true,
+            'data' => ['types' => TicketAssignmentNotifications::preferencesFor($request->user()->id)],
+        ]);
+    }
+
+    /**
+     * PUT /api/notifications/assignment-preferences
+     *
+     * Body: { "preferences": { "operations_ticket_assigned": { "email": false }, "ticket_assigned": { "in_app": true } } }
+     * Partial: only the type/channel pairs sent are saved. Always for the signed-in user — there is no
+     * user id in the request, so nobody can change another account's preferences. A choice is kept
+     * even while the administrator has that channel off, and applies again once it is turned back on.
+     */
+    public function updateAssignmentPreferences(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'preferences' => 'required|array|min:1',
+            'preferences.*' => 'required|array|min:1',
+            'preferences.*.*' => 'required|boolean',
+        ], [
+            'preferences.required' => 'لا توجد تغييرات لحفظها.',
+            'preferences.*.*.boolean' => 'قيمة غير صالحة.',
+        ]);
+
+        $errors = [];
+        foreach ($data['preferences'] as $type => $byChannel) {
+            if (! TicketAssignmentNotifications::isType((string) $type)) {
+                $errors["preferences.{$type}"] = ['نوع إشعار غير معروف.'];
+
+                continue;
+            }
+            foreach (array_keys($byChannel) as $channel) {
+                if (! in_array($channel, TicketAssignmentNotifications::CHANNELS, true)) {
+                    $errors["preferences.{$type}.{$channel}"] = ['قناة غير معروفة.'];
+                }
+            }
+        }
+        if ($errors !== []) {
+            return response()->json(['success' => false, 'message' => 'تعذّر حفظ التفضيلات: بيانات غير صالحة.', 'errors' => $errors], 422);
+        }
+
+        $userId = $request->user()->id;
+        foreach ($data['preferences'] as $type => $byChannel) {
+            foreach ($byChannel as $channel => $enabled) {
+                NotificationPreference::updateOrCreate(
+                    ['user_id' => $userId, 'channel' => $channel, 'type' => $type],
+                    ['enabled' => (bool) $enabled],
+                );
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم حفظ تفضيلات إشعارات الإسناد.',
+            'data' => ['types' => TicketAssignmentNotifications::preferencesFor($userId)],
         ]);
     }
 
