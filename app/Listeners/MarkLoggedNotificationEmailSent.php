@@ -22,8 +22,13 @@ class MarkLoggedNotificationEmailSent
             return;
         }
 
-        NotificationLog::whereKey($notification->emailLogId)
-            ->whereIn('status', ['pending', 'sending'])
-            ->update(['status' => 'sent', 'sent_at' => now()]);
+        // The mail is already out: a logging error must not fail the job and trigger a resend.
+        try {
+            NotificationLog::whereKey($notification->emailLogId)
+                ->whereIn('status', ['pending', 'sending'])
+                ->update(['status' => 'sent', 'sent_at' => now()]);
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 }

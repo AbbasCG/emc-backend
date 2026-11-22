@@ -256,6 +256,41 @@ class SelfAssignmentAndEmailLogsTest extends TestCase
         $this->assertSame('تنبيه مهم', collect($this->sentMessages())->sole()->getSubject());
     }
 
+    public function test_a_password_reset_that_cannot_even_be_queued_is_marked_failed_not_left_pending(): void
+    {
+        \Illuminate\Support\Facades\Notification::shouldReceive('send')->andThrow(new \RuntimeException('queue backend down'));
+
+        try {
+            $this->me->sendPasswordResetNotification('tok');
+            $this->fail('the queue error must still reach the caller');
+        } catch (\RuntimeException) {
+        }
+
+        $log = $this->logs('password_reset')->sole();
+        $this->assertSame('failed', $log->status);
+        $this->assertStringContainsString('queue backend down', $log->error_message);
+    }
+
+    public function test_an_email_to_a_malformed_address_shows_as_failed_instead_of_vanishing(): void
+    {
+        \App\Services\EmailService::dispatch('automation_email', 'not-an-address', 'not-an-address', null,
+            new \App\Mail\RawContentMail('تنبيه', 'نص'), 'تنبيه');
+
+        $log = $this->logs('automation_email')->sole();
+        $this->assertSame('failed', $log->status);
+        $this->assertSame('not-an-address', $log->recipient);
+        $this->assertSame([], $this->sentMessages());
+    }
+
+    public function test_the_queue_panel_counts_synchronous_sends_in_progress(): void
+    {
+        \App\Services\EmailService::record('volunteer_accepted', 'me@example.com', 'عباس', $this->me->id, 'قبول', 'sending');
+        Sanctum::actingAs(User::factory()->create(['role' => 'super_admin', 'is_active' => true]));
+
+        $this->assertSame(1, $this->getJson('/api/admin/email-logs/queue')->assertOk()->json('data.pending_logs'));
+        $this->assertSame(1, $this->getJson('/api/admin/email-logs/stats')->json('data.pending'));
+    }
+
     // ═══ 2b. The Email Logs list ═══════════════════════════════════════════
 
     private function seedLogs(): void

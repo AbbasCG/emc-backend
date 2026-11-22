@@ -30,7 +30,13 @@ class EmailService
         array    $payload = [],
         array    $context = [],
     ): void {
-        if (trim($toEmail) === '' || !filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
+        if (trim($toEmail) === '') {
+            return;
+        }
+        if (! filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
+            // Something tried to email a malformed address: show it in Email Logs as failed.
+            self::record($key, $toEmail, $toName, $userId, $subject, 'failed', $payload, $context, 'عنوان بريد إلكتروني غير صالح.');
+
             return;
         }
 
@@ -155,34 +161,45 @@ class EmailService
         $log = self::record($key, $toEmail, $toName, $userId, $subject, 'sending', $payload, $context);
         $started = (int) (microtime(true) * 1000);
 
+        $mailer = config('mail.default');
         try {
             if (method_exists($mailable, 'envelope')) {
                 $mailable->envelope();
             }
             // Same call the callers used before (Mail::to on the default mailer) unless the
             // Mailable asks for a specific one.
-            $mailer = $mailable->mailer ?? config('mail.default');
+            $mailer = $mailable->mailer ?? $mailer;
             $pending = $mailable->mailer
                 ? \Illuminate\Support\Facades\Mail::mailer($mailable->mailer)->to($toEmail, $toName)
                 : \Illuminate\Support\Facades\Mail::to($toEmail, $toName);
             $pending->send($mailable);
-
-            $log?->update([
-                'status' => 'sent', 'sent_at' => now(), 'mail_driver' => $mailer,
-                'execution_time_ms' => max(0, (int) (microtime(true) * 1000) - $started),
-            ]);
-
-            return true;
         } catch (\Throwable $e) {
             // Only the exception text: the mailable may carry secrets (e.g. a temporary password).
             Log::error('EmailService sendNow failed', ['key' => $key, 'error' => $e->getMessage()]);
-            $log?->update([
+            self::safeUpdate($log, [
                 'status' => 'failed', 'failed_at' => now(),
                 'error_message' => mb_substr($e->getMessage(), 0, 1000),
                 'smtp_response' => mb_substr('['.get_class($e).'] '.$e->getMessage(), 0, 500),
             ]);
 
             return false;
+        }
+
+        // The mail went out: a failure to update the log must never turn that into "not sent".
+        self::safeUpdate($log, [
+            'status' => 'sent', 'sent_at' => now(), 'mail_driver' => $mailer,
+            'execution_time_ms' => max(0, (int) (microtime(true) * 1000) - $started),
+        ]);
+
+        return true;
+    }
+
+    private static function safeUpdate(?NotificationLog $log, array $values): void
+    {
+        try {
+            $log?->update($values);
+        } catch (\Throwable $e) {
+            Log::error('EmailService log update failed', ['log_id' => $log?->id, 'error' => $e->getMessage()]);
         }
     }
 

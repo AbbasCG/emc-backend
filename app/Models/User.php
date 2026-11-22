@@ -443,6 +443,13 @@ class User extends Authenticatable implements MustVerifyEmail
         $log = \App\Services\EmailService::record('password_reset', (string) $this->email, $this->name, $this->id,
             ResetPasswordNotification::SUBJECT, 'pending');
 
-        $this->notify((new ResetPasswordNotification($token))->withEmailLog($log?->id));
+        try {
+            $this->notify((new ResetPasswordNotification($token))->withEmailLog($log?->id));
+        } catch (\Throwable $e) {
+            // Could not even be queued (e.g. the queue backend is down): never leave it "pending".
+            $log?->update(['status' => 'failed', 'failed_at' => now(), 'error_message' => mb_substr($e->getMessage(), 0, 1000)]);
+
+            throw $e;
+        }
     }
 }

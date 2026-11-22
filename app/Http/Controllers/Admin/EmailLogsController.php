@@ -151,9 +151,9 @@ class EmailLogsController extends Controller
 
     public function queue(): JsonResponse
     {
-        $pending  = NotificationLog::where('channel', 'email')->whereIn('status', ['pending', 'queued'])->count();
+        $pending  = NotificationLog::where('channel', 'email')->whereIn('status', ['pending', 'queued', 'sending'])->count();
         $failed   = NotificationLog::where('channel', 'email')->where('status', 'failed')->count();
-        $retrying = NotificationLog::where('channel', 'email')->where('retry_count', '>', 0)->whereIn('status', ['pending', 'queued'])->count();
+        $retrying = NotificationLog::where('channel', 'email')->where('retry_count', '>', 0)->whereIn('status', ['pending', 'queued', 'sending'])->count();
 
         // Queue size via DB (works without Redis)
         $queueSize = 0;
