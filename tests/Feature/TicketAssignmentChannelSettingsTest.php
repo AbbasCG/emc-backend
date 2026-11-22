@@ -187,6 +187,7 @@ class TicketAssignmentChannelSettingsTest extends TestCase
         $this->assertStringContainsString(rtrim((string) config('app.frontend_url'), '/')."/dashboard/admin/support-tickets/{$t->id}", $html);
         $this->assertStringContainsString('لا أستطيع الدخول', $html);
         $this->assertStringContainsString('عالية', $jobs[0]->mailable->subjectLine());
+        $this->assertStringNotContainsString('لا أستطيع الدخول', $jobs[0]->mailable->subjectLine(), 'customer-written subject stays out of the subject line');
         foreach (['customer@example.test', '+31600000000', 'رسالة العميل السرية'] as $private) {
             $this->assertStringNotContainsString($private, $html);
         }
@@ -475,6 +476,7 @@ class TicketAssignmentChannelSettingsTest extends TestCase
             ['user_id' => $this->alice->id, 'type' => 'ticket_assigned', 'title' => 'support', 'message' => 'm', 'entity_type' => SupportTicket::class, 'entity_id' => $support->id, 'action_url' => "/dashboard/admin/support-tickets/{$support->id}", 'is_read' => false, 'created_at' => $now, 'updated_at' => $now],
         ]);
         NotificationLog::create(['channel' => 'email', 'type' => 'ticket_assigned', 'recipient' => 'alice@example.com', 'status' => 'sent', 'user_id' => $this->alice->id, 'payload' => ['ticket_id' => $ops->id]]);
+        NotificationPreference::create(['user_id' => $this->alice->id, 'channel' => 'in_app', 'type' => 'ticket_assigned', 'enabled' => false]);
 
         (include database_path('migrations/2026_11_22_000002_split_ticket_assigned_notification_keys.php'))->up();
 
@@ -485,5 +487,19 @@ class TicketAssignmentChannelSettingsTest extends TestCase
         $this->assertSame('ticket_assigned', PlatformNotification::where('title', 'support')->sole()->type);
         $this->assertSame("/dashboard/admin/support-tickets/{$support->id}", PlatformNotification::where('title', 'support')->sole()->action_url);
         $this->assertSame(Assign::OPERATIONS, NotificationLog::sole()->type);
+        // The user's choice keeps applying to the flow it used to affect, and stays on the support key.
+        $this->assertFalse(Assign::userEnabled($this->alice->id, Assign::OPERATIONS, 'in_app'));
+        $this->assertFalse(Assign::userEnabled($this->alice->id, Assign::SUPPORT, 'in_app'));
+    }
+
+    public function test_rolling_back_the_split_never_leaves_the_operations_email_off(): void
+    {
+        $migration = include database_path('migrations/2026_11_22_000002_split_ticket_assigned_notification_keys.php');
+        $this->assertFalse(EmailSetting::where('key', 'operations_ticket_assigned')->exists(), 'fresh install: no operations row');
+
+        $migration->down();
+
+        $this->assertTrue(EmailSetting::isEnabled('ticket_assigned'), 'the shared key falls back to on, not the support off');
+        $this->assertFalse(EmailSetting::where('key', 'operations_ticket_assigned')->exists());
     }
 }

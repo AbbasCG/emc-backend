@@ -20,8 +20,10 @@ use Illuminate\Support\Facades\DB;
  *   - Operations email and in-app stay on unless an admin had turned that email off.
  *   - Rows already sent keep their links: operations in-app rows (entity_type 'ticket') and operations
  *     email log rows are relabelled to the new key; support in-app rows are untouched.
- *   - Users' saved ticket_assigned preferences are left on the support key (the only place they ever
- *     applied before is the support flow), so nobody's choice is rewritten.
+ *   - Users' saved ticket_assigned preferences: the old support code wrote its rows directly and never
+ *     read them, so the only flow they ever affected was the operations one (while it shared the key).
+ *     They are COPIED to operations_ticket_assigned (where the user has none yet) and also stay on the
+ *     support key, so whatever the user chose keeps applying where it applied before.
  */
 return new class extends Migration
 {
@@ -56,6 +58,17 @@ return new class extends Migration
             ->where('channel', 'email')
             ->update(['type' => self::OPS]);
 
+        $existing = DB::table('notification_preferences')->where('type', self::OPS)
+            ->get(['user_id', 'channel'])->map(fn ($r) => $r->user_id.':'.$r->channel)->flip();
+        foreach (DB::table('notification_preferences')->where('type', self::OLD)->get() as $pref) {
+            if (! $existing->has($pref->user_id.':'.$pref->channel)) {
+                DB::table('notification_preferences')->insert([
+                    'user_id' => $pref->user_id, 'channel' => $pref->channel, 'type' => self::OPS,
+                    'enabled' => $pref->enabled, 'created_at' => $now, 'updated_at' => $now,
+                ]);
+            }
+        }
+
         foreach ([self::OLD, self::OPS] as $key) {
             Cache::forget("email_setting_{$key}");
         }
@@ -65,11 +78,20 @@ return new class extends Migration
     {
         DB::table('platform_notifications')->where('type', self::OPS)->update(['type' => self::OLD]);
         DB::table('notification_logs')->where('type', self::OPS)->where('channel', 'email')->update(['type' => self::OLD]);
+        DB::table('notification_preferences')->where('type', self::OPS)->delete();
 
+        // Back to one shared key, which the old code used for the operations email: it takes the
+        // operations value, or (no operations row) the default "on" — never the support "off".
         $ops = DB::table('email_settings')->where('key', self::OPS)->first();
         if ($ops) {
             DB::table('email_settings')->where('key', self::OLD)->update(['enabled' => (bool) $ops->enabled]);
-            DB::table('email_settings')->where('key', self::OPS)->delete();
+        } else {
+            DB::table('email_settings')->where('key', self::OLD)->delete();
+        }
+        DB::table('email_settings')->where('key', self::OPS)->delete();
+
+        foreach ([self::OLD, self::OPS] as $key) {
+            Cache::forget("email_setting_{$key}");
         }
     }
 };
