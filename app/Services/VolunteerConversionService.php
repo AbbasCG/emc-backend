@@ -202,24 +202,19 @@ class VolunteerConversionService
      */
     public function sendAcceptedMail(User $account, string $departmentName, ?string $temporaryPassword): bool
     {
+        $mail = new VolunteerAcceptedMail($account->name, $account->email, $departmentName, $temporaryPassword);
+        // Email Logs keeps the attempt; the payload is the department only, never the password.
+        $payload = ['department' => $departmentName];
+
         if (! $this->mailerCanDeliver()) {
             Log::warning('VolunteerAcceptedMail not sent: the default mailer does not deliver (log/array).', ['user_id' => $account->id]);
+            EmailService::record('volunteer_accepted', $account->email, $account->name, $account->id, EmailService::subjectOf($mail),
+                'failed', $payload, [], 'لم يُرسل: مزوّد البريد الافتراضي لا يرسل فعليًا (log/array).');
 
             return false;
         }
 
-        try {
-            Mail::to($account->email, $account->name)->send(
-                new VolunteerAcceptedMail($account->name, $account->email, $departmentName, $temporaryPassword)
-            );
-
-            return true;
-        } catch (Throwable $e) {
-            // Only the exception text is logged: the mailable (and with it the password) is never part of the context.
-            Log::error('VolunteerAcceptedMail failed', ['user_id' => $account->id, 'error' => $e->getMessage()]);
-
-            return false;
-        }
+        return EmailService::sendNow('volunteer_accepted', $account->email, $account->name, $account->id, $mail, $payload);
     }
 
     public function mailerCanDeliver(): bool

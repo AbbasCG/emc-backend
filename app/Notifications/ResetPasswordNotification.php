@@ -2,6 +2,7 @@
 
 namespace App\Notifications;
 
+use App\Notifications\Concerns\TracksEmailLog;
 use Illuminate\Auth\Notifications\ResetPassword as BaseResetPassword;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -9,7 +10,9 @@ use Illuminate\Notifications\Messages\MailMessage;
 
 class ResetPasswordNotification extends BaseResetPassword implements ShouldQueue
 {
-    use Queueable;
+    use Queueable, TracksEmailLog;
+
+    public const SUBJECT = 'إعادة تعيين كلمة المرور — منصة EMC';
 
 
     public function toMail($notifiable): MailMessage
@@ -26,7 +29,7 @@ class ResetPasswordNotification extends BaseResetPassword implements ShouldQueue
         return (new MailMessage)
             ->from($fromAddress, $fromName)
             ->replyTo($replyTo)
-            ->subject('إعادة تعيين كلمة المرور — منصة EMC')
+            ->subject(self::SUBJECT)
             ->view('emails.password-reset', [
                 'userName'    => $notifiable->name ?? $notifiable->email,
                 'resetUrl'    => $url,

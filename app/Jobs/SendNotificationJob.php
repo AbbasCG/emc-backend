@@ -59,11 +59,11 @@ class SendNotificationJob implements ShouldQueue
 
         // Optional: send email notification
         if (! empty($this->data['send_email']) && $this->user->email) {
-            SendEmailJob::dispatch(
-                to: $this->user->email,
-                subject: $this->data['title'] ?? 'EMC Notification',
-                body: $this->data['message'] ?? '',
-            );
+            $subject = $this->data['title'] ?? 'EMC Notification';
+            \App\Services\EmailService::dispatch('platform_notification_email', (string) $this->user->email,
+                (string) $this->user->name, $this->user->id,
+                new \App\Mail\RawContentMail($subject, (string) ($this->data['message'] ?? '')), $subject,
+                ['notification_type' => $this->type]);
         }
     }
 }

@@ -193,14 +193,15 @@ class TicketAssignmentChannelSettingsTest extends TestCase
         }
     }
 
-    public function test_support_reassign_to_the_same_person_or_to_yourself_sends_nothing(): void
+    public function test_support_reassign_to_the_same_person_sends_nothing_but_assigning_yourself_notifies(): void
     {
         $t = $this->supportTicket(['assigned_to' => $this->alice->id]);
 
         $this->assignSupport($t, $this->alice)->assertOk();
-        $this->assignSupport($t, $this->bob, $this->bob)->assertOk();
-
         $this->assertSame(0, PlatformNotification::where('type', 'ticket_assigned')->count());
+
+        $this->assignSupport($t, $this->bob, $this->bob)->assertOk();
+        $this->assertCount(1, $this->inApp($this->bob, 'ticket_assigned'));
     }
 
     public function test_support_assignment_through_the_update_endpoint_also_notifies(): void

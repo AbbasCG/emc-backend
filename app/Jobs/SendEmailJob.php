@@ -11,6 +11,10 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Mail;
 
 /**
+ * @deprecated Nothing dispatches this any more: those paths now go through EmailService with
+ * App\Mail\RawContentMail so they are logged in Email Logs. Kept only so jobs already sitting in
+ * the queue at deploy time can still run.
+ *
  * Generic queued email sender.
  *
  * For transactional emails that do not need a dedicated Mailable class.

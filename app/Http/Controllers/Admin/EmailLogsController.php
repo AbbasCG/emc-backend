@@ -25,8 +25,13 @@ class EmailLogsController extends Controller
             ])
             ->orderByDesc('created_at');
 
+        // Skipped rows are emails that were deliberately NOT sent (admin switch / user preference).
+        // They stay in the table for diagnosis but are hidden unless their status is asked for
+        // explicitly — applied here, before pagination, so pages and totals match what is shown.
         if ($request->filled('status')) {
             $query->where('status', $request->input('status'));
+        } else {
+            $query->whereNotIn('status', NotificationLog::SKIPPED_STATUSES);
         }
         if ($request->filled('type')) {
             $query->where('type', $request->input('type'));
@@ -71,13 +76,16 @@ class EmailLogsController extends Controller
 
     public function stats(): JsonResponse
     {
-        $base = NotificationLog::where('channel', 'email');
+        $all = NotificationLog::where('channel', 'email');
+        // Counters describe emails sent or attempted, like the default list: skipped rows apart.
+        $skipped = (clone $all)->whereIn('status', NotificationLog::SKIPPED_STATUSES)->count();
+        $base = (clone $all)->whereNotIn('status', NotificationLog::SKIPPED_STATUSES);
 
         $total      = (clone $base)->count();
         $totalSent  = (clone $base)->where('status', 'sent')->count();
         $sentToday  = (clone $base)->where('status', 'sent')->whereDate('sent_at', today())->count();
         $failedToday = (clone $base)->where('status', 'failed')->whereDate('failed_at', today())->count();
-        $pending    = (clone $base)->whereIn('status', ['pending', 'queued'])->count();
+        $pending    = (clone $base)->whereIn('status', ['pending', 'queued', 'sending'])->count();
         $failed     = (clone $base)->where('status', 'failed')->count();
 
         $avgMs = (clone $base)
@@ -97,6 +105,7 @@ class EmailLogsController extends Controller
                 'failed'           => $failed,
                 'success_rate'     => $successRate,
                 'avg_delivery_ms'  => $avgMs ? (int) round($avgMs) : null,
+                'skipped'          => $skipped,
             ],
         ]);
     }
@@ -122,7 +131,7 @@ class EmailLogsController extends Controller
             $byStatus = $rows->get($date, collect())->pluck('cnt', 'status');
             $sent    = (int) ($byStatus['sent'] ?? 0);
             $failed  = (int) ($byStatus['failed'] ?? 0);
-            $pending = (int) ($byStatus['pending'] ?? 0) + (int) ($byStatus['queued'] ?? 0);
+            $pending = (int) ($byStatus['pending'] ?? 0) + (int) ($byStatus['queued'] ?? 0) + (int) ($byStatus['sending'] ?? 0);
             $total   = $sent + $failed + $pending;
 
             $chart[] = [

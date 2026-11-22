@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Jobs\DispatchWebhookJob;
-use App\Jobs\SendEmailJob;
 use App\Jobs\SendWhatsAppJob;
 use App\Models\AutomationRule;
 use App\Models\AutomationRun;
@@ -168,7 +167,9 @@ class AutomationEngineService
         $body    = $this->interpolate($action['body'] ?? '', $context);
 
         if ($to && $subject && $body) {
-            SendEmailJob::dispatch($to, $subject, $body);
+            EmailService::dispatch('automation_email', $to, $to, null,
+                new \App\Mail\RawContentMail($subject, $body), $subject,
+                ['rule_action' => 'send_email']);
         }
     }
 

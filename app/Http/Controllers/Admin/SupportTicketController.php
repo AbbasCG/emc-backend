@@ -226,13 +226,14 @@ class SupportTicketController extends Controller
     /**
      * Tell the person a support ticket was just handed to (in-app + email, each channel decided by
      * the admin settings and their own preferences — see App\Support\TicketAssignmentNotifications).
-     * Only a real change of assignee notifies; assigning a ticket to yourself, to someone inactive or
+     * Only a real change of assignee notifies. Assigning a ticket to yourself counts (channels still
+     * follow the admin settings and your own preferences); assigning to someone inactive or
      * unassigning it sends nothing, and a failure to notify never fails the assignment.
      */
     private function notifyAssignment(SupportTicket $ticket, ?int $previousAssigneeId, ?User $assigner): void
     {
         $assigneeId = $ticket->assigned_to ? (int) $ticket->assigned_to : null;
-        if ($assigneeId === null || $assigneeId === $previousAssigneeId || $assigneeId === $assigner?->id) {
+        if ($assigneeId === null || $assigneeId === $previousAssigneeId) {
             return;
         }
 

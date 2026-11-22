@@ -431,10 +431,18 @@ class User extends Authenticatable implements MustVerifyEmail
         // (Laravel's notify() sends it directly) — gated here so the
         // 'password_reset' toggle in the admin Email Settings page actually
         // has an effect, matching every other configurable email.
+        // Logged like every EmailService email (the token is never stored): skipped when the admin
+        // turned it off, otherwise pending until the mail channel sends it (or it fails).
         if (! EmailSetting::isEnabled('password_reset')) {
+            \App\Services\EmailService::record('password_reset', (string) $this->email, $this->name, $this->id,
+                ResetPasswordNotification::SUBJECT, 'skipped_disabled');
+
             return;
         }
 
-        $this->notify(new ResetPasswordNotification($token));
+        $log = \App\Services\EmailService::record('password_reset', (string) $this->email, $this->name, $this->id,
+            ResetPasswordNotification::SUBJECT, 'pending');
+
+        $this->notify((new ResetPasswordNotification($token))->withEmailLog($log?->id));
     }
 }

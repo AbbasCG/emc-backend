@@ -2,7 +2,6 @@
 
 namespace App\Services;
 
-use App\Jobs\SendEmailJob;
 use App\Jobs\SendWhatsAppJob;
 use App\Models\NotificationPreference;
 use App\Models\NotificationTemplate;
@@ -91,12 +90,10 @@ class NotificationDispatcher
             return; // No email template configured
         }
 
-        SendEmailJob::dispatch(
-            to: $user->email,
-            subject: $rendered['subject'] ?? $type,
-            body: $rendered['content'],
-            isHtml: true,
-        );
+        $subject = $rendered['subject'] ?? $type;
+        EmailService::dispatch('template_notification', (string) $user->email, (string) $user->name, $user->id,
+            new \App\Mail\RawContentMail($subject, (string) $rendered['content']), $subject,
+            ['template_type' => $type]);
     }
 
     private function dispatchWhatsApp(User $user, string $type, array $variables): void

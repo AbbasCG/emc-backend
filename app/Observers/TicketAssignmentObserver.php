@@ -27,8 +27,9 @@ use Throwable;
  * deferred with DB::afterCommit, so a rolled-back assignment never notifies, and
  * a failure to notify can never fail the assignment itself.
  *
- * Skipped quietly: an assignee who is gone or inactive, and someone assigning a
- * ticket to themselves (they already know).
+ * Skipped quietly: an assignee who is gone or inactive. Assigning a ticket to
+ * yourself is a real assignment and notifies like any other, through whichever
+ * channels the admin and your own preferences allow.
  */
 class TicketAssignmentObserver
 {
@@ -75,10 +76,6 @@ class TicketAssignmentObserver
 
     private function notify(int $ticketId, string $title, int $assigneeId, ?int $actorId, string $ref, \DateTimeInterface $at): void
     {
-        if ($actorId !== null && $actorId === $assigneeId) {
-            return;
-        }
-
         $assignee = User::find($assigneeId);
         if (! $assignee || ! $assignee->is_active) {
             Log::info('Ticket assignment notification skipped: assignee unavailable.', [

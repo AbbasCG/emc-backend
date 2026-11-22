@@ -8,6 +8,9 @@ use Illuminate\Support\Str;
 
 class NotificationLog extends Model
 {
+    /** Emails deliberately not sent: admin switch off, or the recipient turned the channel off. */
+    public const SKIPPED_STATUSES = ['skipped_disabled', 'skipped_user_preference'];
+
     protected $fillable = [
         'uuid', 'user_id', 'triggered_by_user_id',
         'channel', 'type', 'recipient', 'recipient_name', 'subject',

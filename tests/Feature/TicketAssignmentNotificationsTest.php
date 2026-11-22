@@ -246,15 +246,16 @@ class TicketAssignmentNotificationsTest extends TestCase
 
     // ═══ Who is skipped ═════════════════════════════════════════════════════
 
-    public function test_assigning_a_ticket_to_yourself_sends_nothing(): void
+    public function test_assigning_a_ticket_to_yourself_notifies_you(): void
     {
         $t = $this->ticket(['status' => 'ASSIGNED', 'assigned_to_id' => $this->bob->id]);
 
-        // A global role may both manage and be assigned.
+        // A global role may both manage and be assigned; a self-assignment is a real assignment.
         $this->reassign($t, $this->alice, $this->alice)->assertOk();
 
-        $this->assertCount(0, $this->assignedTo($this->alice));
-        Queue::assertNothingPushed();
+        $this->assertCount(1, $this->assignedTo($this->alice));
+        $this->assertCount(1, $this->emailJobs());
+        $this->assertSame('alice@example.com', $this->emailJobs()[0]->toEmail);
     }
 
     public function test_an_inactive_assignee_is_skipped_safely(): void
