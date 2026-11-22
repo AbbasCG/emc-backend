@@ -22,8 +22,8 @@ use Throwable;
  * (different) user. Creating a ticket never notifies (submission has no
  * assignee; seeders/imports must stay silent). Re-saving a ticket, changing its
  * priority, or a reassign that keeps the same person on a ticket they have not
- * accepted yet sends nothing; one that sends an accepted ticket back to them for
- * re-acceptance does notify. Delivery is
+ * accepted yet sends nothing; one that sends an IN_PROGRESS (accepted) ticket back
+ * to them as ASSIGNED — awaiting their reply again — notifies once. Delivery is
  * deferred with DB::afterCommit, so a rolled-back assignment never notifies, and
  * a failure to notify can never fail the assignment itself.
  *
@@ -39,12 +39,15 @@ class TicketAssignmentObserver
         }
 
         $newAssignee = $ticket->wasChanged('assigned_to_id');
-        // A reassign that keeps the same person but sends an accepted ticket back to
-        // ASSIGNED (TicketActions::reassign clears accepted_at): they must accept again.
-        $mustAcceptAgain = $ticket->wasChanged('accepted_at')
+        // Same person, but their acceptance is back to "awaiting a reply" (TicketActions::reassign
+        // writes IN_PROGRESS -> ASSIGNED and clears accepted_at): they must accept again. Either
+        // signal counts, because older IN_PROGRESS rows can carry no accepted_at at all.
+        $backFromInProgress = $ticket->wasChanged('status')
+            && $ticket->getOriginal('status') === 'IN_PROGRESS';
+        $acceptanceCleared = $ticket->wasChanged('accepted_at')
             && $ticket->accepted_at === null
-            && $ticket->getOriginal('accepted_at') !== null
-            && $ticket->status === 'ASSIGNED';
+            && $ticket->getOriginal('accepted_at') !== null;
+        $mustAcceptAgain = $ticket->status === 'ASSIGNED' && ($backFromInProgress || $acceptanceCleared);
 
         if (! $newAssignee && ! $mustAcceptAgain) {
             return;
