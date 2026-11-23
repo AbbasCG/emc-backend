@@ -15,6 +15,8 @@ use App\Services\TicketAccess;
 use App\Services\TicketActions;
 use App\Services\TicketQuery;
 use App\Services\TicketReporterView;
+use App\Services\TicketWorkEstimate;
+use App\Support\TicketValidationMessages;
 use Illuminate\Http\Request;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
@@ -314,7 +316,7 @@ class TicketController extends Controller
             // SVG are deliberately absent: a ticket attachment is a screenshot or
             // a document, and SVG is active content browsers execute.
             'attachments.*' => 'nullable|file|mimes:'.TicketAttachmentService::MIMES_RULE.'|max:'.TicketAttachmentService::MAX_KILOBYTES,
-        ]);
+        ], TicketValidationMessages::all());
 
         if ($validator->fails()) {
             return response()->json([
@@ -365,7 +367,7 @@ class TicketController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'تم تقديم التذكرة بنجاح وتندرج الآن تحت بند معلقة بانتظار اعتماد الإدارة',
-                'data' => $ticket->load(['department', 'attachments', 'activityLogs']),
+                'data' => $ticket->load(['department', 'attachments', 'activityLogs'])->makeHidden(TicketWorkEstimate::KEYS),
             ], 201);
 
         } catch (\Throwable $e) {
@@ -563,12 +565,15 @@ class TicketController extends Controller
             'assigned_to_id' => 'nullable|exists:users,id',
             'sla_hours' => 'required|integer|min:1|max:720', // e.g. 24, 48, 72 hours
             'internal_notes' => 'nullable|string',
-        ]);
+        ] + TicketWorkEstimate::rules(), TicketWorkEstimate::messages() + TicketValidationMessages::all());
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'الرجاء تحديد المهلة الزمنية للـ SLA بشكل صحيح',
+                // The headline names the field that failed: SLA, else the estimate, else the approval data in general.
+                'message' => $validator->errors()->has('sla_hours')
+                    ? 'الرجاء تحديد المهلة الزمنية للـ SLA بشكل صحيح'
+                    : ($validator->errors()->first('task_scope') ?: ($validator->errors()->first('task_points') ?: ($validator->errors()->first('estimated_hours') ?: 'بيانات الاعتماد غير صحيحة'))),
                 'errors' => $validator->errors(),
             ], 422);
         }
@@ -603,6 +608,22 @@ class TicketController extends Controller
             }
         }
 
+        // Assigning a person turns the ticket into work for them: size and points become mandatory (same
+        // rule as reassign). Approving WITHOUT an assignee needs none, but whatever is sent must be valid.
+        $estimateInput = TicketWorkEstimate::only($request->only(TicketWorkEstimate::KEYS));
+        $estimate = [];
+        $estimateBefore = TicketWorkEstimate::snapshot($ticket);
+        try {
+            if ($request->filled('assigned_to_id') || $request->filled('task_scope') || $request->filled('task_points')) {
+                $estimate = TicketWorkEstimate::resolve($ticket, $estimateInput);
+            } elseif ($request->filled('estimated_hours')) {
+                // No assignee and no size/points: only the approximate duration was given. (null never clears.)
+                $estimate = ['estimated_hours' => round((float) $request->estimated_hours, 2)];
+            }
+        } catch (TicketActionException $e) {
+            return response()->json($e->body(), $e->status);
+        }
+
         $prevState = $ticket->status;
         $expectedSlaTime = now()->addHours((int) $request->sla_hours);
 
@@ -613,7 +634,7 @@ class TicketController extends Controller
             'status' => 'ASSIGNED',
             'expected_resolution_time' => $expectedSlaTime,
             'internal_notes' => $request->internal_notes,
-        ]);
+        ] + $estimate);
 
         TicketActivityLog::create([
             'ticket_id' => $ticket->id,
@@ -625,6 +646,12 @@ class TicketController extends Controller
             'details' => sprintf('تم قبول واعتماد التذكرة وتحديد المهلة (SLA) حتى %s', $expectedSlaTime->format('Y-m-d H:i')),
             'logged_at' => now(),
         ]);
+
+        // The estimate gets its own row (visible to managers, global roles and the assignee only); the row above
+        // is read by every department member and carries no estimate text.
+        if ($estimate !== []) {
+            TicketWorkEstimate::log($ticket, $user, $estimateBefore, TicketWorkEstimate::snapshot($ticket));
+        }
 
         return response()->json([
             'success' => true,
@@ -658,10 +685,7 @@ class TicketController extends Controller
 
         $validator = Validator::make($request->all(), [
             'admin_rejection_reason' => 'required|string|min:5',
-        ], [
-            'admin_rejection_reason.required' => 'حقل سبب الرفض إجباري عند رفض التذكرة من قبل الإدارة',
-            'admin_rejection_reason.min' => 'يجب كتابة سبب الرفض بتفصيل لا يقل عن 5 حروف',
-        ]);
+        ], TicketValidationMessages::all());
 
         if ($validator->fails()) {
             return response()->json([
@@ -713,6 +737,13 @@ class TicketController extends Controller
             return $this->forbidden('هذه المهمة غير مُسنَدة إليك.');
         }
 
+        if ($ticket->assigned_to_id === null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'لا يمكن قبول تذكرة غير مُسنَدة إلى أحد؛ أسندها أولًا.',
+            ], 409);
+        }
+
         if ($ticket->status !== 'ASSIGNED') {
             return response()->json([
                 'success' => false,
@@ -761,6 +792,13 @@ class TicketController extends Controller
             return $this->forbidden('هذه المهمة غير مُسنَدة إليك.');
         }
 
+        if ($ticket->assigned_to_id === null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'لا يمكن الاعتذار عن تذكرة غير مُسنَدة إلى أحد؛ أسندها أولًا.',
+            ], 409);
+        }
+
         if ($ticket->status !== 'ASSIGNED') {
             return response()->json([
                 'success' => false,
@@ -769,10 +807,8 @@ class TicketController extends Controller
         }
 
         $validator = Validator::make($request->all(), [
-            'assignee_rejection_reason' => 'required|string|min:5',
-        ], [
-            'assignee_rejection_reason.required' => 'يلزم تدوين مبررات اعتذار/رفض استلام المهمة',
-        ]);
+            'assignee_rejection_reason' => 'required|string|min:5|max:1000',
+        ], TicketValidationMessages::all());
 
         if ($validator->fails()) {
             return response()->json([
@@ -837,10 +873,7 @@ class TicketController extends Controller
             'resolution_summary' => 'required_if:resolution_type,RESOLVED|nullable|string|min:5',
             'unresolved_reason' => 'required_if:resolution_type,UNRESOLVED|nullable|string|min:5',
             'proof_files.*' => 'nullable|file|mimes:jpg,jpeg,png,webp,mp4,mov,pdf|max:51200',
-        ], [
-            'resolution_summary.required_if' => 'حقل (ماذا تم لحل المشكلة) إجباري عند اختيار "تم الحل"',
-            'unresolved_reason.required_if' => 'حقل (أسباب عدم التمكن من الحل والعوائق) إجباري عند اختيار "تعذر الحل"',
-        ]);
+        ], TicketValidationMessages::all());
 
         if ($validator->fails()) {
             return response()->json([
@@ -942,7 +975,7 @@ class TicketController extends Controller
         $request->validate([
             'comment'      => 'required|string|max:2000',
             'is_internal'  => 'nullable|boolean',
-        ]);
+        ], TicketValidationMessages::all());
 
         // A submitter can follow up while the ticket is open; once it is closed
         // out the page is read-only for them.
@@ -986,7 +1019,7 @@ class TicketController extends Controller
             return $this->forbidden('إعادة التوجيه متاحة فقط لقائد الإدارة المعنية.');
         }
 
-        if (! in_array($ticket->status, ['ASSIGNED', 'IN_PROGRESS'], true)) {
+        if (! in_array($ticket->status, TicketAccess::REASSIGNABLE_STATUSES, true)) {
             return response()->json([
                 'success' => false,
                 'message' => 'لا يمكن إعادة توجيه تذكرة بحالتها الراهنة.',
@@ -997,7 +1030,7 @@ class TicketController extends Controller
             'assigned_to_id' => 'required|exists:users,id',
             'unit_id'        => 'nullable|exists:departmental_units,id',
             'reason'         => 'nullable|string|max:500',
-        ]);
+        ] + TicketWorkEstimate::rules(), TicketWorkEstimate::messages() + TicketValidationMessages::all());
 
         try {
             $updated = $actions->reassign(
@@ -1006,9 +1039,10 @@ class TicketController extends Controller
                 (int) $request->assigned_to_id,
                 $request->filled('unit_id') ? (int) $request->unit_id : null,
                 $request->input('reason'),
+                TicketWorkEstimate::only($request->only(TicketWorkEstimate::KEYS)),
             );
         } catch (TicketActionException $e) {
-            return response()->json(array_filter(['success' => false, 'message' => $e->getMessage(), 'errors' => $e->errors ?: null]), $e->status);
+            return response()->json($e->body(), $e->status);
         }
 
         return response()->json([

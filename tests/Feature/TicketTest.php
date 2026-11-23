@@ -494,7 +494,7 @@ class TicketTest extends TestCase
         $ticket = $this->makeTicket($dept);
 
         $this->actingAs($leader)->postJson("/api/v1/tickets/{$ticket->id}/approve", [
-            'sla_hours' => 24, 'unit_id' => $unit->id, 'assigned_to_id' => $member->id,
+            'sla_hours' => 24, 'unit_id' => $unit->id, 'assigned_to_id' => $member->id, 'task_scope' => 'simple', 'task_points' => 30,
         ])->assertOk();
 
         $this->assertSame('ASSIGNED', $ticket->fresh()->status);
@@ -555,7 +555,7 @@ class TicketTest extends TestCase
         $ticket = $this->makeTicket($dept);
 
         $this->actingAs($leader)->postJson("/api/v1/tickets/{$ticket->id}/approve", [
-            'sla_hours' => 24, 'unit_id' => $unit->id, 'assigned_to_id' => $globalAdmin->id,
+            'sla_hours' => 24, 'unit_id' => $unit->id, 'assigned_to_id' => $globalAdmin->id, 'task_scope' => 'simple', 'task_points' => 30,
         ])->assertOk();
     }
 

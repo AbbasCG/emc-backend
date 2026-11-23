@@ -21,6 +21,12 @@ class TicketAccess
     /** Statuses after which a ticket is finished. */
     public const CLOSED_STATUSES = ['RESOLVED', 'REJECTED_BY_ADMIN', 'UNRESOLVED'];
 
+    /**
+     * Statuses a manager may hand to (another) person: held by someone (ASSIGNED, IN_PROGRESS) or declined
+     * by its assignee and waiting for a manager to route it again (REJECTED_BY_ASSIGNEE).
+     */
+    public const REASSIGNABLE_STATUSES = ['ASSIGNED', 'IN_PROGRESS', 'REJECTED_BY_ASSIGNEE'];
+
     /** @var array<int, array<int, int>> department ids led by a user id, looked up once per request */
     private array $led = [];
 
@@ -126,18 +132,23 @@ class TicketAccess
         return [
             'approve' => $canManage && $ticket->status === 'PENDING_APPROVAL',
             'reject' => $canManage && $ticket->status === 'PENDING_APPROVAL',
-            'reassign' => $canManage && in_array($ticket->status, ['ASSIGNED', 'IN_PROGRESS'], true),
-            'accept_task' => $isAssignee && $ticket->status === 'ASSIGNED',
-            'reject_task' => $isAssignee && $ticket->status === 'ASSIGNED',
+            'reassign' => $canManage && in_array($ticket->status, self::REASSIGNABLE_STATUSES, true),
+            // A global role may act for the assignee, but there must BE one: accepting an unassigned ticket would
+            // leave it in progress with nobody holding it (and invisible in «مهامي»).
+            'accept_task' => $isAssignee && $ticket->assigned_to_id !== null && $ticket->status === 'ASSIGNED',
+            'reject_task' => $isAssignee && $ticket->assigned_to_id !== null && $ticket->status === 'ASSIGNED',
             'complete_task' => $isAssignee && $ticket->status === 'IN_PROGRESS',
             'add_internal_note' => $canManage,
             'comment' => true,
             'change_priority' => $canManage && $open,
+            // The planning estimate (size, points, hours) of an open ticket: same gate as priority.
+            'can_edit_estimate' => $canManage && $open,
         ];
     }
 
     /**
-     * Strip what this viewer may not read from a serialized ticket (list row or detail payload).
+     * Strip what this viewer may not read from a serialized ticket (list row or detail payload): internal notes
+     * and the estimate fields / ESTIMATE_UPDATED log rows (see canSeeInternal for who keeps them).
      *
      * @param  array<string, mixed>  $data
      * @return array<string, mixed>
@@ -150,9 +161,16 @@ class TicketAccess
 
         $data['internal_notes'] = null;
 
+        // The planning estimate (size, points, hours) and its change history are for the same people who may
+        // read internal notes: managers, global roles and the assignee. A plain department member can open the
+        // ticket without them.
+        foreach (['task_scope', 'task_points', 'estimated_hours'] as $key) {
+            unset($data[$key]);
+        }
+
         foreach (['activity_logs', 'activityLogs'] as $key) {
             if (isset($data[$key]) && is_array($data[$key])) {
-                $data[$key] = array_values(array_filter($data[$key], fn ($log) => ($log['action'] ?? null) !== 'INTERNAL_NOTE'));
+                $data[$key] = array_values(array_filter($data[$key], fn ($log) => ! in_array($log['action'] ?? null, ['INTERNAL_NOTE', 'ESTIMATE_UPDATED'], true)));
             }
         }
 

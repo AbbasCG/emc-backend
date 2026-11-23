@@ -22,6 +22,9 @@ class Ticket extends Model
         'description',
         'ticket_category',
         'priority',
+        'task_scope',
+        'task_points',
+        'estimated_hours',
         'department_id',
         'unit_id',
         'created_by_id',
@@ -44,6 +47,9 @@ class Ticket extends Model
         'expected_resolution_time' => 'datetime',
         'accepted_at' => 'datetime',
         'resolved_at' => 'datetime',
+        // Planning estimate only (see TicketWorkEstimate): never credited as points or hours.
+        'task_points' => 'integer',
+        'estimated_hours' => 'float',
     ];
 
     protected $appends = ['is_delayed'];

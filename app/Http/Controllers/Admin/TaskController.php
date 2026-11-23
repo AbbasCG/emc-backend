@@ -12,6 +12,9 @@ use App\Models\TaskChecklistItem;
 use App\Models\TaskComment;
 use App\Models\TaskEvaluation;
 use App\Services\ActivityLogger;
+use App\Services\TaskAcceptanceService;
+use App\Services\TaskCollaborationService;
+use App\Services\TaskStatusService;
 use App\Services\TaskWorkflowService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -349,14 +352,7 @@ class TaskController extends Controller
             return response()->json(['success' => false, 'message' => 'غير مصرح لك بقبول هذه المهمة.'], 403);
         }
 
-        $task->update([
-            'acceptance_status' => Task::ACCEPTANCE_ACCEPTED,
-            'accepted_at'       => now(),
-            'rejection_reason'  => null,
-            'status'            => in_array($task->status, ['idea', 'under_review']) ? 'planning' : $task->status,
-        ]);
-
-        ActivityLogger::log('task.accepted', $task, [], $request);
+        TaskAcceptanceService::accept($task, $request);
 
         return response()->json([
             'success' => true,
@@ -377,13 +373,7 @@ class TaskController extends Controller
             'reason' => 'required|string|min:3|max:1000',
         ]);
 
-        $task->update([
-            'acceptance_status' => Task::ACCEPTANCE_REJECTED,
-            'rejection_reason'  => $data['reason'],
-            'rejected_at'       => now(),
-        ]);
-
-        ActivityLogger::log('task.rejected', $task, ['reason' => $data['reason']], $request);
+        TaskAcceptanceService::reject($task, $data['reason'], $request);
 
         return response()->json([
             'success' => true,
@@ -571,10 +561,7 @@ class TaskController extends Controller
     {
         $data = $request->validate(['comment' => 'required|string']);
 
-        $comment = $task->comments()->create([
-            'user_id' => $request->user()->id,
-            'comment' => $data['comment'],
-        ]);
+        $comment = TaskCollaborationService::addComment($task, $request->user()->id, $data['comment']);
 
         return response()->json([
             'success' => true,
@@ -607,7 +594,7 @@ class TaskController extends Controller
             'sort_order'   => 'integer',
         ]);
 
-        $item->update($data);
+        TaskCollaborationService::updateChecklistItem($item, $data);
 
         return response()->json([
             'success' => true,
@@ -659,8 +646,7 @@ class TaskController extends Controller
             'status' => 'required|in:idea,under_review,planning,waiting_approval,in_progress,completed,postponed,cancelled,needs_evaluation',
         ]);
 
-        $task->update($data);
-        ActivityLogger::log('task.status_changed', $task, $data, $request);
+        TaskStatusService::move($task, $data['status'], $request);
 
         return response()->json([
             'success' => true,

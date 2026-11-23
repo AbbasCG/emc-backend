@@ -139,13 +139,11 @@ class TicketCapabilitiesTest extends TestCase
     // ── The exact drift this feature exists to close ─────────────────────────
 
     /**
-     * REJECTED_BY_ASSIGNEE is a dead-end status: no endpoint transitions out
-     * of it, and reassign() has never accepted it (its guard is strictly
-     * ASSIGNED/IN_PROGRESS). The pre-existing Admin table nonetheless showed
-     * a "reassign" button for this exact status - clicking it would 409.
-     * capabilities.reassign must correctly report false here.
+     * REJECTED_BY_ASSIGNEE used to be a dead end (reassign() refused it with 409 although the decline
+     * message promises re-routing). It is now routable again by the department's manager, and the reported
+     * capability must match what the endpoint really does: true for a manager, false for anyone else.
      */
-    public function test_reassign_is_false_for_a_rejected_by_assignee_ticket(): void
+    public function test_reassign_is_true_for_a_manager_on_a_rejected_by_assignee_ticket(): void
     {
         $dept = $this->makeDepartment();
         $leader = $this->makeLeader($dept);
@@ -157,12 +155,17 @@ class TicketCapabilitiesTest extends TestCase
         ]);
 
         $caps = $this->capabilitiesFor($leader, $ticket);
-        $this->assertFalse($caps['reassign'], 'reassign() only accepts ASSIGNED/IN_PROGRESS.');
+        $this->assertTrue($caps['reassign'], 'a declined ticket waits for its manager to route it again.');
+        $this->assertFalse($caps['accept_task'] || $caps['reject_task'] || $caps['complete_task'], 'the decliner has nothing left to do on it');
 
-        // Cross-check against the real endpoint: it must genuinely refuse.
+        $member = $this->makeUser('programs_manager');
+        $this->assertFalse($this->capabilitiesFor($member, $this->makeTicket($dept, ['status' => 'REJECTED_BY_ASSIGNEE', 'assigned_to_id' => $assignee->id, 'created_by_id' => $member->id]))['reassign']);
+
+        // Cross-check against the real endpoint: it genuinely accepts a different assignee.
+        $other = $this->makeUser('tech_admin');
         Sanctum::actingAs($leader);
-        $this->postJson("/api/v1/tickets/{$ticket->id}/reassign", ['assigned_to_id' => $assignee->id])
-            ->assertStatus(409);
+        $this->postJson("/api/v1/tickets/{$ticket->id}/reassign", ['assigned_to_id' => $other->id, 'task_scope' => 'simple', 'task_points' => 30])
+            ->assertOk()->assertJsonPath('data.status', 'ASSIGNED');
     }
 
     public function test_reassign_is_true_for_assigned_and_in_progress(): void
@@ -244,6 +247,46 @@ class TicketCapabilitiesTest extends TestCase
         $caps = $this->capabilitiesFor($admin, $ticket);
 
         $this->assertTrue($caps['complete_task'], 'isAssignee() treats global roles as eligible.');
+    }
+
+    public function test_a_global_role_cannot_accept_or_reject_a_ticket_nobody_holds(): void
+    {
+        $dept = $this->makeDepartment();
+        $admin = $this->makeUser('admin');
+        $ticket = $this->makeTicket($dept, ['status' => 'ASSIGNED', 'assigned_to_id' => null]);
+
+        $caps = $this->capabilitiesFor($admin, $ticket);
+        $this->assertFalse($caps['accept_task'], 'there is nobody to accept it for');
+        $this->assertFalse($caps['reject_task']);
+
+        Sanctum::actingAs($admin);
+        $this->postJson("/api/v1/tickets/{$ticket->id}/accept-task")
+            ->assertStatus(409)->assertJsonPath('message', 'لا يمكن قبول تذكرة غير مُسنَدة إلى أحد؛ أسندها أولًا.');
+        $this->postJson("/api/v1/tickets/{$ticket->id}/reject-task", ['assignee_rejection_reason' => 'لا يوجد مكلف'])
+            ->assertStatus(409)->assertJsonPath('message', 'لا يمكن الاعتذار عن تذكرة غير مُسنَدة إلى أحد؛ أسندها أولًا.');
+
+        $fresh = $ticket->fresh();
+        $this->assertSame(['ASSIGNED', null, null], [$fresh->status, $fresh->assigned_to_id, $fresh->accepted_at]);
+        $this->assertSame(0, \App\Models\TicketActivityLog::where('ticket_id', $ticket->id)->count());
+    }
+
+    public function test_a_global_role_can_still_accept_reject_and_complete_for_a_ticket_that_has_an_assignee(): void
+    {
+        $dept = $this->makeDepartment();
+        $admin = $this->makeUser('admin');
+        $assignee = $this->makeUser('support_agent');
+
+        $a = $this->makeTicket($dept, ['status' => 'ASSIGNED', 'assigned_to_id' => $assignee->id]);
+        $this->assertTrue($this->capabilitiesFor($admin, $a)['accept_task']);
+        $this->postJson("/api/v1/tickets/{$a->id}/accept-task")->assertOk()->assertJsonPath('data.status', 'IN_PROGRESS');
+
+        $b = $this->makeTicket($dept, ['status' => 'ASSIGNED', 'assigned_to_id' => $assignee->id]);
+        $this->postJson("/api/v1/tickets/{$b->id}/reject-task", ['assignee_rejection_reason' => 'لا أستطيع'])->assertOk();
+
+        // The same hole does not exist on completion: it needs IN_PROGRESS, which can no longer be reached without
+        // an assignee. A legacy IN_PROGRESS ticket with nobody on it can still be closed by a global role (cleanup).
+        $legacy = $this->makeTicket($dept, ['status' => 'IN_PROGRESS', 'assigned_to_id' => null]);
+        $this->postJson("/api/v1/tickets/{$legacy->id}/complete-task", ['resolution_type' => 'UNRESOLVED', 'unresolved_reason' => 'تنظيف بيانات قديمة'])->assertOk();
     }
 
     // ── Closed statuses ───────────────────────────────────────────────────────
