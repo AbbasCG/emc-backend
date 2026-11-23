@@ -409,7 +409,7 @@ class TicketOperationsCenterTest extends TestCase
         $this->assertCount(5, $cols['PENDING_APPROVAL']['tickets']);
         $this->assertSame(1, $cols['IN_PROGRESS']['count']);
         $this->assertSame(0, $cols['RESOLVED']['count']);
-        $this->assertSame(8, $cols->count(), 'one column per status, including PENDING_REVIEW');
+        $this->assertSame(10, $cols->count(), 'one column per status, including the review and deployment stages');
         $this->assertArrayHasKey('capabilities', $cols['PENDING_APPROVAL']['tickets'][0]);
     }
 
@@ -648,7 +648,9 @@ class TicketOperationsCenterTest extends TestCase
     {
         $this->member($this->deptA);
         $this->member($this->deptA);
-        $t = $this->ticket($this->deptA, ['status' => 'ASSIGNED', 'assigned_to_id' => $this->member($this->deptA)->id]);
+        // CHANGED: the leader is one of the suggestions, and a manager naming THEMSELVES the assignee cannot change the
+        // estimate in the same call, so the ticket already carries the estimate the request repeats.
+        $t = $this->ticket($this->deptA, ['status' => 'ASSIGNED', 'assigned_to_id' => $this->member($this->deptA)->id, 'task_scope' => 'simple', 'task_points' => 30]);
 
         foreach ($this->actingAs($this->leaderA)->getJson(self::API."/{$t->id}/assignment-suggestions")->json('data.candidates') as $c) {
             $this->actingAs($this->leaderA)->postJson(self::API."/{$t->id}/reassign", ['assigned_to_id' => $c['id'], 'task_scope' => 'simple', 'task_points' => 30])->assertOk();
@@ -893,7 +895,8 @@ class TicketOperationsCenterTest extends TestCase
 
         foreach ($paths as $i => $p) {
             $this->assertSame($small[$i], $large[$i], "{$p}: 4 tickets ran {$small[$i]} queries, 30 ran {$large[$i]}");
-            $this->assertLessThanOrEqual(40, $large[$i], "{$p} runs {$large[$i]} queries");
+            // Tightest value that passes (analytics is the heaviest at 31; it was 40 before the deployment stages). The board runs no card query for an empty column, so its 10 columns stay cheap.
+            $this->assertLessThanOrEqual(31, $large[$i], "{$p} runs {$large[$i]} queries");
         }
     }
 

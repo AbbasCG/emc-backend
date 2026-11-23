@@ -38,7 +38,7 @@ class TicketOpsService
     private const INSIGHT_LIMIT = 20;
     private const REVIEW_ACTION = 'بانتظار اعتماد المراجعة — راجع الإنجاز أو أعده للتنفيذ';
 
-    private const STATUS_ORDER = ['PENDING_APPROVAL', 'ASSIGNED', 'IN_PROGRESS', 'PENDING_REVIEW', 'RESOLVED', 'UNRESOLVED', 'REJECTED_BY_ADMIN', 'REJECTED_BY_ASSIGNEE'];
+    private const STATUS_ORDER = ['PENDING_APPROVAL', 'ASSIGNED', 'IN_PROGRESS', 'PENDING_REVIEW', 'APPROVED_FOR_DEPLOY', 'PENDING_VERIFICATION', 'RESOLVED', 'UNRESOLVED', 'REJECTED_BY_ADMIN', 'REJECTED_BY_ASSIGNEE'];
     private const PRIORITY_LABELS = ['LOW' => 'منخفضة', 'MEDIUM' => 'متوسطة', 'HIGH' => 'عالية', 'CRITICAL' => 'حرجة'];
     private const STOPWORDS = ['في', 'من', 'على', 'الى', 'عن', 'مع', 'هذا', 'هذه', 'ذلك', 'التي', 'الذي', 'لا', 'ما', 'او', 'ان', 'كل'];
 
@@ -68,6 +68,8 @@ class TicketOpsService
              SUM(CASE WHEN {$st} = 'ASSIGNED' THEN 1 ELSE 0 END) AS assigned,
              SUM(CASE WHEN {$st} = 'IN_PROGRESS' THEN 1 ELSE 0 END) AS in_progress,
              SUM(CASE WHEN {$st} = 'PENDING_REVIEW' THEN 1 ELSE 0 END) AS pending_review,
+             SUM(CASE WHEN {$st} = 'APPROVED_FOR_DEPLOY' THEN 1 ELSE 0 END) AS approved_for_deploy,
+             SUM(CASE WHEN {$st} = 'PENDING_VERIFICATION' THEN 1 ELSE 0 END) AS pending_verification,
              SUM(CASE WHEN {$st} = 'RESOLVED' THEN 1 ELSE 0 END) AS resolved,
              SUM(CASE WHEN {$st} = 'UNRESOLVED' THEN 1 ELSE 0 END) AS unresolved,
              SUM(CASE WHEN {$st} = 'REJECTED_BY_ADMIN' THEN 1 ELSE 0 END) AS rejected_by_admin,
@@ -90,6 +92,8 @@ class TicketOpsService
                 'assigned' => $n('assigned'),
                 'in_progress' => $n('in_progress'),
                 'pending_review' => $n('pending_review'),
+                'approved_for_deploy' => $n('approved_for_deploy'),
+                'pending_verification' => $n('pending_verification'),
                 'resolved' => $n('resolved'),
                 'unresolved' => $n('unresolved'),
                 'rejected_by_admin' => $n('rejected_by_admin'),
@@ -170,10 +174,11 @@ class TicketOpsService
 
         $columns = [];
         foreach ($wanted as $status) {
-            if ($status === TicketAccess::PENDING_REVIEW && ! $managesAny && (int) ($counts[$status] ?? 0) === 0) {
+            if (in_array($status, TicketAccess::REVIEW_STAGES, true) && ! $managesAny && (int) ($counts[$status] ?? 0) === 0) {
                 continue;
             }
-            $cards = $this->query->withLastActivity($this->scope($user, $f, ignore: [])->whereRaw("{$st} = ?", [$status]))
+            // The exact count is already known: an empty column costs no card query (most columns are empty).
+            $cards = (int) ($counts[$status] ?? 0) === 0 ? collect() : $this->query->withLastActivity($this->scope($user, $f, ignore: [])->whereRaw("{$st} = ?", [$status]))
                 ->with(['department:id,name,name_ar', 'assignee:id,name', 'creditor:id,name'])
                 ->orderByRaw("CASE tickets.priority WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2 ELSE 1 END DESC")
                 ->orderBy('tickets.created_at', 'desc')->limit($perColumn)->get();
@@ -204,7 +209,7 @@ class TicketOpsService
 
         // The planning estimate is for managers, global roles and the assignee (TicketAccess::canSeeInternal).
         $estimate = $this->access->canSeeInternal($user, $t)
-            ? ['task_scope' => $t->task_scope, 'task_points' => $t->task_points, 'estimated_hours' => $t->estimated_hours, 'actual_minutes' => $t->actual_minutes, 'credit' => $this->access->creditInfo($t)]
+            ? ['task_scope' => $t->task_scope, 'task_points' => $t->task_points, 'estimated_hours' => $t->estimated_hours, 'actual_minutes' => $t->actual_minutes, 'credit' => $this->access->creditInfo($t), 'requires_deployment' => (bool) $t->requires_deployment, 'workflow' => $this->access->workflow($t)]
             : [];
 
         return $estimate + [
@@ -360,11 +365,13 @@ class TicketOpsService
                     $since = $t->expected_resolution_time ?? $t->created_at;
                     $hours = (int) $since->diffInHours($now, true);
                     $critical = $hours >= (int) $overdueRule['critical_after_hours'];
-                    if ($t->status === TicketAccess::PENDING_REVIEW) {
-                        // The assignee has finished: the delay is the reviewer's. No "contact the assignee / reassign"
-                        // (a reassignment is refused for a ticket in review) and no priority bump.
-                        $push($t, 'ticket_overdue', $critical ? 'critical' : 'high', ($critical ? 90 : 78) + min(9, intdiv($hours, 24)), 'بانتظار اعتماد المراجعة',
-                            'تجاوزت موعد حلّها منذ '.$this->age($hours).' وهي بانتظار المراجعة.', $since, self::REVIEW_ACTION);
+                    if (in_array($t->status, TicketAccess::REVIEW_STAGES, true)) {
+                        // The assignee has finished: the delay is in someone else's hands (the reviewer, the deployer or the live
+                        // test). No "contact the assignee / reassign" (a reassignment is refused in these stages), no blame on the
+                        // assignee and no priority bump.
+                        [$title, $action] = $this->stageInsight($t->status);
+                        $push($t, 'ticket_overdue', $critical ? 'critical' : 'high', ($critical ? 90 : 78) + min(9, intdiv($hours, 24)), $title,
+                            'تجاوزت موعد حلّها منذ '.$this->age($hours).' وهي '.$title.'.', $since, $action);
 
                         return;
                     }
@@ -397,20 +404,36 @@ class TicketOpsService
 
         // In the hands of an assignee but silent.
         $silentCut = $now->subHours(self::INACTIVE_HOURS);
-        $base()->whereIn('tickets.status', ['ASSIGNED', 'IN_PROGRESS', TicketAccess::PENDING_REVIEW])->whereNotNull('tickets.assigned_to_id')
+        $base()->whereIn('tickets.status', ['ASSIGNED', 'IN_PROGRESS', ...TicketAccess::REVIEW_STAGES])->whereNotNull('tickets.assigned_to_id')
             ->whereRaw('COALESCE((SELECT MAX(logged_at) FROM ticket_activity_logs WHERE ticket_id = tickets.id), tickets.created_at) < ?', [$silentCut])
             ->orderBy('tickets.updated_at')->limit(self::INSIGHT_LIMIT)->get()
             ->each(function (Ticket $t) use ($push, $now) {
                 $last = $t->last_activity_at ? CarbonImmutable::parse($t->last_activity_at) : $t->created_at;
-                $review = $t->status === TicketAccess::PENDING_REVIEW;
-                $push($t, 'inactive', 'medium', 55 + min(10, intdiv((int) $last->diffInHours($now, true), 24)), $review ? 'بانتظار المراجعة والاعتماد' : 'لا نشاط على التذكرة',
-                    ($review ? 'أنهى المكلف العمل ولم يُراجَع منذ ' : 'لم يُسجَّل أي نشاط منذ ').$this->age((int) $last->diffInHours($now, true)).'.', $last, $review ? self::REVIEW_ACTION : 'اطلب تحديثًا من المكلف.');
+                $review = in_array($t->status, TicketAccess::REVIEW_STAGES, true);
+                [$stageTitle, $stageAction] = $review ? $this->stageInsight($t->status) : [null, null];
+                $push($t, 'inactive', 'medium', 55 + min(10, intdiv((int) $last->diffInHours($now, true), 24)), $review ? $stageTitle : 'لا نشاط على التذكرة',
+                    ($review ? 'لم تتحرك منذ ' : 'لم يُسجَّل أي نشاط منذ ').$this->age((int) $last->diffInHours($now, true)).'.', $last, $review ? $stageAction : 'اطلب تحديثًا من المكلف.');
             });
 
         $list = array_values($found);
         usort($list, fn ($a, $b) => [$b['score'], $b['since']] <=> [$a['score'], $a['since']]);
 
         return array_slice($list, 0, self::INSIGHT_LIMIT);
+    }
+
+    /**
+     * Title and suggested action for a ticket parked in one of the review stages (the assignee is not the one holding it,
+     * except for the live test, which is neutral).
+     *
+     * @return array{0: string, 1: string}
+     */
+    private function stageInsight(string $status): array
+    {
+        return match ($status) {
+            TicketAccess::APPROVED_FOR_DEPLOY => ['بانتظار النشر', 'انشر التعديل على الموقع الحي ثم سجّل النشر.'],
+            TicketAccess::PENDING_VERIFICATION => ['بانتظار اختبار المكلّف على الموقع الحي', 'بانتظار تحقق المكلّف على الموقع الحي.'],
+            default => ['بانتظار اعتماد المراجعة', self::REVIEW_ACTION],
+        };
     }
 
     /** A priority suggestion, or null when the ticket is already at or above the target. */

@@ -338,10 +338,10 @@ class ExecutiveCommandCenterService
         }
 
         // Past their expected resolution time.
-        foreach (Ticket::query()->whereIn('status', ['ASSIGNED', 'IN_PROGRESS', 'PENDING_REVIEW'])->whereNotNull('expected_resolution_time')->where('expected_resolution_time', '<', $this->now)
+        foreach (Ticket::query()->whereIn('status', ['ASSIGNED', 'IN_PROGRESS', ...TicketAccess::REVIEW_STAGES])->whereNotNull('expected_resolution_time')->where('expected_resolution_time', '<', $this->now)
             ->orderBy('expected_resolution_time')->limit(self::PER_COLLECTOR_ROWS)->get(['id', 'title', 'status', 'expected_resolution_time', 'created_by_name']) as $t) {
             $this->add('tickets', 'ticket_overdue', 'needs_attention', $this->trim($t->title), 'تجاوزت الموعد المتوقع للحل.', 'critical', '/dashboard/tickets/'.$t->id, 'فتح التذكرة',
-                $t->status, $t->status === 'ASSIGNED' ? 'مُسندة' : ($t->status === 'PENDING_REVIEW' ? 'بانتظار المراجعة' : 'قيد المعالجة'), 'متأخرة', $t->expected_resolution_time, $t->expected_resolution_time, $t->created_by_name, (string) $t->id);
+                $t->status, $t->status === 'ASSIGNED' ? 'مُسندة' : (match ($t->status) { 'PENDING_REVIEW' => 'بانتظار المراجعة', 'APPROVED_FOR_DEPLOY' => 'بانتظار النشر', 'PENDING_VERIFICATION' => 'بانتظار تحقق المكلّف', default => 'قيد المعالجة' }), 'متأخرة', $t->expected_resolution_time, $t->expected_resolution_time, $t->created_by_name, (string) $t->id);
         }
 
         // Recently resolved, and suggestions that were taken up.

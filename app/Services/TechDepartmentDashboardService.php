@@ -195,7 +195,7 @@ class TechDepartmentDashboardService
         return [
             $this->metricRow('open_tickets', 'تذاكر نشطة', (clone $open)->count()),
             $this->metricRow('pending_approval_tickets', 'بانتظار الاعتماد', (clone $base)->where('status', 'PENDING_APPROVAL')->count()),
-            $this->metricRow('in_progress_tickets', 'قيد المعالجة', (clone $base)->whereIn('status', ['ASSIGNED', 'IN_PROGRESS', 'PENDING_REVIEW'])->count()),
+            $this->metricRow('in_progress_tickets', 'قيد المعالجة', (clone $base)->whereIn('status', ['ASSIGNED', 'IN_PROGRESS', ...TicketAccess::REVIEW_STAGES])->count()),
             $this->metricRow('stale_pending_tickets', 'بانتظار الاعتماد منذ أكثر من '.self::STALE_PENDING_TICKET_DAYS.' أيام', $stale, $stale > 0 ? 'warning' : 'good'),
         ];
     }

@@ -108,6 +108,31 @@ class AuditTicketWorkLinksCommand extends Command
             VolunteerPointAward::query()->where('source_type', Ticket::class)->select('source_id')->groupBy('source_id')->havingRaw('COUNT(*) > 1')
                 ->orderBy('source_id')->pluck('source_id')->map(fn ($i) => (int) $i)->all()];
 
+        // 15-16. The deployment cycle. A ticket in APPROVED_FOR_DEPLOY / PENDING_VERIFICATION must carry the approved values
+        //        (and, once live, the deployment fields); a deployment ticket credited without the live verification is wrong.
+        $checks[] = ['deployment_stage_without_approved_values', 'تذكرة نشر في مرحلة الاعتماد/التحقق بلا قيم معتمدة أو بيانات نشر / Deployment ticket in APPROVED_FOR_DEPLOY or PENDING_VERIFICATION without approved values or deploy fields',
+            $this->ids(Ticket::query()->where('requires_deployment', true)->where(function ($q) {
+                $q->where(fn ($a) => $a->whereIn('status', ['APPROVED_FOR_DEPLOY', 'PENDING_VERIFICATION'])
+                    ->where(fn ($b) => $b->whereNull('actual_minutes')->orWhereNull('task_points')->orWhereNull('task_scope')->orWhereNull('review_approved_by_id')->orWhereNull('review_approved_at')))
+                    ->orWhere(fn ($a) => $a->where('status', 'PENDING_VERIFICATION')
+                        ->where(fn ($b) => $b->whereNull('deployed_at')->orWhereNull('deployed_by_id')->orWhereNull('live_url')));
+            }))];
+        $checks[] = ['credited_deployment_without_verification', 'تذكرة نشر معتمدة الرصيد بلا تحقق على الموقع الحي / Credited deployment ticket without verified_at',
+            $this->ids(Ticket::query()->where('requires_deployment', true)->whereNotNull('credited_at')->whereNull('verified_at'))];
+
+        // 17. A deployment ticket parked after review whose assignee can no longer act (gone, deactivated, blocked): nobody could
+        //     verify it on the live site. A manager frees it by returning it for rework.
+        $stuck = [];
+        Ticket::query()->where('requires_deployment', true)->whereIn('status', ['APPROVED_FOR_DEPLOY', 'PENDING_VERIFICATION'])
+            ->orderBy('id')->chunkById(500, function ($tickets) use (&$stuck, $access) {
+                foreach ($tickets as $t) {
+                    if ($access->assigneeUnavailable($t)) {
+                        $stuck[] = (int) $t->id;
+                    }
+                }
+            });
+        $checks[] = ['deployment_assignee_unavailable', 'تذكرة نشر عالقة: المكلّف محذوف أو غير فعّال أو محجوب / Deployment ticket in APPROVED_FOR_DEPLOY or PENDING_VERIFICATION whose assignee is missing, inactive or blocked', $stuck];
+
         $rows = [];
         $total = 0;
         foreach ($checks as [$key, $label, $ids]) {

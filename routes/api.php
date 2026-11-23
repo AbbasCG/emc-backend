@@ -2503,6 +2503,12 @@ Route::middleware('auth:sanctum')->prefix('v1/tickets')->group(function () {
     // Final approval of a completion (the ONLY step that credits points/hours, once) and the way back for rework.
     Route::post('/{id}/approve-completion', [\App\Http\Controllers\Api\TicketOpsController::class, 'approveCompletion'])->whereNumber('id')->middleware('throttle:30,1');
     Route::post('/{id}/return-for-rework', [\App\Http\Controllers\Api\TicketOpsController::class, 'returnForRework'])->whereNumber('id')->middleware('throttle:30,1');
+    // The live-deployment cycle (only tickets flagged requires_deployment): approve for deployment, put it live, then the
+    // assignee verifies on the live site (the only step that credits) or reports that it failed.
+    Route::post('/{id}/approve-for-deploy', [\App\Http\Controllers\Api\TicketOpsController::class, 'approveForDeploy'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::post('/{id}/mark-deployed', [\App\Http\Controllers\Api\TicketOpsController::class, 'markDeployed'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::post('/{id}/verify-resolved', [\App\Http\Controllers\Api\TicketOpsController::class, 'verifyResolved'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::post('/{id}/verify-failed', [\App\Http\Controllers\Api\TicketOpsController::class, 'verifyFailed'])->whereNumber('id')->middleware('throttle:30,1');
     Route::get('/{ticketId}/attachments/{attachmentId}/download', [TicketController::class, 'downloadAttachment'])
         ->name('tickets.attachments.download');
 });

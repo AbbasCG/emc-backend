@@ -8,6 +8,7 @@ use App\Models\Ticket;
 use App\Services\TicketAccess;
 use App\Services\TicketActions;
 use App\Services\TicketCreditService;
+use App\Services\TicketDeploymentService;
 use App\Services\TicketMyWork;
 use App\Services\TicketOpsService;
 use App\Services\TicketQuery;
@@ -35,6 +36,7 @@ class TicketOpsController extends Controller
         private readonly TicketAccess $access,
         private readonly TicketActions $actions,
         private readonly TicketCreditService $credits,
+        private readonly TicketDeploymentService $deployments,
     ) {}
 
     // GET /v1/tickets/stats
@@ -115,7 +117,8 @@ class TicketOpsController extends Controller
         $rules = TicketWorkEstimate::rules();
         $rules['task_scope'] = ['required', ...$rules['task_scope']];
         $rules['task_points'] = ['required', ...$rules['task_points']];
-        $validator = Validator::make($request->all(), $rules, TicketValidationMessages::all() + TicketWorkEstimate::messages() + [
+        $rules += TicketWorkEstimate::flagRules();
+        $validator = Validator::make($request->all(), $rules, TicketValidationMessages::all() + TicketWorkEstimate::messages() + TicketWorkEstimate::flagMessages() + [
             'task_scope.required' => TicketWorkEstimate::MISSING_MESSAGE,
             'task_points.required' => TicketWorkEstimate::MISSING_MESSAGE,
         ]);
@@ -164,6 +167,69 @@ class TicketOpsController extends Controller
         ]);
     }
 
+    // POST /v1/tickets/{id}/approve-for-deploy
+    public function approveForDeploy(Request $request, int $id): JsonResponse
+    {
+        // Same as approve-completion: NO validation here, the service validates after the gates (one 422).
+        try {
+            $ticket = $this->deployments->approveForDeploy(
+                $id,
+                $request->user(),
+                TicketWorkEstimate::only($request->all()),
+                $request->input('note'),
+                $request->input('actual_minutes'),
+            );
+        } catch (TicketActionException $e) {
+            return $this->refused($e);
+        }
+
+        return $this->deploymentResponse($ticket, $request, 'تم اعتماد العمل للنشر على الموقع الحي. لم تُضَف أي نقاط أو ساعات بعد؛ تُضاف بعد تحقق المكلّف على الموقع.');
+    }
+
+    // POST /v1/tickets/{id}/mark-deployed
+    public function markDeployed(Request $request, int $id): JsonResponse
+    {
+        try {
+            $ticket = $this->deployments->markDeployed($id, $request->user(), $request->input('live_url'), $request->input('note'));
+        } catch (TicketActionException $e) {
+            return $this->refused($e);
+        }
+
+        return $this->deploymentResponse($ticket, $request, 'تم تسجيل النشر على الموقع الحي، وأُبلغ المكلّف ليتحقق منه.');
+    }
+
+    // POST /v1/tickets/{id}/verify-resolved
+    public function verifyResolved(Request $request, int $id): JsonResponse
+    {
+        try {
+            $ticket = $this->deployments->verifyResolved($id, $request->user(), $request->input('note'));
+        } catch (TicketActionException $e) {
+            return $this->refused($e);
+        }
+
+        return $this->deploymentResponse($ticket, $request, 'تم التحقق من الحل على الموقع الحي وإغلاق التذكرة وإضافة النقاط والساعات إلى رصيدك.');
+    }
+
+    // POST /v1/tickets/{id}/verify-failed
+    public function verifyFailed(Request $request, int $id): JsonResponse
+    {
+        try {
+            $ticket = $this->deployments->verifyFailed($id, $request->user(), $request->input('description'));
+        } catch (TicketActionException $e) {
+            return $this->refused($e);
+        }
+
+        return $this->deploymentResponse($ticket, $request, 'سُجّلت المشكلة وأُعيدت التذكرة إلى قيد التنفيذ؛ يلزم مراجعة واعتماد ونشر جديد.');
+    }
+
+    private function deploymentResponse(Ticket $ticket, Request $request, string $message): JsonResponse
+    {
+        return response()->json([
+            'success' => true,
+            'message' => $message,
+            'data' => $this->ticketPayload($ticket->fresh(['department', 'unit', 'assignee', 'creditor:id,name', 'reviewApprover:id,name', 'deployer:id,name', 'activityLogs']), $request->user()),
+        ]);
+    }
     // POST /v1/tickets/{id}/return-for-rework
     public function returnForRework(Request $request, int $id): JsonResponse
     {
@@ -220,7 +286,8 @@ class TicketOpsController extends Controller
             'unit_id' => ['nullable', 'integer', 'exists:departmental_units,id'],
             'reason' => ['nullable', 'string', 'max:500'],
             ...TicketWorkEstimate::rules(),
-        ], TicketWorkEstimate::messages() + TicketValidationMessages::all() + [
+            ...TicketWorkEstimate::flagRules(),
+        ], TicketWorkEstimate::messages() + TicketWorkEstimate::flagMessages() + TicketValidationMessages::all() + [
             'ticket_ids.required' => 'اختر تذكرة واحدة على الأقل.',
             'ticket_ids.max' => 'الحد الأقصى '.TicketActions::MAX_BULK.' تذكرة في العملية الواحدة.',
             'priority.required_if' => 'اختر الأولوية الجديدة.',
@@ -268,6 +335,7 @@ class TicketOpsController extends Controller
             'task_scope' => $ticket->task_scope,
             'task_points' => $ticket->task_points,
             'estimated_hours' => $ticket->estimated_hours,
+            'requires_deployment' => (bool) $ticket->requires_deployment,
             'updated_at' => $ticket->updated_at?->toIso8601String(),
             'capabilities' => $this->access->capabilities($user, $ticket),
         ];

@@ -11,6 +11,37 @@ use Illuminate\Support\Facades\Log;
 class TaskWorkflowService
 {
     /**
+     * The ONE definition of the points of each task size. validatePointsForScope() judges by the RANGE (min..max, `max`
+     * null = no cap); `options` is what a dropdown offers (every step of the range; for the uncapped strategic size a
+     * fixed ladder). Validation stays range based on purpose: an in-range legacy value that is not an option (35 is, 45 is,
+     * but a stored 43 or a strategic 320 would not be) is still valid, so the UI shows the options and always includes the
+     * value already stored.
+     */
+    public const SCOPE_POINTS = [
+        Task::SCOPE_SIMPLE => ['label' => 'البسيطة', 'min' => 25, 'max' => 50, 'step' => 5],
+        Task::SCOPE_MEDIUM => ['label' => 'المتوسطة', 'min' => 75, 'max' => 150, 'step' => 5],
+        Task::SCOPE_LARGE => ['label' => 'الكبيرة', 'min' => 200, 'max' => 300, 'step' => 10],
+        Task::SCOPE_STRATEGIC => ['label' => 'الاستراتيجية', 'min' => 300, 'max' => null, 'options' => [300, 350, 400, 500, 600, 750, 1000]],
+    ];
+
+    /** @return array<string, array<int, int>> the options a dropdown offers, per size */
+    public static function pointsOptions(): array
+    {
+        $out = [];
+        foreach (self::SCOPE_POINTS as $scope => $def) {
+            $out[$scope] = $def['options'] ?? range($def['min'], $def['max'], $def['step']);
+        }
+
+        return $out;
+    }
+
+    /** @return array<string, array{min: int, max: ?int}> */
+    public static function scopeRanges(): array
+    {
+        return array_map(fn ($def) => ['min' => $def['min'], 'max' => $def['max']], self::SCOPE_POINTS);
+    }
+
+    /**
      * التحقق من مطابقة النقاط مع حجم المهمة
      */
     public static function validatePointsForScope(?string $scope, ?int $points): array
@@ -19,35 +50,20 @@ class TaskWorkflowService
             return ['valid' => true];
         }
 
-        switch ($scope) {
-            case Task::SCOPE_SIMPLE:
-                if ($points < 25 || $points > 50) {
-                    return ['valid' => false, 'message' => 'نقاط المهمة البسيطة يجب أن تتراوح بين 25 و 50 نقطة.'];
-                }
-                break;
+        $def = self::SCOPE_POINTS[$scope] ?? null;
+        if ($def === null) {
+            return ['valid' => true];
+        }
 
-            case Task::SCOPE_MEDIUM:
-                if ($points < 75 || $points > 150) {
-                    return ['valid' => false, 'message' => 'نقاط المهمة المتوسطة يجب أن تتراوح بين 75 و 150 نقطة.'];
-                }
-                break;
-
-            case Task::SCOPE_LARGE:
-                if ($points < 200 || $points > 300) {
-                    return ['valid' => false, 'message' => 'نقاط المهمة الكبيرة يجب أن تتراوح بين 200 و 300 نقطة.'];
-                }
-                break;
-
-            case Task::SCOPE_STRATEGIC:
-                if ($points < 300) {
-                    return ['valid' => false, 'message' => 'نقاط المهمة الاستراتيجية أو عالية الأثر تبدأ من 300 نقطة فما فوق.'];
-                }
-                break;
+        if ($points < $def['min'] || ($def['max'] !== null && $points > $def['max'])) {
+            // The wording is unchanged from the original per-size messages.
+            return ['valid' => false, 'message' => $scope === Task::SCOPE_STRATEGIC
+                ? 'نقاط المهمة الاستراتيجية أو عالية الأثر تبدأ من 300 نقطة فما فوق.'
+                : 'نقاط المهمة '.$def['label'].' يجب أن تتراوح بين '.$def['min'].' و '.$def['max'].' نقطة.'];
         }
 
         return ['valid' => true];
     }
-
     /**
      * إضافة النقاط وساعات التطوع التراكمية للعضو المستلم بعد الاعتماد النهائي
      */

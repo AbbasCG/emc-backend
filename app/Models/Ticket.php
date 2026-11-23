@@ -59,6 +59,12 @@ class Ticket extends Model
         'actual_minutes' => 'integer',
         'credited_at' => 'datetime',
         'submitted_at' => 'datetime',
+        // The live-deployment cycle (see TicketDeploymentService); none of these is mass assignable.
+        'requires_deployment' => 'boolean',
+        'review_approved_at' => 'datetime',
+        'deployed_at' => 'datetime',
+        'verified_at' => 'datetime',
+        'review_round' => 'integer',
     ];
 
     /**
@@ -66,7 +72,10 @@ class Ticket extends Model
      * (TicketAccess::creditInfo) and everyone else gets nothing.
      */
     // credited_* are deliberately NOT fillable: only TicketCreditService writes them (forceFill), never a request.
-    protected $hidden = ['credited_points', 'credited_hours', 'credited_at', 'credited_by_id', 'credited_minutes', 'submitted_by_id', 'submitted_at'];
+    protected $hidden = ['credited_points', 'credited_hours', 'credited_at', 'credited_by_id', 'credited_minutes', 'submitted_by_id', 'submitted_at',
+        // The deployment cycle leaves only through the redacted `deployment` block (TicketAccess::deploymentInfo).
+        'review_approved_by_id', 'review_approved_at', 'deployed_by_id', 'deployed_at', 'live_url', 'verified_by_id', 'verified_at', 'review_round',
+    ];
 
     protected $appends = ['is_delayed'];
 
@@ -112,6 +121,16 @@ class Ticket extends Model
     public function creditor(): BelongsTo
     {
         return $this->belongsTo(User::class, 'credited_by_id');
+    }
+
+    public function reviewApprover(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'review_approved_by_id');
+    }
+
+    public function deployer(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'deployed_by_id');
     }
 
     public function credit(): HasOne

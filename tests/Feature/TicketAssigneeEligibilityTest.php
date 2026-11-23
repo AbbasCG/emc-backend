@@ -134,6 +134,9 @@ class TicketAssigneeEligibilityTest extends TestCase
         return Ticket::create(array_merge([
             'ticket_number' => 'EMC-TCK-E-'.Str::random(8), 'title' => 'تذكرة', 'description' => 'وصف', 'ticket_category' => 'OLD_ISSUE', 'priority' => 'MEDIUM',
             'department_id' => $d->id, 'created_by_id' => $this->u['outsider']->id, 'created_by_name' => 'مُبلِّغ', 'status' => 'PENDING_APPROVAL',
+            // CHANGED: a manager who names THEMSELVES the assignee cannot change the estimate in the same reassign, so these
+            // tickets already carry the estimate the requests repeat.
+            'task_scope' => 'simple', 'task_points' => 30,
         ], $over));
     }
 

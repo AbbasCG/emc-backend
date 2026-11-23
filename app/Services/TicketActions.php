@@ -73,9 +73,9 @@ class TicketActions
      *
      * @throws TicketActionException
      */
-    public function reassign(int $ticketId, User $actor, int $assigneeId, ?int $unitId = null, ?string $reason = null, array $estimate = []): Ticket
+    public function reassign(int $ticketId, User $actor, int $assigneeId, ?int $unitId = null, ?string $reason = null, array $estimate = [], ?bool $requiresDeployment = null): Ticket
     {
-        return DB::transaction(function () use ($ticketId, $actor, $assigneeId, $unitId, $reason, $estimate) {
+        return DB::transaction(function () use ($ticketId, $actor, $assigneeId, $unitId, $reason, $estimate, $requiresDeployment) {
             $ticket = Ticket::lockForUpdate()->find($ticketId);
             if (! $ticket || ! $this->access->canView($actor, $ticket)) {
                 throw new TicketActionException('التذكرة غير موجودة أو لا تملك صلاحية عليها.', 404);
@@ -122,6 +122,13 @@ class TicketActions
             $estimateChanged = TicketWorkEstimate::differs($ticket, $work);
             $estimateBefore = TicketWorkEstimate::snapshot($ticket);
 
+            // Nobody resizes their own work or moves it between flows: when the actor is the ticket's current assignee, or names
+            // themselves as the new one, the assignment itself still works but the estimate and the deployment flag cannot change.
+            $flagChanges = $requiresDeployment !== null && (bool) $ticket->requires_deployment !== $requiresDeployment;
+            if (($estimateChanged || $flagChanges) && ($this->access->isTicketAssignee($actor, $ticket) || $assigneeId === (int) $actor->id)) {
+                throw new TicketActionException('لا يمكنك تعديل تقدير عمل أنت المكلف به أو اشتراط نشره؛ يلزم مدير آخر.', 403, [], 'OWN_WORK_ESTIMATE');
+            }
+
             $previous = $ticket->status;
             $ticket->update([
                 'assigned_to_id' => $assigneeId,
@@ -151,6 +158,8 @@ class TicketActions
             if ($estimateChanged) {
                 TicketWorkEstimate::log($ticket, $actor, $estimateBefore, $work);
             }
+            // The statuses a ticket can be reassigned from are all editable ones, so the deployment flag may change here.
+            TicketWorkEstimate::applyFlag($ticket, $actor, $requiresDeployment);
 
             return $ticket;
         });
@@ -183,19 +192,29 @@ class TicketActions
             if ($ticket->credited_at !== null) {
                 throw new TicketActionException(TicketCreditService::DUPLICATE_MESSAGE, 409, [], TicketCreditService::CODE_ALREADY_CREDITED);
             }
-            if ($ticket->status !== TicketAccess::PENDING_REVIEW) {
+            // Once the work is live, only its assignee sends it back (verify-failed, with what they saw on the site), unless the
+            // assignee can no longer act (gone, deactivated, blocked): then the manager frees the ticket here.
+            if ($ticket->status === TicketAccess::PENDING_VERIFICATION && ! ($this->access->isDeploymentTicket($ticket) && $this->access->assigneeUnavailable($ticket))) {
+                throw new TicketActionException(TicketDeploymentService::INVALID_STAGE_MESSAGE, 409, [], TicketCreditService::CODE_INVALID_STAGE);
+            }
+            $returnable = $ticket->status === TicketAccess::PENDING_REVIEW
+                || (($ticket->status === TicketAccess::APPROVED_FOR_DEPLOY || $ticket->status === TicketAccess::PENDING_VERIFICATION) && $this->access->isDeploymentTicket($ticket));
+            if (! $returnable) {
                 throw new TicketActionException('لا يمكن إعادة تذكرة ليست بحالة (بانتظار المراجعة والاعتماد).', 409, [], TicketCreditService::CODE_NOT_PENDING_REVIEW);
             }
             if ($ticket->assigned_to_id === null) {
                 throw new TicketActionException('لا يمكن إعادة تذكرة لا مكلف بها.', 409);
             }
 
-            $ticket->update(['status' => 'IN_PROGRESS']);
+            $previousStatus = $ticket->status;
+            // The values approved for this round (actual duration, approval, deployment) are void: the next round needs a
+            // new review, approval and deployment. The old round stays in the activity log only.
+            $ticket->forceFill(['status' => 'IN_PROGRESS'] + TicketDeploymentService::CLEARED_BY_REWORK)->save();
 
             TicketActivityLog::create([
                 'ticket_id' => $ticket->id,
                 'action' => 'RETURNED_FOR_REWORK',
-                'previous_state' => TicketAccess::PENDING_REVIEW,
+                'previous_state' => $previousStatus,
                 'new_state' => 'IN_PROGRESS',
                 'performed_by' => $actor->id,
                 'performed_by_name' => Str::limit((string) $actor->name, 150, ''),
@@ -246,22 +265,23 @@ class TicketActions
             if (in_array($ticket->status, TicketAccess::CLOSED_STATUSES, true)) {
                 throw new TicketActionException('لا يمكن تعديل تقدير العمل لتذكرة مغلقة.', 409);
             }
-            // Once the work is submitted, the estimate is corrected only inside the approval request, where the
-            // larger-of HR gate applies and the change is logged; otherwise the gate could be dodged beforehand.
-            if ($ticket->status === TicketAccess::PENDING_REVIEW) {
-                throw new TicketActionException('لا يمكن تعديل تقدير العمل أثناء انتظار المراجعة؛ صحّحه ضمن طلب الاعتماد النهائي.', 409, [], TicketCreditService::CODE_ESTIMATE_FROZEN);
+            // Once the work is submitted (review, approved for deployment, awaiting live verification) the estimate AND the
+            // deployment flag are frozen: the estimate is corrected only inside the approval request, where the larger-of
+            // HR gate applies and the change is logged, and the flag moves a ticket to another flow, which is done by
+            // returning it for rework first. Otherwise either could be used to dodge the gates beforehand.
+            if (! in_array($ticket->status, TicketAccess::ESTIMATE_EDITABLE_STATUSES, true)) {
+                throw new TicketActionException('لا يمكن تعديل تقدير العمل أو اشتراط النشر بعد إرسال العمل للمراجعة؛ أعد التذكرة للتنفيذ أولًا.', 409, [], TicketCreditService::CODE_ESTIMATE_FROZEN);
             }
 
             // The only place where an explicit `estimated_hours: null` clears the hours.
             $work = TicketWorkEstimate::resolve($ticket, TicketWorkEstimate::only($input), allowClearHours: true);
 
-            if (! TicketWorkEstimate::differs($ticket, $work)) {
-                return $ticket;
+            if (TicketWorkEstimate::differs($ticket, $work)) {
+                $before = TicketWorkEstimate::snapshot($ticket);
+                $ticket->update($work);
+                TicketWorkEstimate::log($ticket, $actor, $before, $work);
             }
-
-            $before = TicketWorkEstimate::snapshot($ticket);
-            $ticket->update($work);
-            TicketWorkEstimate::log($ticket, $actor, $before, $work);
+            TicketWorkEstimate::applyFlag($ticket, $actor, TicketWorkEstimate::flagFrom($input));
 
             return $ticket;
         });
@@ -286,7 +306,7 @@ class TicketActions
             try {
                 $ticket = match ($action) {
                     'priority' => $this->changePriority($id, $actor, (string) $params['priority'], $params['reason'] ?? null),
-                    'reassign' => $this->reassign($id, $actor, (int) $params['assigned_to_id'], isset($params['unit_id']) ? (int) $params['unit_id'] : null, $params['reason'] ?? null, TicketWorkEstimate::only($params)),
+                    'reassign' => $this->reassign($id, $actor, (int) $params['assigned_to_id'], isset($params['unit_id']) ? (int) $params['unit_id'] : null, $params['reason'] ?? null, TicketWorkEstimate::only($params), TicketWorkEstimate::flagFrom($params)),
                 };
                 $results[] = ['id' => $id, 'ticket_number' => $ticket->ticket_number, 'ok' => true, 'message' => 'تم']
                     + ($action === 'reassign' ? ['task_scope' => $ticket->task_scope, 'task_points' => $ticket->task_points, 'estimated_hours' => $ticket->estimated_hours] : []);
