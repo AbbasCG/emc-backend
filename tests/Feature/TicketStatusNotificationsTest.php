@@ -113,7 +113,7 @@ class TicketStatusNotificationsTest extends TestCase
         $this->assertSame('PENDING_REVIEW', $t->fresh()->status);
 
         Sanctum::actingAs($this->leader);
-        $this->postJson("/api/v1/tickets/{$t->id}/approve-completion", ['task_scope' => 'simple', 'task_points' => 30])->assertOk();
+        $this->postJson("/api/v1/tickets/{$t->id}/approve-completion", ['task_scope' => 'simple', 'task_points' => 30, 'actual_minutes' => 60])->assertOk();
 
         return $res;
     }
@@ -421,7 +421,7 @@ class TicketStatusNotificationsTest extends TestCase
 
         // The ticket is resolved only by someone else's final approval, and THAT is news to them.
         Sanctum::actingAs($this->leader);
-        $this->postJson("/api/v1/tickets/{$ticket->id}/approve-completion", ['task_scope' => 'simple', 'task_points' => 30])->assertOk();
+        $this->postJson("/api/v1/tickets/{$ticket->id}/approve-completion", ['task_scope' => 'simple', 'task_points' => 30, 'actual_minutes' => 60])->assertOk();
         $this->assertCount(1, $this->notificationsFor($this->submitter, 'ticket_resolved'));
     }
 

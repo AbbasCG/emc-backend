@@ -204,7 +204,7 @@ class TicketOpsService
 
         // The planning estimate is for managers, global roles and the assignee (TicketAccess::canSeeInternal).
         $estimate = $this->access->canSeeInternal($user, $t)
-            ? ['task_scope' => $t->task_scope, 'task_points' => $t->task_points, 'estimated_hours' => $t->estimated_hours, 'credit' => $this->access->creditInfo($t)]
+            ? ['task_scope' => $t->task_scope, 'task_points' => $t->task_points, 'estimated_hours' => $t->estimated_hours, 'actual_minutes' => $t->actual_minutes, 'credit' => $this->access->creditInfo($t)]
             : [];
 
         return $estimate + [

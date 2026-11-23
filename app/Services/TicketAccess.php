@@ -268,7 +268,9 @@ class TicketAccess
      * The `credit` block every staff payload carries (for those who may read it, see redactInternal).
      * status: none | pending_review | credited. The numbers exist only once credited.
      *
-     * @return array{status: string, points: ?int, hours: ?float, credited_at: ?string, credited_by_name: ?string}
+     * `hours` is the credited actual time; `minutes` its exact value (null for a credit made before actual durations existed).
+     *
+     * @return array{status: string, points: ?int, hours: ?float, minutes: ?int, credited_at: ?string, credited_by_name: ?string}
      */
     public function creditInfo(Ticket $ticket): array
     {
@@ -281,6 +283,7 @@ class TicketAccess
             'status' => $credited ? 'credited' : ($ticket->status === self::PENDING_REVIEW ? 'pending_review' : 'none'),
             'points' => $credited ? (int) $ticket->credited_points : null,
             'hours' => $credited ? round((float) $ticket->credited_hours, 2) : null,
+            'minutes' => $credited && $ticket->credited_minutes !== null ? (int) $ticket->credited_minutes : null,
             'credited_at' => $ticket->credited_at?->toIso8601String(),
             'credited_by_name' => $credited ? $ticket->creditor?->name : null,
         ];
@@ -347,7 +350,7 @@ class TicketAccess
         // The planning estimate (size, points, hours), the credit and their change history are for the same people
         // who may read internal notes: managers, global roles and the assignee. A plain department member can open
         // the ticket without them.
-        foreach (['task_scope', 'task_points', 'estimated_hours', 'credit', 'creditor', 'credited_points', 'credited_hours', 'credited_at', 'credited_by_id'] as $key) {
+        foreach (['task_scope', 'task_points', 'estimated_hours', 'actual_minutes', 'credit', 'creditor', 'credited_points', 'credited_hours', 'credited_minutes', 'credited_at', 'credited_by_id'] as $key) {
             unset($data[$key]);
         }
 

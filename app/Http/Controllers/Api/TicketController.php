@@ -340,7 +340,7 @@ class TicketController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'تم تقديم التذكرة بنجاح وتندرج الآن تحت بند معلقة بانتظار اعتماد الإدارة',
-                'data' => $ticket->load(['department', 'attachments', 'activityLogs'])->makeHidden(TicketWorkEstimate::KEYS),
+                'data' => $ticket->load(['department', 'attachments', 'activityLogs'])->makeHidden([...TicketWorkEstimate::KEYS, 'actual_minutes']),
             ], 201);
 
         } catch (\Throwable $e) {

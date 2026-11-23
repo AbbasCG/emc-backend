@@ -142,23 +142,21 @@ class TicketOpsController extends Controller
     // POST /v1/tickets/{id}/approve-completion
     public function approveCompletion(Request $request, int $id): JsonResponse
     {
-        // Optional corrected estimate (REQUIRED for a legacy ticket that has none) and a note for the record.
-        $validator = Validator::make($request->all(), TicketWorkEstimate::rules() + [
-            'note' => ['nullable', 'string', 'max:1000'],
-        ], TicketWorkEstimate::messages() + TicketValidationMessages::all() + [
-            'note.string' => 'الملاحظة غير صالحة.',
-            'note.max' => 'الملاحظة طويلة جدًا؛ الحد الأقصى 1000 حرف.',
-        ]);
-
+        // NO validation here: every field (the optional corrected estimate, `note` and the REQUIRED `actual_minutes`) is
+        // read raw and validated by the service AFTER the authorization and status checks, in one 422 with all the
+        // errors. Validating first would let a reporter, a plain member or another department's leader probe the
+        // request shape (422) instead of getting the same 403/404 as with a valid body.
         try {
-            if ($validator->fails()) {
-                throw new TicketActionException((string) $validator->errors()->first(), 422, $validator->errors()->toArray());
-            }
-            $ticket = $this->credits->approveCompletion($id, $request->user(), TicketWorkEstimate::only($validator->validated()), $validator->validated()['note'] ?? null);
+            $ticket = $this->credits->approveCompletion(
+                $id,
+                $request->user(),
+                TicketWorkEstimate::only($request->all()),
+                $request->input('note'),
+                $request->input('actual_minutes'),
+            );
         } catch (TicketActionException $e) {
             return $this->refused($e);
         }
-
         return response()->json([
             'success' => true,
             'message' => 'تم اعتماد إنجاز التذكرة وإضافة النقاط والساعات إلى رصيد المكلف.',

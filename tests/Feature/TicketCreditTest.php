@@ -110,7 +110,16 @@ class TicketCreditTest extends TestCase
         ], $over));
     }
 
+    /**
+     * The final approval. Since the ACTUAL duration is required, the helper sends 150 minutes (2.5 h, which is also what
+     * the fixtures' planning estimate says) unless a test passes its own `actual_minutes`; use approveRaw() to send none.
+     */
     private function approveCompletion(Ticket $t, ?User $as = null, array $body = [])
+    {
+        return $this->approveRaw($t, $as, array_merge(['actual_minutes' => 150], $body));
+    }
+
+    private function approveRaw(Ticket $t, ?User $as = null, array $body = [])
     {
         Sanctum::actingAs($as ?? $this->leader);
 
@@ -265,9 +274,9 @@ class TicketCreditTest extends TestCase
         $t = $this->submitted();
         $service = app(TicketCreditService::class);
 
-        $service->approveCompletion($t->id, $this->leader);
+        $service->approveCompletion($t->id, $this->leader, [], null, 150);
         try {
-            $service->approveCompletion($t->id, $this->leader);
+            $service->approveCompletion($t->id, $this->leader, [], null, 150);
             $this->fail('the second approval must be refused');
         } catch (TicketActionException $e) {
             $this->assertSame(409, $e->status);
@@ -309,7 +318,7 @@ class TicketCreditTest extends TestCase
         };
 
         try {
-            $racing->approveCompletion($t->id, $this->leader);
+            $racing->approveCompletion($t->id, $this->leader, [], null, 150);
             $this->fail('the unique index must stop the second credit');
         } catch (TicketActionException $e) {
             $this->assertSame(409, $e->status);
@@ -345,15 +354,19 @@ class TicketCreditTest extends TestCase
         $this->assertSame('PENDING_REVIEW', $t->fresh()->status, 'refused as a whole');
     }
 
-    public function test_hours_are_optional_and_null_hours_credit_zero(): void
+    /**
+     * CHANGED (was: hours are optional and null hours credit zero). The estimate's hours are planning data only; whether
+     * they are set or not, the credit is the ACTUAL duration the approver enters.
+     */
+    public function test_a_ticket_without_estimated_hours_still_credits_the_actual_duration(): void
     {
         $t = $this->submitted(['estimated_hours' => null]);
 
-        $this->approveCompletion($t)->assertOk()->assertJsonPath('data.credit.points', 30)->assertJsonPath('data.credit.hours', 0);
+        $this->approveCompletion($t, null, ['actual_minutes' => 45])->assertOk()->assertJsonPath('data.credit.points', 30)->assertJsonPath('data.credit.hours', 0.75)->assertJsonPath('data.credit.minutes', 45);
 
         $this->assertSame(1, $this->awards($t)->count());
-        $this->assertEqualsWithDelta(0.0, $this->hours($this->assignee), 0.001);
-        $this->assertNull(VolunteerProfile::where('user_id', $this->assignee->id)->first(), 'no profile is created for zero hours');
+        $this->assertEqualsWithDelta(0.75, $this->hours($this->assignee), 0.001);
+        $this->assertNull($t->fresh()->estimated_hours, 'the planning estimate is untouched');
     }
 
     public function test_hours_accumulate_on_the_assignees_existing_profile(): void
@@ -415,7 +428,7 @@ class TicketCreditTest extends TestCase
         $this->assertSame(0, $this->awards()->count());
 
         // A DIFFERENT approver closes it; the credit lands on the leader as assignee.
-        $this->approveCompletion($t, $this->user('executive_admin'))->assertOk();
+        $this->approveCompletion($t, $this->user('executive_admin'), ['actual_minutes' => 60])->assertOk();
         $award = $this->awards($t)->sole();
         $this->assertSame($this->leader->id, (int) $award->user_id);
         $this->assertSame(40, $award->points);
@@ -543,9 +556,10 @@ class TicketCreditTest extends TestCase
         $this->assertSame($state, $this->ledgerState());
         $this->assertSame('PENDING_REVIEW', $t->fresh()->status);
 
-        $this->approveCompletion($t, null, ['task_scope' => 'simple', 'task_points' => 35, 'estimated_hours' => 1.5])->assertOk();
+        $this->approveCompletion($t, null, ['task_scope' => 'simple', 'task_points' => 35, 'estimated_hours' => 1.5, 'actual_minutes' => 90])->assertOk();
 
         $this->assertSame(35, $this->awards($t)->sole()->points);
+        // CHANGED: the 1.5 h is now the ACTUAL duration the approver entered (90 min); the estimate is planning only.
         $this->assertEqualsWithDelta(1.5, $this->hours($this->assignee), 0.001);
         $this->assertSame(1, TicketActivityLog::where('ticket_id', $t->id)->where('action', 'ESTIMATE_UPDATED')->count());
         $this->approveCompletion($t, null, ['task_scope' => 'simple', 'task_points' => 35])->assertStatus(409);
@@ -556,13 +570,15 @@ class TicketCreditTest extends TestCase
     {
         $t = $this->submitted();
 
-        $this->approveCompletion($t, null, ['task_points' => 45, 'estimated_hours' => 3, 'note' => 'استغرقت أطول'])->assertOk();
+        $this->approveCompletion($t, null, ['task_points' => 45, 'estimated_hours' => 3, 'actual_minutes' => 120, 'note' => 'استغرقت أطول'])->assertOk();
 
         $fresh = $t->fresh();
         $this->assertSame(45, $fresh->task_points);
         $this->assertSame(45, $fresh->credited_points);
         $this->assertSame(45, $this->awards($t)->sole()->points);
-        $this->assertEqualsWithDelta(3.0, $this->hours($this->assignee), 0.001);
+        // CHANGED: the corrected ESTIMATE (3 h) is a planning edit only; what is credited is the actual 120 min = 2 h.
+        $this->assertEqualsWithDelta(3.0, (float) $fresh->estimated_hours, 0.001);
+        $this->assertEqualsWithDelta(2.0, $this->hours($this->assignee), 0.001);
         $this->assertSame(1, TicketActivityLog::where('ticket_id', $t->id)->where('action', 'ESTIMATE_UPDATED')->count());
         $this->assertStringContainsString('استغرقت أطول', (string) TicketActivityLog::where('action', 'CREDIT_ADDED')->value('details'));
     }
@@ -1054,9 +1070,9 @@ class TicketCreditTest extends TestCase
         Sanctum::actingAs($this->leader);
         $this->patchJson("/api/v1/tickets/{$medium->id}/work-estimate", ['task_scope' => 'simple', 'task_points' => 31])->assertStatus(409)->assertJsonPath('code', 'ESTIMATE_FROZEN');
 
-        // credit.hours is never null once credited (0 when the ticket had no hours estimate).
+        // credit.hours is never null once credited (it is the actual duration, whatever the estimate said).
         $noHours = $this->submitted(['estimated_hours' => null]);
-        $this->approveCompletion($noHours)->assertOk()->assertJsonPath('data.credit.hours', 0);
+        $this->approveCompletion($noHours)->assertOk()->assertJsonPath('data.credit.hours', 2.5);
         $this->assertNotNull($noHours->fresh()->credited_hours);
     }
 

@@ -113,7 +113,7 @@ class TicketMyWork
             ->select([
                 'tickets.id', 'tickets.ticket_number', 'tickets.title', 'tickets.status', 'tickets.priority', 'tickets.department_id', 'tickets.unit_id',
                 'tickets.created_by_id', 'tickets.created_by_name', 'tickets.assigned_to_id', 'tickets.expected_resolution_time', 'tickets.accepted_at',
-                'tickets.resolved_at', 'tickets.task_scope', 'tickets.task_points', 'tickets.estimated_hours', 'tickets.credited_points', 'tickets.credited_hours', 'tickets.credited_at', 'tickets.credited_by_id', 'tickets.created_at', 'tickets.updated_at',
+                'tickets.resolved_at', 'tickets.task_scope', 'tickets.task_points', 'tickets.estimated_hours', 'tickets.actual_minutes', 'tickets.credited_points', 'tickets.credited_hours', 'tickets.credited_minutes', 'tickets.credited_at', 'tickets.credited_by_id', 'tickets.created_at', 'tickets.updated_at',
                 DB::raw('SUBSTR(tickets.description, 1, '.self::DESCRIPTION_READ.') AS description'),
             ])
             ->where('tickets.assigned_to_id', $user->id)
@@ -143,6 +143,7 @@ class TicketMyWork
             'task_scope' => $t->task_scope,
             'task_points' => $t->task_points,
             'estimated_hours' => $t->estimated_hours,
+            'actual_minutes' => $t->actual_minutes,
             // The assignee's own credit status (none | pending_review | credited); only ever their own tickets.
             'credit' => $this->access->creditInfo($t),
             'created_at' => $t->created_at?->toIso8601String(),

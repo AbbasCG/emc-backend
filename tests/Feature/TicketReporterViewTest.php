@@ -477,7 +477,7 @@ class TicketReporterViewTest extends TestCase
         // The email goes out at the FINAL approval, not when the assignee submits the work.
         Queue::assertNothingPushed();
         Sanctum::actingAs($this->leader);
-        $this->postJson("/api/v1/tickets/{$t->id}/approve-completion")->assertOk();
+        $this->postJson("/api/v1/tickets/{$t->id}/approve-completion", ['actual_minutes' => 60])->assertOk();
 
         $mailable = null;
         Queue::assertPushed(SendLoggedEmailJob::class, function ($job) use (&$mailable) {
