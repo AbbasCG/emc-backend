@@ -1879,16 +1879,19 @@ class NotificationService
     // In-app only (no new email or preference key): the assignee is waiting for exactly this answer and it is
     // also visible in «مهامي». TicketCreditService / TicketActions decide WHEN (after commit).
 
-    /** The final approval of the work: the ticket is closed and its points and hours were added to the assignee. */
-    public static function ticketCompletionApproved(int $assigneeId, int $ticketId, string $ticketTitle, int $points, float $hours, ?int $approvedById = null): void
+    /**
+     * The final approval of the work: the ticket is closed and its points and the ACTUAL approved time were added to the
+     * assignee. $minutes is the credited duration; when it is not given it is derived from $hours.
+     */
+    public static function ticketCompletionApproved(int $assigneeId, int $ticketId, string $ticketTitle, int $points, float $hours, ?int $approvedById = null, ?int $minutes = null): void
     {
         $title = self::shortTitle($ticketTitle);
-        $hoursText = rtrim(rtrim(number_format($hours, 2, '.', ''), '0'), '.');
+        $minutes ??= (int) round($hours * 60);
+        $duration = $minutes > 0 ? ' ومدة التطوع الفعلية: '.\App\Support\ArabicDuration::describe($minutes) : '';
 
         self::send($assigneeId, 'ticket_completion_approved',
             'تم اعتماد إنجاز التذكرة',
-            "تم اعتماد إنجازك للتذكرة \"{$title}\" وأُضيف إلى رصيدك {$points} نقطة"
-                .($hours > 0 ? " و{$hoursText} ساعة تطوع" : '').'.',
+            "تم اعتماد إنجازك للتذكرة \"{$title}\" وأُضيف إلى رصيدك {$points} نقطة{$duration}.",
             [
                 'entity_type'     => 'ticket',
                 'entity_id'       => $ticketId,
@@ -1901,7 +1904,6 @@ class NotificationService
             ]
         );
     }
-
     /** The reviewer sent the work back for more work; nothing was credited. */
     public static function ticketReturnedForRework(int $assigneeId, int $ticketId, string $ticketTitle, string $reason, string $returnRef, ?int $returnedById = null): void
     {

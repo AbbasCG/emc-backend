@@ -11,6 +11,8 @@ use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Validator;
+use App\Support\TicketValidationMessages;
 
 /**
  * The FINAL approval of a ticket's completion: the one and only place where a ticket credits points and hours.
@@ -19,11 +21,18 @@ use Illuminate\Support\Str;
  * ledger, and tickets that were already RESOLVED / UNRESOLVED / closed before this feature existed are never
  * credited by any path (there is no backfill; only an explicit approval of a PENDING_REVIEW ticket credits).
  *
- * WHAT IS CREDITED: to the ASSIGNEE (never the approver), the points and hours of the ticket's FINAL stored
- * estimate (task_points / estimated_hours; null hours credit 0), the same "no actual-duration step" rule as
- * regular tasks. The approver may correct the estimate in the same request; the correction is validated by
- * TicketWorkEstimate, logged (ESTIMATE_UPDATED) and is what gets credited. A legacy ticket with no size/points
- * cannot be approved until the request supplies them.
+ * WHAT IS CREDITED: to the ASSIGNEE (never the approver), the POINTS of the ticket's final stored estimate
+ * (task_points, scope ranges unchanged) and the HOURS of the ACTUAL duration the reviewer enters in the approval
+ * (actual_minutes, REQUIRED, credited as round(minutes / 60, 2)). `estimated_hours` is planning data only: it is never
+ * credited, never a fallback and never 0-substituted. The approver may correct the estimate in the same request; the
+ * correction is validated by TicketWorkEstimate and logged (ESTIMATE_UPDATED). A legacy ticket with no size/points
+ * cannot be approved until the request supplies them either.
+ *
+ * ORDER OF CHECKS (so an unauthorised caller can never store or probe the request): view/404, self-review and
+ * submitter 403, manager 403, already credited 409, status 409, HR gate 403, then validation 422 (estimate fields, note
+ * and the actual duration, all in ONE 422). The 409s come before the HR gate so a reviewer with a stale screen on an
+ * already credited / no longer pending ticket is told that, not that HR is needed. Nothing is persisted by a refused
+ * approval.
  *
  * WHO: a leader of the ticket's department or a global role (TicketAccess::canManage) who is NOT the assignee;
  * work above «بسيطة» also needs an HR approver (TicketAccess::HR_APPROVAL_ROLES), mirroring regular tasks
@@ -50,6 +59,16 @@ class TicketCreditService
     public const CODE_SELF_REVIEW = 'SELF_REVIEW';
     public const CODE_HR_REQUIRED = 'HR_APPROVAL_REQUIRED';
     public const CODE_ESTIMATE_FROZEN = 'ESTIMATE_FROZEN';
+    public const CODE_ACTUAL_REQUIRED = 'ACTUAL_DURATION_REQUIRED';
+    public const CODE_ACTUAL_INVALID = 'ACTUAL_DURATION_INVALID';
+
+    public const ACTUAL_REQUIRED_MESSAGE = 'أدخل المدة الفعلية للإنجاز (بالساعات والدقائق) قبل الاعتماد النهائي.';
+    public const ACTUAL_INTEGER_MESSAGE = 'المدة الفعلية يجب أن تكون عددًا صحيحًا من الدقائق.';
+    public const ACTUAL_MIN_MESSAGE = 'المدة الفعلية يجب ألا تقل عن دقيقة واحدة.';
+    public const ACTUAL_MAX_MESSAGE = 'المدة الفعلية لا تتجاوز 1000 ساعة (60000 دقيقة).';
+
+    /** 1000 hours. */
+    public const MAX_ACTUAL_MINUTES = 60000;
 
     /** The 422 for a ticket that reaches its approval with no size/points (legacy); the assignment path keeps its own wording. */
     public const MISSING_ESTIMATE_MESSAGE = 'حدّد حجم المهمة ونقاطها قبل اعتماد الإنجاز';
@@ -62,14 +81,16 @@ class TicketCreditService
     public function __construct(private readonly TicketAccess $access) {}
 
     /**
-     * @param  array<string, mixed>  $estimateInput  any subset of task_scope / task_points / estimated_hours
+     * @param  array<string, mixed>  $estimateInput  any subset of task_scope / task_points / estimated_hours (planning only)
+     * @param  mixed  $note  the approver's note as RECEIVED (validated here, after authorization)
+     * @param  mixed  $actualMinutes  the actual duration in minutes as RECEIVED (validated here, after authorization); null = not sent
      *
      * @throws TicketActionException
      */
-    public function approveCompletion(int $ticketId, User $actor, array $estimateInput = [], ?string $note = null): Ticket
+    public function approveCompletion(int $ticketId, User $actor, array $estimateInput = [], mixed $note = null, mixed $actualMinutes = null): Ticket
     {
         try {
-            return $this->attempt($ticketId, $actor, $estimateInput, $note);
+            return $this->attempt($ticketId, $actor, $estimateInput, $note, $actualMinutes);
         } catch (QueryException $e) {
             // The unique index fired: another request credited this ticket between our check and our insert. The
             // transaction has already rolled back, so no ledger row and no hours were written by this request.
@@ -88,9 +109,9 @@ class TicketCreditService
     }
 
     /** @param array<string, mixed> $estimateInput */
-    private function attempt(int $ticketId, User $actor, array $estimateInput, ?string $note): Ticket
+    private function attempt(int $ticketId, User $actor, array $estimateInput, mixed $note, mixed $actualMinutes): Ticket
     {
-        return DB::transaction(function () use ($ticketId, $actor, $estimateInput, $note) {
+        return DB::transaction(function () use ($ticketId, $actor, $estimateInput, $note, $actualMinutes) {
             $ticket = Ticket::lockForUpdate()->find($ticketId);
             if (! $ticket || ! $this->access->canView($actor, $ticket)) {
                 throw new TicketActionException('التذكرة غير موجودة أو لا تملك صلاحية عليها.', 404);
@@ -113,25 +134,66 @@ class TicketCreditService
                 throw new TicketActionException('لا يمكن اعتماد إنجاز تذكرة ليست بحالة (بانتظار المراجعة والاعتماد).', 409, [], self::CODE_NOT_PENDING_REVIEW);
             }
 
+            // HR gate on the larger of the stored size and the size the request asks for (see the class docblock). It is
+            // judged BEFORE any validation, from the raw requested size, so an unauthorised caller learns nothing more.
+            $requestedScope = isset($estimateInput['task_scope']) && is_string($estimateInput['task_scope']) && in_array($estimateInput['task_scope'], TicketWorkEstimate::SCOPES, true) ? $estimateInput['task_scope'] : null; // an unknown size is a 422 below, not an HR question
+            if (($this->access->needsHrApproval($ticket->task_scope) || $this->access->needsHrApproval($requestedScope)) && ! $this->access->isHrApprover($actor)) {
+                throw new TicketActionException('اعتماد هذه التذكرة يحتاج إلى اعتماد الموارد البشرية لأن حجمها أعلى من «بسيطة».', 403, [], self::CODE_HR_REQUIRED);
+            }
+
             $assignee = $ticket->assigned_to_id ? User::find($ticket->assigned_to_id) : null;
             if (! $assignee) {
                 throw new TicketActionException('لا يمكن الاعتماد: لا يوجد مكلف تُضاف إليه النقاط والساعات.', 409);
             }
 
-            // Size and points must exist (legacy tickets supply them here) and be valid for the size.
-            $work = TicketWorkEstimate::resolve($ticket, $estimateInput, missingMessage: self::MISSING_ESTIMATE_MESSAGE);
+            // Validation (422), last, in ONE response: the shape of the estimate fields and the note, then the estimate's
+            // business rules (size/points must exist — legacy tickets supply them here — and fit the size), and the ACTUAL
+            // duration. Nothing has been written yet.
+            $errors = [];
+            $message = null;
+            $work = null;
 
-            // HR gate on the larger of the stored and the final size (see the class docblock).
-            if (($this->access->needsHrApproval($ticket->task_scope) || $this->access->needsHrApproval($work['task_scope'])) && ! $this->access->isHrApprover($actor)) {
-                throw new TicketActionException('اعتماد هذه التذكرة يحتاج إلى اعتماد الموارد البشرية لأن حجمها أعلى من «بسيطة».', 403, [], self::CODE_HR_REQUIRED);
+            $shape = Validator::make(
+                TicketWorkEstimate::only($estimateInput) + ['note' => $note],
+                TicketWorkEstimate::rules() + ['note' => ['nullable', 'string', 'max:1000']],
+                TicketWorkEstimate::messages() + TicketValidationMessages::all() + [
+                    'note.string' => 'الملاحظة غير صالحة.',
+                    'note.max' => 'الملاحظة طويلة جدًا؛ الحد الأقصى 1000 حرف.',
+                ],
+            );
+            if ($shape->fails()) {
+                $errors = $shape->errors()->toArray();
+                $message = (string) $shape->errors()->first();
+            }
+            // The business rules run too (they re-validate every value they read), so one answer lists everything; a field
+            // already reported by the shape check keeps that message.
+            try {
+                $work = TicketWorkEstimate::resolve($ticket, TicketWorkEstimate::only($estimateInput), missingMessage: self::MISSING_ESTIMATE_MESSAGE);
+            } catch (TicketActionException $e) {
+                $errors += $e->errors;
+                $message ??= $e->getMessage();
             }
 
+            [$minutes, $actualError, $actualCode] = $this->resolveActualMinutes($actualMinutes);
+            if ($actualError !== null) {
+                $errors['actual_minutes'] = [$actualError];
+                $message ??= $actualError;
+            }
+
+            if ($errors !== []) {
+                // The headline is the first error. The machine code names the DURATION problem, so it is attached only when
+                // the duration is the only thing wrong (then headline and code agree); with other errors present the code
+                // would contradict the message, and the client reads `errors.actual_minutes` instead.
+                throw new TicketActionException((string) $message, 422, $errors, array_keys($errors) === ['actual_minutes'] ? $actualCode : null);
+            }
+            $note = trim((string) $note);
             $estimateBefore = TicketWorkEstimate::snapshot($ticket);
             $estimateChanged = TicketWorkEstimate::differs($ticket, $work);
 
             $now = now();
             $points = (int) $work['task_points'];
-            $hours = round((float) ($work['estimated_hours'] ?? 0), 2);
+            // The credited hours are the ACTUAL approved time, never the planning estimate.
+            $hours = round($minutes / 60, 2);
 
             // 1. The unique row FIRST: if the backstop fires, nothing else has been written yet.
             TicketCredit::create([
@@ -139,6 +201,7 @@ class TicketCreditService
                 'user_id' => $assignee->id,
                 'points' => $points,
                 'hours' => $hours,
+                'minutes' => $minutes,
                 'approved_by_id' => $actor->id,
                 'credited_at' => $now,
             ]);
@@ -150,6 +213,8 @@ class TicketCreditService
                 'resolved_at' => $now,
                 'credited_points' => $points,
                 'credited_hours' => $hours,
+                'credited_minutes' => $minutes,
+                'actual_minutes' => $minutes,
                 'credited_at' => $now,
                 'credited_by_id' => $actor->id,
             ])->save();
@@ -190,7 +255,6 @@ class TicketCreditService
                 'details' => 'تم الاعتماد النهائي لإنجاز التذكرة وإغلاقها',
                 'logged_at' => $now,
             ]);
-            $note = $note !== null ? trim($note) : '';
             TicketActivityLog::create([
                 'ticket_id' => $ticket->id,
                 'action' => 'CREDIT_ADDED',
@@ -198,19 +262,19 @@ class TicketCreditService
                 'new_state' => null,
                 'performed_by' => $actor->id,
                 'performed_by_name' => Str::limit((string) $actor->name, 150, ''),
-                'details' => 'أُضيف إلى رصيد '.$assignee->name.': '.$points.' نقطة و'.rtrim(rtrim(number_format($hours, 2, '.', ''), '0'), '.').' ساعة'.($note !== '' ? ' | ملاحظة الاعتماد: '.$note : ''),
+                'details' => 'أُضيف إلى رصيد '.$assignee->name.': '.$points.' نقطة و'.rtrim(rtrim(number_format($hours, 2, '.', ''), '0'), '.').' ساعة | المدة الفعلية: '.self::describeMinutes($minutes).($note !== '' ? ' | ملاحظة الاعتماد: '.$note : ''),
                 'logged_at' => $now,
             ]);
 
-            Log::info("Ticket #{$ticket->id} completion approved and credited: {$points} points, {$hours} hours to user #{$assignee->id}");
+            Log::info("Ticket #{$ticket->id} completion approved and credited: {$points} points, {$hours} hours ({$minutes} actual minutes) to user #{$assignee->id}");
 
             $assigneeId = (int) $assignee->id;
             $title = (string) $ticket->title;
             $tid = (int) $ticket->id;
             $actorId = (int) $actor->id;
-            DB::afterCommit(function () use ($assigneeId, $tid, $title, $points, $hours, $actorId) {
+            DB::afterCommit(function () use ($assigneeId, $tid, $title, $points, $hours, $actorId, $minutes) {
                 try {
-                    NotificationService::ticketCompletionApproved($assigneeId, $tid, $title, $points, $hours, $actorId);
+                    NotificationService::ticketCompletionApproved($assigneeId, $tid, $title, $points, $hours, $actorId, $minutes);
                 } catch (\Throwable $e) {
                     // The credit has already committed; telling the assignee is best-effort.
                     report($e);
@@ -219,6 +283,39 @@ class TicketCreditService
 
             return $ticket;
         });
+    }
+
+    /**
+     * The actual duration to credit: it must be ENTERED in this request. A value stored on the ticket (from anywhere)
+     * never satisfies it, and neither does the estimate or 0.
+     *
+     * @return array{0: ?int, 1: ?string, 2: ?string} minutes, error message, error code
+     */
+    private function resolveActualMinutes(mixed $sent): array
+    {
+        if ($sent === null || $sent === '') {
+            return [null, self::ACTUAL_REQUIRED_MESSAGE, self::CODE_ACTUAL_REQUIRED];
+        }
+
+        $isWhole = is_int($sent) || (is_string($sent) && preg_match('/^-?\d+$/', trim($sent)) === 1);
+        if (! $isWhole) {
+            return [null, self::ACTUAL_INTEGER_MESSAGE, self::CODE_ACTUAL_INVALID];
+        }
+
+        $minutes = (int) $sent;
+        if ($minutes < 1) {
+            return [null, self::ACTUAL_MIN_MESSAGE, self::CODE_ACTUAL_INVALID];
+        }
+        if ($minutes > self::MAX_ACTUAL_MINUTES) {
+            return [null, self::ACTUAL_MAX_MESSAGE, self::CODE_ACTUAL_INVALID];
+        }
+
+        return [$minutes, null, null];
+    }
+    /** «ساعة و15 دقيقة» (for the internal log row): only the non-zero parts, Arabic plural forms. */
+    public static function describeMinutes(int $minutes): string
+    {
+        return \App\Support\ArabicDuration::describe($minutes);
     }
 
     private function isUniqueViolation(QueryException $e): bool

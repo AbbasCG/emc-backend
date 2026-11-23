@@ -15,7 +15,9 @@ use App\Models\User;
  * can assign a ticket under weaker rules than another. The points ranges are NOT copied here: they come
  * from TaskWorkflowService::validatePointsForScope, the same rule the tasks module applies.
  *
- * The estimate is planning data only. A ticket never credits points or hours; that stays with tasks.
+ * The estimate is planning data only and nothing here credits anything. Points are credited once, at the final approval
+ * of the completion (TicketCreditService), from the stored task_points; the hours credited there are the reviewer's
+ * ACTUAL duration, never `estimated_hours`.
  */
 class TicketWorkEstimate
 {

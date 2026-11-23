@@ -54,6 +54,9 @@ class Ticket extends Model
         // Snapshot of the one credit (see TicketCreditService); all NULL until the final approval.
         'credited_points' => 'integer',
         'credited_hours' => 'float',
+        'credited_minutes' => 'integer',
+        // The reviewer-entered ACTUAL duration (minutes); written only by TicketCreditService, never mass assigned.
+        'actual_minutes' => 'integer',
         'credited_at' => 'datetime',
         'submitted_at' => 'datetime',
     ];
@@ -63,7 +66,7 @@ class Ticket extends Model
      * (TicketAccess::creditInfo) and everyone else gets nothing.
      */
     // credited_* are deliberately NOT fillable: only TicketCreditService writes them (forceFill), never a request.
-    protected $hidden = ['credited_points', 'credited_hours', 'credited_at', 'credited_by_id', 'submitted_by_id', 'submitted_at'];
+    protected $hidden = ['credited_points', 'credited_hours', 'credited_at', 'credited_by_id', 'credited_minutes', 'submitted_by_id', 'submitted_at'];
 
     protected $appends = ['is_delayed'];
 

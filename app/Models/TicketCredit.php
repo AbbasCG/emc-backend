@@ -15,11 +15,12 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class TicketCredit extends Model
 {
-    protected $fillable = ['ticket_id', 'user_id', 'points', 'hours', 'approved_by_id', 'credited_at'];
+    protected $fillable = ['ticket_id', 'user_id', 'points', 'hours', 'minutes', 'approved_by_id', 'credited_at'];
 
     protected $casts = [
         'points' => 'integer',
         'hours' => 'float',
+        'minutes' => 'integer',
         'credited_at' => 'datetime',
     ];
 
