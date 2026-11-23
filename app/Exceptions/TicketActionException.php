@@ -12,4 +12,15 @@ class TicketActionException extends RuntimeException
     {
         parent::__construct($message);
     }
+
+    /**
+     * The JSON body to answer with. `success` is always present (array_filter would have dropped the
+     * `false`); `errors` only when there are field errors.
+     *
+     * @return array<string, mixed>
+     */
+    public function body(): array
+    {
+        return ['success' => false, 'message' => $this->getMessage()] + ($this->errors ? ['errors' => $this->errors] : []);
+    }
 }

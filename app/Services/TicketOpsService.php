@@ -193,7 +193,12 @@ class TicketOpsService
             ];
         }
 
-        return [
+        // The planning estimate is for managers, global roles and the assignee (TicketAccess::canSeeInternal).
+        $estimate = $this->access->canSeeInternal($user, $t)
+            ? ['task_scope' => $t->task_scope, 'task_points' => $t->task_points, 'estimated_hours' => $t->estimated_hours]
+            : [];
+
+        return $estimate + [
             'id' => $t->id,
             'ticket_number' => $t->ticket_number,
             'title' => $t->title,
@@ -354,7 +359,7 @@ class TicketOpsService
 
         // A declined assignment is waiting for a manager.
         $base()->where('tickets.status', 'REJECTED_BY_ASSIGNEE')->orderBy('tickets.updated_at')->limit(self::INSIGHT_LIMIT)->get()
-            ->each(fn (Ticket $t) => $push($t, 'assignment_declined', 'high', 80, 'اعتذر المكلف عن التذكرة', 'لا مكلَّف بها حاليًا وتنتظر إعادة التوجيه.', $t->updated_at, 'اختر مكلفًا بديلًا وأعد التوجيه.'));
+            ->each(fn (Ticket $t) => $push($t, 'assignment_declined', 'high', 80, 'اعتذر المكلف عن التذكرة', 'المكلف اعتذر عنها وتنتظر إعادة التوجيه إلى مكلف آخر.', $t->updated_at, 'اختر مكلفًا بديلًا وأعد التوجيه.'));
 
         // High priority and nobody owns it.
         $base()->whereNull('tickets.assigned_to_id')->whereIn('tickets.priority', ['HIGH', 'CRITICAL'])->orderBy('tickets.created_at')->limit(self::INSIGHT_LIMIT)->get()
@@ -517,7 +522,7 @@ class TicketOpsService
         $users = User::query()->where('is_active', true)->whereIn('id', $ids)->orderBy('name')->limit(200)->get(['id', 'name', 'role']);
 
         $load = $users->isEmpty() ? collect() : Ticket::query()->whereIn('assigned_to_id', $users->pluck('id'))
-            ->whereNotIn('status', TicketAccess::CLOSED_STATUSES)->selectRaw('assigned_to_id, COUNT(*) AS c')->groupBy('assigned_to_id')->pluck('c', 'assigned_to_id');
+            ->whereNotIn('status', [...TicketAccess::CLOSED_STATUSES, 'REJECTED_BY_ASSIGNEE'])->selectRaw('assigned_to_id, COUNT(*) AS c')->groupBy('assigned_to_id')->pluck('c', 'assigned_to_id');
 
         $rows = $users->map(fn (User $u) => [
             'id' => $u->id,

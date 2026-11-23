@@ -7,10 +7,14 @@ use App\Http\Controllers\Controller;
 use App\Models\Ticket;
 use App\Services\TicketAccess;
 use App\Services\TicketActions;
+use App\Services\TicketMyWork;
 use App\Services\TicketOpsService;
 use App\Services\TicketQuery;
+use App\Services\TicketWorkEstimate;
+use App\Support\TicketValidationMessages;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 
 /**
@@ -92,7 +96,7 @@ class TicketOpsController extends Controller
         $data = $request->validate([
             'priority' => ['required', Rule::in(TicketActions::PRIORITIES)],
             'reason' => ['nullable', 'string', 'max:500'],
-        ], ['priority.required' => 'الأولوية مطلوبة.', 'priority.in' => 'الأولوية غير صالحة.']);
+        ], TicketValidationMessages::all());
 
         try {
             $ticket = $this->actions->changePriority($id, $request->user(), $data['priority'], $data['reason'] ?? null);
@@ -101,6 +105,53 @@ class TicketOpsController extends Controller
         }
 
         return response()->json(['success' => true, 'message' => 'تم تغيير الأولوية.', 'data' => ['id' => $ticket->id, 'priority' => $ticket->priority]]);
+    }
+
+    // PATCH /v1/tickets/{id}/work-estimate
+    public function workEstimate(Request $request, int $id): JsonResponse
+    {
+        $rules = TicketWorkEstimate::rules();
+        $rules['task_scope'] = ['required', ...$rules['task_scope']];
+        $rules['task_points'] = ['required', ...$rules['task_points']];
+        $validator = Validator::make($request->all(), $rules, TicketValidationMessages::all() + TicketWorkEstimate::messages() + [
+            'task_scope.required' => TicketWorkEstimate::MISSING_MESSAGE,
+            'task_points.required' => TicketWorkEstimate::MISSING_MESSAGE,
+        ]);
+
+        try {
+            // Same body as every other ticket-action refusal: {success:false, message, errors}.
+            if ($validator->fails()) {
+                $first = $validator->errors()->first();
+                throw new TicketActionException($first, 422, $validator->errors()->toArray());
+            }
+            $data = $validator->validated();
+            $ticket = $this->actions->updateEstimate($id, $request->user(), $data);
+        } catch (TicketActionException $e) {
+            return $this->refused($e);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم تحديث تقدير العمل.',
+            'data' => $this->estimatePayload($ticket->fresh(), $request->user()),
+        ]);
+    }
+
+    // GET /v1/tickets/my-work
+    public function myWork(Request $request, TicketMyWork $myWork): JsonResponse
+    {
+        // No query parameter can widen the set (only `status` narrows it): the caller's own assignments, always.
+        $filter = $request->validate([
+            'status' => ['sometimes', 'nullable', 'string'],
+        ], ['status.string' => 'حالة غير صالحة.'])['status'] ?? null;
+        $statuses = $filter === null || $filter === '' ? [] : array_values(array_filter(array_map('trim', explode(',', $filter))));
+        if (array_diff($statuses, TicketMyWork::STATUSES) !== []) {
+            return response()->json(['success' => false, 'message' => 'حالة غير صالحة.', 'errors' => ['status' => ['حالة غير صالحة.']]], 422);
+        }
+
+        $result = $myWork->forUser($request->user(), $statuses);
+
+        return response()->json(['success' => true, 'data' => $result['data'], 'meta' => $result['meta']]);
     }
 
     // POST /v1/tickets/bulk
@@ -114,12 +165,22 @@ class TicketOpsController extends Controller
             'assigned_to_id' => ['required_if:action,reassign', 'nullable', 'integer', 'exists:users,id'],
             'unit_id' => ['nullable', 'integer', 'exists:departmental_units,id'],
             'reason' => ['nullable', 'string', 'max:500'],
-        ], [
+            ...TicketWorkEstimate::rules(),
+        ], TicketWorkEstimate::messages() + TicketValidationMessages::all() + [
             'ticket_ids.required' => 'اختر تذكرة واحدة على الأقل.',
             'ticket_ids.max' => 'الحد الأقصى '.TicketActions::MAX_BULK.' تذكرة في العملية الواحدة.',
             'priority.required_if' => 'اختر الأولوية الجديدة.',
             'assigned_to_id.required_if' => 'اختر المكلف الجديد.',
         ]);
+
+        // Both given and inconsistent: the same answer for every ticket, so refuse the request up front
+        // (a partial estimate is combined with each ticket's own stored value and checked per ticket).
+        if ($data['action'] === 'reassign' && ! empty($data['task_scope']) && isset($data['task_points'])) {
+            $check = \App\Services\TaskWorkflowService::validatePointsForScope($data['task_scope'], (int) $data['task_points']);
+            if (! ($check['valid'] ?? false)) {
+                return response()->json(['success' => false, 'message' => $check['message'], 'errors' => ['task_points' => [$check['message']]]], 422);
+            }
+        }
 
         $result = $this->actions->bulk($request->user(), $data['action'], $data['ticket_ids'], $data);
 
@@ -144,6 +205,20 @@ class TicketOpsController extends Controller
         return $ticket;
     }
 
+    /** @return array<string, mixed> */
+    private function estimatePayload(Ticket $ticket, $user): array
+    {
+        return [
+            'id' => $ticket->id,
+            'ticket_number' => $ticket->ticket_number,
+            'task_scope' => $ticket->task_scope,
+            'task_points' => $ticket->task_points,
+            'estimated_hours' => $ticket->estimated_hours,
+            'updated_at' => $ticket->updated_at?->toIso8601String(),
+            'capabilities' => $this->access->capabilities($user, $ticket),
+        ];
+    }
+
     private function notAvailable(): JsonResponse
     {
         return response()->json(['success' => false, 'message' => 'التذكرة غير موجودة أو لا تملك صلاحية عليها.'], 404);
@@ -151,6 +226,6 @@ class TicketOpsController extends Controller
 
     private function refused(TicketActionException $e): JsonResponse
     {
-        return response()->json(array_filter(['success' => false, 'message' => $e->getMessage(), 'errors' => $e->errors ?: null]), $e->status);
+        return response()->json($e->body(), $e->status);
     }
 }

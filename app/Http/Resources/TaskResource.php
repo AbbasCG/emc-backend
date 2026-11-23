@@ -73,6 +73,11 @@ class TaskResource extends JsonResource
                 'mime_type' => $att->mime_type,
             ])),
             'subtasks'            => TaskResource::collection($this->whenLoaded('subtasks')),
+            // Cheap counters, present only when the query asked for them (withCount): lists that do not load the
+            // relations themselves still tell a group parent apart and show checklist progress.
+            'subtasks_count'        => $this->when(array_key_exists('subtasks_count', $this->resource->getAttributes()), fn () => (int) $this->subtasks_count),
+            'checklist_items_count' => $this->when(array_key_exists('checklist_items_count', $this->resource->getAttributes()), fn () => (int) $this->checklist_items_count),
+            'checklist_done_count'  => $this->when(array_key_exists('checklist_done_count', $this->resource->getAttributes()), fn () => (int) $this->checklist_done_count),
             'comments'            => TaskCommentResource::collection($this->whenLoaded('comments')),
             'checklist_items'     => TaskChecklistItemResource::collection($this->whenLoaded('checklistItems')),
             'created_at'          => $this->created_at,

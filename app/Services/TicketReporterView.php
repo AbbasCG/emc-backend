@@ -104,7 +104,7 @@ class TicketReporterView
             'department'      => $ticket->department ? ['id' => $ticket->department->id, 'name' => $ticket->department->name_ar ?: $ticket->department->name] : null,
             'capabilities'    => [
                 'approve' => false, 'reject' => false, 'reassign' => false, 'accept_task' => false, 'reject_task' => false,
-                'complete_task' => false, 'add_internal_note' => false, 'comment' => ! in_array($ticket->status, self::FINAL_STATUSES, true), 'change_priority' => false,
+                'complete_task' => false, 'add_internal_note' => false, 'comment' => ! in_array($ticket->status, self::FINAL_STATUSES, true), 'change_priority' => false, 'can_edit_estimate' => false,
             ],
         ];
     }

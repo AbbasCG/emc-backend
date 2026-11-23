@@ -251,7 +251,7 @@ class TeamProfileMemberIdentityCorrectionTest extends TestCase
             'created_by_name' => 'تجريبي', 'status' => 'PENDING_APPROVAL',
         ]);
         $this->actingAs($leader)->postJson("/api/v1/tickets/{$ticket->id}/approve", [
-            'sla_hours' => 24, 'assigned_to_id' => $user->id,
+            'sla_hours' => 24, 'assigned_to_id' => $user->id, 'task_scope' => 'simple', 'task_points' => 30,
         ])->assertOk();
 
         // Now move the member away.

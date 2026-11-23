@@ -46,6 +46,12 @@ class OperationsBoardController extends Controller
                 'evaluation.evaluator',
                 'attachments',
             ])
+            // Counters only (a subquery each, no rows loaded): group parents and checklist progress on the cards.
+            ->withCount([
+                'subtasks',
+                'checklistItems',
+                'checklistItems as checklist_done_count' => fn ($q) => $q->where('is_completed', true),
+            ])
             ->when($request->department_id, fn ($q) => $q->where('department_id', $request->department_id))
             ->when($isMineScope, function ($q) use ($user) {
                 // الأجايل الخاص بالعضو: فقط مهامه المقبولة

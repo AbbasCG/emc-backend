@@ -8,6 +8,7 @@ use App\Models\Ticket;
 use App\Models\TicketActivityLog;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 /**
  * Ticket mutations shared by the single-ticket endpoints and the bulk endpoint, so a bulk
@@ -67,15 +68,15 @@ class TicketActions
     }
 
     /**
-     * Hand an assigned ticket to someone else (assign again for the first time after approval, or a
-     * true reassignment: the endpoint has never distinguished them). Status goes back to ASSIGNED
-     * so the new assignee accepts it.
+     * Hand a ticket to someone (assign again for the first time after approval, a true reassignment, or
+     * routing again a ticket its assignee declined: the endpoint has never distinguished them). Status goes
+     * back to ASSIGNED so the new assignee accepts it.
      *
      * @throws TicketActionException
      */
-    public function reassign(int $ticketId, User $actor, int $assigneeId, ?int $unitId = null, ?string $reason = null): Ticket
+    public function reassign(int $ticketId, User $actor, int $assigneeId, ?int $unitId = null, ?string $reason = null, array $estimate = []): Ticket
     {
-        return DB::transaction(function () use ($ticketId, $actor, $assigneeId, $unitId, $reason) {
+        return DB::transaction(function () use ($ticketId, $actor, $assigneeId, $unitId, $reason, $estimate) {
             $ticket = Ticket::lockForUpdate()->find($ticketId);
             if (! $ticket || ! $this->access->canView($actor, $ticket)) {
                 throw new TicketActionException('التذكرة غير موجودة أو لا تملك صلاحية عليها.', 404);
@@ -83,7 +84,7 @@ class TicketActions
             if (! $this->access->canManage($actor, (int) $ticket->department_id)) {
                 throw new TicketActionException('إعادة التوجيه متاحة فقط لقائد الإدارة المعنية.', 403);
             }
-            if (! in_array($ticket->status, ['ASSIGNED', 'IN_PROGRESS'], true)) {
+            if (! in_array($ticket->status, TicketAccess::REASSIGNABLE_STATUSES, true)) {
                 throw new TicketActionException('لا يمكن إعادة توجيه تذكرة بحالتها الراهنة.', 409);
             }
 
@@ -105,13 +106,35 @@ class TicketActions
                 );
             }
 
+            // A declined ticket must go to SOMEONE ELSE: handing it straight back to the person who just
+            // apologised for it would only loop (they can still be asked in person and accept normally).
+            $declined = $ticket->status === 'REJECTED_BY_ASSIGNEE';
+            if ($declined && $ticket->assigned_to_id !== null && (int) $ticket->assigned_to_id === $assigneeId) {
+                throw new TicketActionException(
+                    'المكلف الحالي اعتذر عن هذه التذكرة؛ اختر مكلفًا آخر.',
+                    422,
+                    ['assigned_to_id' => ['المكلف الحالي اعتذر عن هذه التذكرة؛ اختر مكلفًا آخر.']],
+                );
+            }
+            $previousReason = $declined ? trim((string) $ticket->assignee_rejection_reason) : '';
+
+            // The ticket becomes work for a person: it must carry its size and points, from the request or
+            // already stored. A legacy ticket with neither is refused here, on every path (single + bulk).
+            $work = TicketWorkEstimate::resolve($ticket, $estimate);
+            $estimateChanged = TicketWorkEstimate::differs($ticket, $work);
+            $estimateBefore = TicketWorkEstimate::snapshot($ticket);
+
             $previous = $ticket->status;
             $ticket->update([
                 'assigned_to_id' => $assigneeId,
                 'unit_id' => $unitId ?? $ticket->unit_id,
                 'status' => 'ASSIGNED',
                 'accepted_at' => null,
-            ]);
+                // The apology belongs to the previous assignee. It stays in the activity log (the
+                // REJECTED_BY_ASSIGNEE row and the details below) but is cleared from the ticket, so the new
+                // assignee never reads someone else's «sorry» as the state of their own task.
+                'assignee_rejection_reason' => null,
+            ] + $work);
 
             TicketActivityLog::create([
                 'ticket_id' => $ticket->id,
@@ -120,9 +143,53 @@ class TicketActions
                 'new_state' => 'ASSIGNED',
                 'performed_by' => $actor->id,
                 'performed_by_name' => $actor->name,
-                'details' => 'تمت إعادة التوجيه وتغيير المكلف'.($reason ? ': '.$reason : ''),
+                'details' => 'تمت إعادة التوجيه وتغيير المكلف'.($reason ? ': '.$reason : '')
+                    .($previousReason !== '' ? ' | سبب اعتذار المكلف السابق: '.Str::limit($previousReason, 500) : ''),
                 'logged_at' => now(),
             ]);
+
+            // The estimate has its own row, visible only to managers, global roles and the assignee: this row
+            // (like APPROVED_AND_ASSIGNED) is read by every department member, so it carries no estimate text.
+            if ($estimateChanged) {
+                TicketWorkEstimate::log($ticket, $actor, $estimateBefore, $work);
+            }
+
+            return $ticket;
+        });
+    }
+
+    /**
+     * Change the planning estimate (size, points, approximate hours) of an OPEN ticket. Department
+     * leadership only, like priority and reassignment. Estimate only: nothing is credited.
+     *
+     * @param  array<string, mixed>  $input  any subset of task_scope / task_points / estimated_hours; what is not sent keeps its stored value
+     *
+     * @throws TicketActionException
+     */
+    public function updateEstimate(int $ticketId, User $actor, array $input): Ticket
+    {
+        return DB::transaction(function () use ($ticketId, $actor, $input) {
+            $ticket = Ticket::lockForUpdate()->find($ticketId);
+            if (! $ticket || ! $this->access->canView($actor, $ticket)) {
+                throw new TicketActionException('التذكرة غير موجودة أو لا تملك صلاحية عليها.', 404);
+            }
+            if (! $this->access->canManage($actor, (int) $ticket->department_id)) {
+                throw new TicketActionException('تعديل تقدير العمل متاح فقط لقائد الإدارة المعنية.', 403);
+            }
+            if (in_array($ticket->status, TicketAccess::CLOSED_STATUSES, true)) {
+                throw new TicketActionException('لا يمكن تعديل تقدير العمل لتذكرة مغلقة.', 409);
+            }
+
+            // The only place where an explicit `estimated_hours: null` clears the hours.
+            $work = TicketWorkEstimate::resolve($ticket, TicketWorkEstimate::only($input), allowClearHours: true);
+
+            if (! TicketWorkEstimate::differs($ticket, $work)) {
+                return $ticket;
+            }
+
+            $before = TicketWorkEstimate::snapshot($ticket);
+            $ticket->update($work);
+            TicketWorkEstimate::log($ticket, $actor, $before, $work);
 
             return $ticket;
         });
@@ -147,9 +214,10 @@ class TicketActions
             try {
                 $ticket = match ($action) {
                     'priority' => $this->changePriority($id, $actor, (string) $params['priority'], $params['reason'] ?? null),
-                    'reassign' => $this->reassign($id, $actor, (int) $params['assigned_to_id'], isset($params['unit_id']) ? (int) $params['unit_id'] : null, $params['reason'] ?? null),
+                    'reassign' => $this->reassign($id, $actor, (int) $params['assigned_to_id'], isset($params['unit_id']) ? (int) $params['unit_id'] : null, $params['reason'] ?? null, TicketWorkEstimate::only($params)),
                 };
-                $results[] = ['id' => $id, 'ticket_number' => $ticket->ticket_number, 'ok' => true, 'message' => 'تم'];
+                $results[] = ['id' => $id, 'ticket_number' => $ticket->ticket_number, 'ok' => true, 'message' => 'تم']
+                    + ($action === 'reassign' ? ['task_scope' => $ticket->task_scope, 'task_points' => $ticket->task_points, 'estimated_hours' => $ticket->estimated_hours] : []);
             } catch (TicketActionException $e) {
                 // "Not found" and "not visible to you" are the same 404 (nothing is revealed about the
                 // id, not even its number). A 403/409/422 only reaches a ticket the caller may already see.

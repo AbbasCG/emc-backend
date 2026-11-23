@@ -87,7 +87,7 @@ class TicketAssignmentChannelSettingsTest extends TestCase
     {
         Sanctum::actingAs($this->leader);
 
-        return $this->postJson("/api/v1/tickets/{$t->id}/reassign", ['assigned_to_id' => $to->id]);
+        return $this->postJson("/api/v1/tickets/{$t->id}/reassign", ['assigned_to_id' => $to->id, 'task_scope' => 'simple', 'task_points' => 30]);
     }
 
     private function assignSupport(SupportTicket $t, User $to, ?User $as = null)

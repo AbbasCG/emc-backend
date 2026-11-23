@@ -2457,6 +2457,20 @@ Route::middleware(['auth:sanctum', 'role:super_admin,tech_admin'])->prefix('admi
     Route::put('/{department}/page-access', [\App\Http\Controllers\Admin\DepartmentPageDefaultController::class, 'update']);
 });
 
+// ─── «مهامي»: the signed-in user's OWN assigned tasks, for any authenticated member ───────────────
+// The management routes (/admin/tasks/my, /operations/tasks/{task}/accept) are role-restricted, so an ordinary
+// member could not see or accept a task assigned to them. These are own-only (assigned_to = the caller) and have
+// no admin override. Password-change and scoped-token gates apply as on every api route (api middleware group).
+Route::middleware('auth:sanctum')->prefix('my-work')->group(function () {
+    Route::get('/tasks', [\App\Http\Controllers\Api\MyWorkTaskController::class, 'index'])->middleware('throttle:60,1');
+    Route::get('/tasks/{task}', [\App\Http\Controllers\Api\MyWorkTaskController::class, 'show'])->whereNumber('task')->middleware('throttle:60,1');
+    Route::patch('/tasks/{task}/status', [\App\Http\Controllers\Api\MyWorkTaskController::class, 'status'])->whereNumber('task')->middleware('throttle:30,1');
+    Route::post('/tasks/{task}/comments', [\App\Http\Controllers\Api\MyWorkTaskController::class, 'comment'])->whereNumber('task')->middleware('throttle:30,1');
+    Route::put('/tasks/{task}/checklist/{item}', [\App\Http\Controllers\Api\MyWorkTaskController::class, 'checklist'])->whereNumber(['task', 'item'])->middleware('throttle:30,1');
+    Route::post('/tasks/{task}/accept', [\App\Http\Controllers\Api\MyWorkTaskController::class, 'accept'])->whereNumber('task')->middleware('throttle:30,1');
+    Route::post('/tasks/{task}/reject', [\App\Http\Controllers\Api\MyWorkTaskController::class, 'reject'])->whereNumber('task')->middleware('throttle:30,1');
+});
+
 // ─── EMC Unified Tickets & Issue Tracking System Routes ────────────────────
 // Every action requires authentication; object-level authorization (creator/
 // assignee/department-leader/global) is enforced inside TicketController via
@@ -2467,6 +2481,8 @@ Route::middleware('auth:sanctum')->prefix('v1/tickets')->group(function () {
     // Static paths MUST stay above /{id}, which also accepts ticket numbers.
     Route::get('/stats', [\App\Http\Controllers\Api\TicketOpsController::class, 'stats']);
     Route::get('/board', [\App\Http\Controllers\Api\TicketOpsController::class, 'board']);
+    // The caller's own assigned tickets for «مهامي ومسؤولياتي» (derived from tickets; no Task rows).  Static path: stays above /{id}.
+    Route::get('/my-work', [\App\Http\Controllers\Api\TicketOpsController::class, 'myWork'])->middleware('throttle:60,1');
     Route::get('/analytics', [\App\Http\Controllers\Api\TicketOpsController::class, 'analytics']);
     Route::get('/insights', [\App\Http\Controllers\Api\TicketOpsController::class, 'insights']);
     Route::post('/bulk', [\App\Http\Controllers\Api\TicketOpsController::class, 'bulk'])->middleware('throttle:10,1');
@@ -2483,6 +2499,7 @@ Route::middleware('auth:sanctum')->prefix('v1/tickets')->group(function () {
     Route::get('/{id}/assignment-suggestions', [\App\Http\Controllers\Api\TicketOpsController::class, 'assignmentSuggestions'])->whereNumber('id');
     Route::get('/{id}/possible-duplicates', [\App\Http\Controllers\Api\TicketOpsController::class, 'possibleDuplicates'])->whereNumber('id');
     Route::patch('/{id}/priority', [\App\Http\Controllers\Api\TicketOpsController::class, 'priority'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::patch('/{id}/work-estimate', [\App\Http\Controllers\Api\TicketOpsController::class, 'workEstimate'])->whereNumber('id')->middleware('throttle:30,1');
     Route::get('/{ticketId}/attachments/{attachmentId}/download', [TicketController::class, 'downloadAttachment'])
         ->name('tickets.attachments.download');
 });
