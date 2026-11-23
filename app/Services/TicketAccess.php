@@ -32,13 +32,26 @@ class TicketAccess
     public const PENDING_REVIEW = 'PENDING_REVIEW';
 
     /**
+     * The deployment cycle (only tickets with requires_deployment): the work is approved for deployment, put on the live
+     * site, and only the assignee's verification THERE closes (and credits) it.
+     */
+    public const APPROVED_FOR_DEPLOY = 'APPROVED_FOR_DEPLOY';
+    public const PENDING_VERIFICATION = 'PENDING_VERIFICATION';
+
+    /** The internal review steps after the assignee's submission: open, held by someone else, and folded into IN_PROGRESS for a reporter. */
+    public const REVIEW_STAGES = ['PENDING_REVIEW', 'APPROVED_FOR_DEPLOY', 'PENDING_VERIFICATION'];
+
+    /** The only statuses in which the estimate (size, points, hours) and the deployment flag can be edited by a manager. */
+    public const ESTIMATE_EDITABLE_STATUSES = ['PENDING_APPROVAL', 'ASSIGNED', 'IN_PROGRESS', 'REJECTED_BY_ASSIGNEE'];
+
+    /**
      * Roles that give the FINAL approval of work larger than «بسيطة». The very list TaskController::hrApprove uses:
      * regular tasks above the simple size need HR's final approval, so tickets do too.
      */
     public const HR_APPROVAL_ROLES = ['admin', 'super_admin', 'hr_manager', 'executive_admin'];
 
     /** Log rows only managers, global roles and the assignee may read. */
-    public const INTERNAL_LOG_ACTIONS = ['INTERNAL_NOTE', 'ESTIMATE_UPDATED', 'CREDIT_ADDED', 'RETURNED_FOR_REWORK'];
+    public const INTERNAL_LOG_ACTIONS = ['INTERNAL_NOTE', 'ESTIMATE_UPDATED', 'CREDIT_ADDED', 'RETURNED_FOR_REWORK', 'APPROVED_FOR_DEPLOY', 'DEPLOYED_LIVE', 'DEPLOY_DETAILS', 'VERIFIED_RESOLVED', 'VERIFICATION_FAILED', 'DEPLOYMENT_FLAG_CHANGED'];
 
     /**
      * Statuses a manager may hand to (another) person: held by someone (ASSIGNED, IN_PROGRESS) or declined
@@ -256,7 +269,13 @@ class TicketAccess
      */
     public function canReviewCompletion(User $user, Ticket $ticket): bool
     {
-        return $ticket->status === self::PENDING_REVIEW
+        return $this->canReviewStage($user, $ticket, self::PENDING_REVIEW);
+    }
+
+    /** The reviewer rules of canReviewCompletion(), for a ticket that must currently be in $status. */
+    public function canReviewStage(User $user, Ticket $ticket, string $status): bool
+    {
+        return $ticket->status === $status
             && $ticket->assigned_to_id !== null
             && (int) $ticket->assigned_to_id !== (int) $user->id
             // The person who submitted the work (a global role may submit on the assignee's behalf) cannot review it.
@@ -264,9 +283,109 @@ class TicketAccess
             && $this->canManage($user, (int) $ticket->department_id);
     }
 
+    public function isDeploymentTicket(Ticket $ticket): bool
+    {
+        return (bool) $ticket->requires_deployment;
+    }
+
+    /**
+     * Is the person the ticket is assigned to unable to carry it on: gone (deleted), deactivated, or blocked the way regular tasks
+     * are (inactive / on leave / withdrawn volunteer)?
+     */
+    public function assigneeUnavailable(Ticket $ticket): bool
+    {
+        if ($ticket->assigned_to_id === null) {
+            return true;
+        }
+
+        $assignee = User::find($ticket->assigned_to_id);
+
+        return ! $assignee || ! $assignee->is_active || ! TaskWorkflowService::canAssignTaskToUser((int) $assignee->id)['allowed'];
+    }
+
+    /**
+     * May this user return the submitted/approved work to the assignee (the reviewer rules, in the stages that allow it)?
+     * Once the change is live only the assignee sends it back (verify-failed), EXCEPT when the assignee can no longer act: then a
+     * manager may, so the ticket cannot be stuck forever.
+     */
+    public function canReturnForRework(User $user, Ticket $ticket): bool
+    {
+        if ($this->canReviewStage($user, $ticket, self::PENDING_REVIEW)) {
+            return true;
+        }
+
+        if (! $this->isDeploymentTicket($ticket)) {
+            return false;
+        }
+
+        return $this->canReviewStage($user, $ticket, self::APPROVED_FOR_DEPLOY)
+            || ($this->canReviewStage($user, $ticket, self::PENDING_VERIFICATION) && $this->assigneeUnavailable($ticket));
+    }
+
+    /** May this user put an approved deployment ticket on the live site (department leader or global role, never its assignee)? */
+    public function canMarkDeployed(User $user, Ticket $ticket): bool
+    {
+        return $this->isDeploymentTicket($ticket)
+            && $ticket->status === self::APPROVED_FOR_DEPLOY
+            && ! $this->isTicketAssignee($user, $ticket)
+            && $this->canManage($user, (int) $ticket->department_id);
+    }
+
+    /** The assignee's live verification: the ACTUAL assignee only, never a global role acting for them. */
+    public function canVerifyLive(User $user, Ticket $ticket): bool
+    {
+        return $this->isDeploymentTicket($ticket)
+            && $ticket->status === self::PENDING_VERIFICATION
+            && $this->isTicketAssignee($user, $ticket);
+    }
+
+    /**
+     * Where the ticket is in its workflow and who must act next (for the UI; derived from the status, never stored).
+     * Tickets still waiting for a manager's decision, declined by their assignee, rejected or unresolved are outside the
+     * work cycle: stage null.
+     *
+     * @return array{stage: ?string, next_actor: ?string, next_step_key: string}
+     */
+    public function workflow(Ticket $ticket): array
+    {
+        return match ($ticket->status) {
+            'ASSIGNED', 'IN_PROGRESS' => ['stage' => 'in_progress', 'next_actor' => 'assignee', 'next_step_key' => 'submit_for_review'],
+            self::PENDING_REVIEW => ['stage' => 'pending_review', 'next_actor' => 'reviewer', 'next_step_key' => 'review'],
+            self::APPROVED_FOR_DEPLOY => ['stage' => 'approved_for_deploy', 'next_actor' => 'deployer', 'next_step_key' => 'deploy'],
+            self::PENDING_VERIFICATION => ['stage' => 'pending_verification', 'next_actor' => 'assignee', 'next_step_key' => 'verify_live'],
+            'RESOLVED' => ['stage' => 'resolved', 'next_actor' => null, 'next_step_key' => 'none'],
+            default => ['stage' => null, 'next_actor' => null, 'next_step_key' => 'none'],
+        };
+    }
+
+    /**
+     * The `deployment` block (managers, global roles and the assignee only; see redactInternal).
+     *
+     * @return array{review_approved_by_name: ?string, review_approved_at: ?string, deployed_by_name: ?string, deployed_at: ?string, live_url: ?string, verified_at: ?string, round: int}
+     */
+    public function deploymentInfo(Ticket $ticket): array
+    {
+        if ($ticket->review_approved_by_id !== null && ! $ticket->relationLoaded('reviewApprover')) {
+            $ticket->load('reviewApprover:id,name');
+        }
+        if ($ticket->deployed_by_id !== null && ! $ticket->relationLoaded('deployer')) {
+            $ticket->load('deployer:id,name');
+        }
+
+        return [
+            'review_approved_by_name' => $ticket->reviewApprover?->name,
+            'review_approved_at' => $ticket->review_approved_at?->toIso8601String(),
+            'deployed_by_name' => $ticket->deployer?->name,
+            'deployed_at' => $ticket->deployed_at?->toIso8601String(),
+            'live_url' => $ticket->live_url,
+            'verified_at' => $ticket->verified_at?->toIso8601String(),
+            'round' => (int) $ticket->review_round,
+        ];
+    }
     /**
      * The `credit` block every staff payload carries (for those who may read it, see redactInternal).
-     * status: none | pending_review | credited. The numbers exist only once credited.
+     * status: none | pending_review | approved | credited. `approved` (a deployment ticket approved for deployment, not yet
+     * verified live) shows the APPROVED points and minutes but nothing is credited; the numbers are final once credited.
      *
      * `hours` is the credited actual time; `minutes` its exact value (null for a credit made before actual durations existed).
      *
@@ -277,6 +396,18 @@ class TicketAccess
         $credited = $ticket->credited_at !== null;
         if ($credited && ! $ticket->relationLoaded('creditor')) {
             $ticket->load('creditor:id,name');
+        }
+
+        // Approved for deployment but not yet verified live: the approved values, clearly not credited.
+        if (! $credited && $this->isDeploymentTicket($ticket) && in_array($ticket->status, [self::APPROVED_FOR_DEPLOY, self::PENDING_VERIFICATION], true)) {
+            return [
+                'status' => 'approved',
+                'points' => $ticket->task_points === null ? null : (int) $ticket->task_points,
+                'hours' => $ticket->actual_minutes === null ? null : round($ticket->actual_minutes / 60, 2),
+                'minutes' => $ticket->actual_minutes === null ? null : (int) $ticket->actual_minutes,
+                'credited_at' => null,
+                'credited_by_name' => null,
+            ];
         }
 
         return [
@@ -314,17 +445,27 @@ class TicketAccess
             // a global role who is NOT the assignee; approving work above «بسيطة» also needs an HR approver. A
             // ticket with no size yet (legacy) is approved together with the size the approver supplies, so the HR
             // gate for it is judged by the endpoint once that size is known.
-            'approve_completion' => $this->canReviewCompletion($user, $ticket)
+            // A deployment ticket is approved FOR DEPLOYMENT instead (and closed only by the assignee's live verification).
+            'approve_completion' => ! $this->isDeploymentTicket($ticket)
+                && $this->canReviewCompletion($user, $ticket)
                 && $ticket->credited_at === null
                 && (! $this->needsHrApproval($ticket->task_scope) || $this->isHrApprover($user)),
-            'return_for_rework' => $this->canReviewCompletion($user, $ticket),
+            'approve_for_deploy' => $this->isDeploymentTicket($ticket)
+                && $this->canReviewCompletion($user, $ticket)
+                && $ticket->credited_at === null
+                && (! $this->needsHrApproval($ticket->task_scope) || $this->isHrApprover($user))
+                && ! $this->assigneeUnavailable($ticket),
+            'mark_deployed' => $this->canMarkDeployed($user, $ticket),
+            'verify_resolved' => $this->canVerifyLive($user, $ticket),
+            'verify_failed' => $this->canVerifyLive($user, $ticket),
+            'return_for_rework' => $this->canReturnForRework($user, $ticket),
             'add_internal_note' => $canManage,
             'comment' => true,
             'change_priority' => $canManage && $open,
             // The planning estimate (size, points, hours) of an open ticket: same gate as priority.
             // Never once the work is submitted (it is corrected in the approval request, under the HR gate) and never by
             // the assignee, who must not resize their own work.
-            'can_edit_estimate' => $canManage && $open && $ticket->status !== self::PENDING_REVIEW && ! $this->isTicketAssignee($user, $ticket),
+            'can_edit_estimate' => $canManage && in_array($ticket->status, self::ESTIMATE_EDITABLE_STATUSES, true) && ! $this->isTicketAssignee($user, $ticket),
         ];
     }
 
@@ -339,8 +480,10 @@ class TicketAccess
     {
         if ($this->canSeeInternal($user, $ticket)) {
             $data['credit'] = $this->creditInfo($ticket);
-            // The relation is only loaded to name the approver; the `credit` block carries it.
-            unset($data['creditor']);
+            $data['deployment'] = $this->deploymentInfo($ticket);
+            $data['workflow'] = $this->workflow($ticket);
+            // The relations are only loaded to name people; the `credit` and `deployment` blocks carry the names.
+            unset($data['creditor'], $data['review_approver'], $data['reviewApprover'], $data['deployer']);
 
             return $data;
         }
@@ -350,7 +493,7 @@ class TicketAccess
         // The planning estimate (size, points, hours), the credit and their change history are for the same people
         // who may read internal notes: managers, global roles and the assignee. A plain department member can open
         // the ticket without them.
-        foreach (['task_scope', 'task_points', 'estimated_hours', 'actual_minutes', 'credit', 'creditor', 'credited_points', 'credited_hours', 'credited_minutes', 'credited_at', 'credited_by_id'] as $key) {
+        foreach (['task_scope', 'task_points', 'estimated_hours', 'actual_minutes', 'credit', 'creditor', 'credited_points', 'credited_hours', 'credited_minutes', 'credited_at', 'credited_by_id', 'requires_deployment', 'deployment', 'workflow', 'review_approver', 'reviewApprover', 'deployer'] as $key) {
             unset($data[$key]);
         }
 

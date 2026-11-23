@@ -249,7 +249,9 @@ class TicketAssignmentNotificationsTest extends TestCase
 
     public function test_assigning_a_ticket_to_yourself_sends_nothing(): void
     {
-        $t = $this->ticket(['status' => 'ASSIGNED', 'assigned_to_id' => $this->bob->id]);
+        // CHANGED: naming yourself the assignee no longer lets you change the estimate, so the ticket already carries the one
+        // the request repeats (assignment itself still works).
+        $t = $this->ticket(['status' => 'ASSIGNED', 'assigned_to_id' => $this->bob->id, 'task_scope' => 'simple', 'task_points' => 30]);
 
         // A global role may both manage and be assigned.
         $this->reassign($t, $this->alice, $this->alice)->assertOk();

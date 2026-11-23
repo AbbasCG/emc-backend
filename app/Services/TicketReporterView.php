@@ -28,7 +28,7 @@ class TicketReporterView
      * What the submitter is told for an internal status. PENDING_REVIEW (the work is done and waits for the final
      * approval) is an internal step: to the submitter the ticket is still being worked on until it is approved.
      */
-    public const PUBLIC_STATUS = ['PENDING_REVIEW' => 'IN_PROGRESS'];
+    public const PUBLIC_STATUS = ['PENDING_REVIEW' => 'IN_PROGRESS', 'APPROVED_FOR_DEPLOY' => 'IN_PROGRESS', 'PENDING_VERIFICATION' => 'IN_PROGRESS'];
 
     public static function publicStatus(?string $status): ?string
     {
@@ -60,7 +60,7 @@ class TicketReporterView
             'resolved_at'     => $ticket->resolved_at?->toIso8601String(),
 
             // The assignee's written answer. Only meaningful once resolved.
-            'resolution_note' => $ticket->status === 'RESOLVED' ? $this->clean($ticket->resolution_summary) : null,
+            'resolution_note' => $ticket->status === 'RESOLVED' && ! $ticket->requires_deployment ? $this->clean($ticket->resolution_summary) : null,
 
             // The department head writes this reason for the submitter (the
             // reject dialog says so); the assignee's apology reason and the
@@ -84,6 +84,10 @@ class TicketReporterView
                 'reject_task'       => false,
                 'complete_task'     => false,
                 'approve_completion' => false,
+                'approve_for_deploy' => false,
+                'mark_deployed' => false,
+                'verify_resolved' => false,
+                'verify_failed' => false,
                 'return_for_rework' => false,
                 'add_internal_note' => false,
                 'comment'           => ! $isFinal,
@@ -117,7 +121,7 @@ class TicketReporterView
             'department'      => $ticket->department ? ['id' => $ticket->department->id, 'name' => $ticket->department->name_ar ?: $ticket->department->name] : null,
             'capabilities'    => [
                 'approve' => false, 'reject' => false, 'reassign' => false, 'accept_task' => false, 'reject_task' => false,
-                'complete_task' => false, 'approve_completion' => false, 'return_for_rework' => false, 'add_internal_note' => false, 'comment' => ! in_array($ticket->status, self::FINAL_STATUSES, true), 'change_priority' => false, 'can_edit_estimate' => false,
+                'complete_task' => false, 'approve_completion' => false, 'approve_for_deploy' => false, 'mark_deployed' => false, 'verify_resolved' => false, 'verify_failed' => false, 'return_for_rework' => false, 'add_internal_note' => false, 'comment' => ! in_array($ticket->status, self::FINAL_STATUSES, true), 'change_priority' => false, 'can_edit_estimate' => false,
             ],
         ];
     }
@@ -199,6 +203,7 @@ class TicketReporterView
                 // The final approval is what closes the ticket for the submitter; the assignee's own submission
                 // (SUBMITTED_FOR_REVIEW) and a return for rework (RETURNED_FOR_REWORK) are internal steps and are not shown.
                 case 'APPROVED_COMPLETION':
+                case 'VERIFIED_RESOLVED':
                 case 'RESOLVED':
                     $push('resolved', $isSuggestion ? 'تم تنفيذ المقترح' : 'تم حل البلاغ', $log->logged_at);
                     break;

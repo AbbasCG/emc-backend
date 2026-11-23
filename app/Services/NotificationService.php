@@ -1904,6 +1904,27 @@ class NotificationService
             ]
         );
     }
+    /** The change is on the live site: the assignee must verify it there (then the ticket closes and the credit is added). One per ticket and review round. */
+    public static function ticketLiveVerificationRequired(int $assigneeId, int $ticketId, string $ticketTitle, int $round, ?int $deployedById = null): void
+    {
+        $title = self::shortTitle($ticketTitle);
+
+        self::send($assigneeId, 'ticket_live_verification_required',
+            'تذكرة بانتظار تحققك على الموقع الحي',
+            "نُشر التعديل الخاص بالتذكرة \"{$title}\" على الموقع الحي. افتح التذكرة وتحقق من الحل، ثم أكّد الإغلاق أو أبلغ عن المشكلة.",
+            [
+                'entity_type'     => 'ticket',
+                'entity_id'       => $ticketId,
+                // Class C — the same ticket can be deployed again after a failed verification; one key per round.
+                'idempotency_key' => NotificationIdempotencyKey::fromComponents('ticket_live_verification_required', [$ticketId, $round]),
+                'action_url'      => "/dashboard/tickets/{$ticketId}",
+                'icon'            => 'rocket',
+                'color'           => 'blue',
+                'created_by'      => $deployedById,
+            ]
+        );
+    }
+
     /** The reviewer sent the work back for more work; nothing was credited. */
     public static function ticketReturnedForRework(int $assigneeId, int $ticketId, string $ticketTitle, string $reason, string $returnRef, ?int $returnedById = null): void
     {

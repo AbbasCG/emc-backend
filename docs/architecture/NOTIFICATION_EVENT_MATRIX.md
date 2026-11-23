@@ -72,8 +72,9 @@ Maps every real `NotificationService` scenario method (56, verified by `grep -c 
 | 62 | `supportTicketAssigned` | Support tickets | support lead (via `SupportTicketController::assign` / `updateStatus`) | the new assignee (only on a real change; never self; skipped if inactive) | in_app + logged email (email off by default), each gated by admin switch + user preference | C | **Adopted** — `ticket_assigned:{supportTicketId}:{assigneeId}:{previousAssignee}@{assignedAtMicros}` |
 | 63 | `ticketCompletionApproved` | Tickets (operations) | department leader / global role (via `TicketCreditService`, after commit) | the assignee who did the work (never the approver) | in_app | A | **Adopted** — `ticket_completion_approved:{ticketId}` |
 | 64 | `ticketReturnedForRework` | Tickets (operations) | department leader / global role (via `TicketActions::returnForRework`, after commit) | the assignee the work is returned to (never the reviewer) | in_app | C (a ticket can be returned more than once) | **Adopted** — `ticket_returned_for_rework:{ticketId}:{assigneeId}:{returnedAtMicros}` |
+| 65 | `ticketLiveVerificationRequired` | Tickets (operations) | department leader / global role (via `TicketDeploymentService::markDeployed`, after commit) | the assignee who must verify the change on the live site | in_app | C (one per ticket and review round) | **Adopted** — `ticket_live_verification_required:{ticketId}:{round}` |
 
-`grep -c "public static function" app/Services/NotificationService.php` returns **65** — `send()` (the core dispatcher, not a scenario) plus the **64 real scenario methods** above, one row each.
+`grep -c "public static function" app/Services/NotificationService.php` returns **66** — `send()` (the core dispatcher, not a scenario) plus the **65 real scenario methods** above, one row each.
 
 ## Legitimate-repeat decisions made explicit this pass
 
@@ -155,6 +156,7 @@ Source of truth: `App\Support\NotificationChannelPolicy::POLICY`. Verified this 
 | `ticket_assigned` | in_app | false | existing_separate | none | Support ticket assigned (original key); SupportTicketAssignedMail sent separately, off by default (key `ticket_assigned`); admin in-app switch in `notification_channel_settings` |
 | `ticket_completion_approved` | in_app | false | none | none | Final approval of a ticket's completion: the assignee is told the ticket is closed and what was credited (in-app only; no new email or preference key) |
 | `ticket_returned_for_rework` | in_app | false | none | none | The reviewer returned the work to the assignee with a reason; nothing credited (in-app only) |
+| `ticket_live_verification_required` | in_app | false | none | none | The change is live: the assignee must verify it on the live site (the step that closes and credits the ticket); in-app only |
 | `ambassador_application` | in_app | false | existing_separate | none | AmbassadorApplicationAdminMail already sent |
 | `ambassador_status_changed` | in_app | false | none | none | Applicant email dispatched separately by the controller, not this method |
 | `volunteer_hr_profile_submitted` | in_app | false | none | none | HR review-queue event; visible in the operations workspace and not time-sensitive |

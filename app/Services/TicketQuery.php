@@ -22,7 +22,7 @@ use Illuminate\Validation\ValidationException;
  */
 class TicketQuery
 {
-    public const STATUSES = ['PENDING_APPROVAL', 'ASSIGNED', 'IN_PROGRESS', 'PENDING_REVIEW', 'RESOLVED', 'UNRESOLVED', 'REJECTED_BY_ADMIN', 'REJECTED_BY_ASSIGNEE'];
+    public const STATUSES = ['PENDING_APPROVAL', 'ASSIGNED', 'IN_PROGRESS', 'PENDING_REVIEW', 'APPROVED_FOR_DEPLOY', 'PENDING_VERIFICATION', 'RESOLVED', 'UNRESOLVED', 'REJECTED_BY_ADMIN', 'REJECTED_BY_ASSIGNEE'];
     public const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
     public const CATEGORIES = ['OLD_ISSUE', 'NEW_SUGGESTION'];
     public const SORTS = ['created_at', 'updated_at', 'priority', 'status', 'ticket_number', 'title', 'due', 'last_activity'];
@@ -65,7 +65,7 @@ class TicketQuery
 
         $v = validator($input, [
             'search' => ['sometimes', 'nullable', 'string', 'max:100'],
-            'status' => ['sometimes', 'array', 'max:8'],
+            'status' => ['sometimes', 'array', 'max:10'],
             'status.*' => ['string', Rule::in(self::STATUSES)],
             'priority' => ['sometimes', 'array', 'max:4'],
             'priority.*' => ['string', Rule::in(self::PRIORITIES)],
@@ -219,9 +219,11 @@ class TicketQuery
         $led = $global ? collect() : $this->departments->getLedDepartmentIds($user);
 
         $query->where(function ($q) use ($user, $global, $led) {
-            $q->where(fn ($a) => $a->where('tickets.assigned_to_id', $user->id)->whereIn('tickets.status', ['ASSIGNED', 'IN_PROGRESS']));
+            // The assignee's turn: accept, work, or verify the change on the live site.
+            $q->where(fn ($a) => $a->where('tickets.assigned_to_id', $user->id)->whereIn('tickets.status', ['ASSIGNED', 'IN_PROGRESS', TicketAccess::PENDING_VERIFICATION]));
 
-            $review = fn ($m) => $m->where('tickets.status', TicketAccess::PENDING_REVIEW)
+            // The managers' turn: review finished work, and put the approved deployment tickets on the live site.
+            $review = fn ($m) => $m->whereIn('tickets.status', [TicketAccess::PENDING_REVIEW, TicketAccess::APPROVED_FOR_DEPLOY])
                 ->whereNotNull('tickets.assigned_to_id')->where('tickets.assigned_to_id', '!=', $user->id);
 
             if ($global) {
@@ -281,7 +283,7 @@ class TicketQuery
     }
 
     /**
-     * The status this viewer is TOLD, as SQL. PENDING_REVIEW is an internal step: for a ticket the viewer only
+     * The status this viewer is TOLD, as SQL. PENDING_REVIEW, APPROVED_FOR_DEPLOY and PENDING_VERIFICATION are internal steps: for a ticket the viewer only
      * reported (TicketAccess::isReporterOnly: created it, leads nothing, is not global, is not its assignee) it reads
      * IN_PROGRESS, exactly like TicketReporterView::publicStatus. For everyone else it is tickets.status. Only
      * integers are interpolated.
@@ -296,7 +298,7 @@ class TicketQuery
         $led = $this->ledDepartmentIds($user);
         $notLed = $led === [] ? '' : ' AND tickets.department_id NOT IN ('.implode(',', $led).')';
 
-        return "(CASE WHEN tickets.status = '".TicketAccess::PENDING_REVIEW."' AND tickets.created_by_id = {$uid} AND (tickets.assigned_to_id IS NULL OR tickets.assigned_to_id <> {$uid}){$notLed} THEN 'IN_PROGRESS' ELSE tickets.status END)";
+        return "(CASE WHEN tickets.status IN ('".implode("','", TicketAccess::REVIEW_STAGES)."') AND tickets.created_by_id = {$uid} AND (tickets.assigned_to_id IS NULL OR tickets.assigned_to_id <> {$uid}){$notLed} THEN 'IN_PROGRESS' ELSE tickets.status END)";
     }
 
     /** Departments the user leads, looked up once per request and user. @return array<int, int> */

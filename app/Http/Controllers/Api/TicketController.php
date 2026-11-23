@@ -13,6 +13,8 @@ use App\Services\DepartmentAccessService;
 use App\Exceptions\TicketActionException;
 use App\Services\TicketAccess;
 use App\Services\TicketActions;
+use App\Services\TicketCreditService;
+use App\Services\TicketDeploymentService;
 use App\Services\TicketQuery;
 use App\Services\TicketReporterView;
 use App\Services\TicketWorkEstimate;
@@ -202,11 +204,18 @@ class TicketController extends Controller
                 ['id' => 'HIGH', 'label_ar' => 'عالية', 'color' => 'amber'],
                 ['id' => 'CRITICAL', 'label_ar' => 'حرجة / طارئة', 'color' => 'red'],
             ],
+            // ONE definition of the points of each size (TaskWorkflowService::SCOPE_POINTS), the same the validators use. The
+            // server judges by the RANGE (`scope_ranges`, strategic has no cap); `points_options` is what a dropdown offers, and
+            // the UI should always include the value already stored (a legacy in-range value such as 35 or 45 stays valid).
+            'points_options' => \App\Services\TaskWorkflowService::pointsOptions(),
+            'scope_ranges' => \App\Services\TaskWorkflowService::scopeRanges(),
             'statuses' => [
                 'PENDING_APPROVAL' => ['label_ar' => 'معلقة (بانتظار الاعتماد)', 'color' => 'yellow'],
                 'ASSIGNED' => ['label_ar' => 'معتمدة ومحالة', 'color' => 'blue'],
                 'IN_PROGRESS' => ['label_ar' => 'قيد المعالجة', 'color' => 'purple'],
                 'PENDING_REVIEW' => ['label_ar' => 'بانتظار المراجعة والاعتماد', 'color' => 'indigo'],
+                'APPROVED_FOR_DEPLOY' => ['label_ar' => 'معتمدة للنشر', 'color' => 'cyan'],
+                'PENDING_VERIFICATION' => ['label_ar' => 'منشورة على الموقع الحي — بانتظار التحقق', 'color' => 'teal'],
                 'RESOLVED' => ['label_ar' => 'تم الحل والإغلاق', 'color' => 'green'],
                 'UNRESOLVED' => ['label_ar' => 'تعذر الحل', 'color' => 'orange'],
                 'REJECTED_BY_ADMIN' => ['label_ar' => 'مرفوضة من الإدارة', 'color' => 'red'],
@@ -242,6 +251,10 @@ class TicketController extends Controller
 
         $this->ticketQuery->sort($query, $f);
         $tickets = $query->paginate($f['per_page'] ?? TicketQuery::DEFAULT_PER_PAGE);
+
+        // The people named in the `deployment` block are needed only for the rows a viewer reads as STAFF (a submitter's row is
+        // a whitelist that never carries them), so they are loaded for those rows alone.
+        $tickets->getCollection()->filter(fn (Ticket $t) => ! $this->isReporterOnly($user, $t))->loadMissing(['reviewApprover:id,name', 'deployer:id,name']);
 
         // Same capability computation as show() - one canonical source, so the work queue and the
         // detail page can never drift on which actions a given ticket/user pair actually permits.
@@ -340,7 +353,7 @@ class TicketController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'تم تقديم التذكرة بنجاح وتندرج الآن تحت بند معلقة بانتظار اعتماد الإدارة',
-                'data' => $ticket->load(['department', 'attachments', 'activityLogs'])->makeHidden([...TicketWorkEstimate::KEYS, 'actual_minutes']),
+                'data' => $ticket->load(['department', 'attachments', 'activityLogs'])->makeHidden([...TicketWorkEstimate::KEYS, 'actual_minutes', 'requires_deployment']),
             ], 201);
 
         } catch (\Throwable $e) {
@@ -477,6 +490,8 @@ class TicketController extends Controller
             'approver',
             'assignee',
             'creditor:id,name',
+            'reviewApprover:id,name',
+            'deployer:id,name',
             'attachments',
             'activityLogs'
         ])->where('id', $id)->orWhere('ticket_number', $id)->first();
@@ -539,7 +554,7 @@ class TicketController extends Controller
             'assigned_to_id' => 'nullable|exists:users,id',
             'sla_hours' => 'required|integer|min:1|max:720', // e.g. 24, 48, 72 hours
             'internal_notes' => 'nullable|string',
-        ] + TicketWorkEstimate::rules(), TicketWorkEstimate::messages() + TicketValidationMessages::all());
+        ] + TicketWorkEstimate::rules() + TicketWorkEstimate::flagRules(), TicketWorkEstimate::messages() + TicketWorkEstimate::flagMessages() + TicketValidationMessages::all());
 
         if ($validator->fails()) {
             return response()->json([
@@ -624,6 +639,9 @@ class TicketController extends Controller
         if ($estimate !== []) {
             TicketWorkEstimate::log($ticket, $user, $estimateBefore, TicketWorkEstimate::snapshot($ticket));
         }
+        // A manager may mark the ticket as one that needs a live deployment (optional; absent keeps the stored value).
+        // (A ticket waiting for approval has never been submitted for review, so the flag lock cannot apply here.)
+        TicketWorkEstimate::applyFlag($ticket, $user, TicketWorkEstimate::flagFrom($request->only(TicketWorkEstimate::FLAG)));
 
         return response()->json([
             'success' => true,
@@ -840,9 +858,20 @@ class TicketController extends Controller
             ], 409);
         }
 
+        // ONE-CLICK submission for a ticket that requires a live deployment: no summary, link or test steps are asked for
+        // (the code review happens outside the ticket form). The type defaults to RESOLVED and the summary is optional and
+        // never invented (a placeholder would later reach the reporter as the «resolution note»); anything the client does
+        // send is still validated. Every other ticket keeps today's payload exactly.
+        $deployment = $this->access->isDeploymentTicket($ticket);
+        if ($deployment) {
+            if (! $request->filled('resolution_type')) {
+                $request->merge(['resolution_type' => 'RESOLVED']);
+            }
+        }
+
         $validator = Validator::make($request->all(), [
             'resolution_type' => 'required|in:RESOLVED,UNRESOLVED',
-            'resolution_summary' => 'required_if:resolution_type,RESOLVED|nullable|string|min:5',
+            'resolution_summary' => $deployment ? 'nullable|string|min:5' : 'required_if:resolution_type,RESOLVED|nullable|string|min:5',
             'unresolved_reason' => 'required_if:resolution_type,UNRESOLVED|nullable|string|min:5',
             'proof_files.*' => 'nullable|file|mimes:jpg,jpeg,png,webp,mp4,mov,pdf|max:51200',
         ], TicketValidationMessages::all());
@@ -862,6 +891,12 @@ class TicketController extends Controller
             // «تم الحل» is only the assignee SUBMITTING the work: a ticket that has someone to credit goes to
             // PENDING_REVIEW and becomes RESOLVED (and credits) only at the final approval (TicketCreditService).
             // A legacy IN_PROGRESS ticket with no assignee has nobody to credit and closes directly, as before.
+            // A deployment ticket is never closed from here: with nobody to submit for it, it simply cannot be completed.
+            if ($deployment && $request->resolution_type === 'RESOLVED' && $ticket->assigned_to_id === null) {
+                DB::rollBack();
+
+                return response()->json(['success' => false, 'message' => TicketDeploymentService::INVALID_STAGE_MESSAGE, 'code' => TicketCreditService::CODE_INVALID_STAGE], 409);
+            }
             $submitForReview = $request->resolution_type === 'RESOLVED' && $ticket->assigned_to_id !== null;
             $newStatus = $submitForReview ? TicketAccess::PENDING_REVIEW : $request->resolution_type;
 
@@ -874,6 +909,7 @@ class TicketController extends Controller
                     // Who submitted this review round (a global role may do it for the assignee): they cannot review it.
                     $updateData['submitted_by_id'] = $user->id;
                     $updateData['submitted_at'] = now();
+                    $updateData['review_round'] = (int) $ticket->review_round + 1;
                 } else {
                     $updateData['resolved_at'] = now();
                 }
@@ -1019,7 +1055,7 @@ class TicketController extends Controller
             'assigned_to_id' => 'required|exists:users,id',
             'unit_id'        => 'nullable|exists:departmental_units,id',
             'reason'         => 'nullable|string|max:500',
-        ] + TicketWorkEstimate::rules(), TicketWorkEstimate::messages() + TicketValidationMessages::all());
+        ] + TicketWorkEstimate::rules() + TicketWorkEstimate::flagRules(), TicketWorkEstimate::messages() + TicketWorkEstimate::flagMessages() + TicketValidationMessages::all());
 
         try {
             $updated = $actions->reassign(
@@ -1029,6 +1065,7 @@ class TicketController extends Controller
                 $request->filled('unit_id') ? (int) $request->unit_id : null,
                 $request->input('reason'),
                 TicketWorkEstimate::only($request->only(TicketWorkEstimate::KEYS)),
+                TicketWorkEstimate::flagFrom($request->only(TicketWorkEstimate::FLAG)),
             );
         } catch (TicketActionException $e) {
             return response()->json($e->body(), $e->status);

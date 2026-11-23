@@ -21,12 +21,12 @@ use Illuminate\Support\Str;
 class TicketMyWork
 {
     /** Waiting for the assignee, being worked on, then submitted and waiting for the final approval (still the assignee's until it is approved). */
-    public const OPEN_STATUSES = ['ASSIGNED', 'IN_PROGRESS', 'PENDING_REVIEW'];
+    public const OPEN_STATUSES = ['ASSIGNED', 'IN_PROGRESS', 'PENDING_REVIEW', 'APPROVED_FOR_DEPLOY', 'PENDING_VERIFICATION'];
 
     /** The assignee's own outcomes, shown for a while in the board's closed column. */
     public const CLOSED_STATUSES = ['RESOLVED', 'UNRESOLVED', 'REJECTED_BY_ASSIGNEE'];
 
-    public const STATUSES = ['ASSIGNED', 'IN_PROGRESS', 'PENDING_REVIEW', 'RESOLVED', 'UNRESOLVED', 'REJECTED_BY_ASSIGNEE'];
+    public const STATUSES = ['ASSIGNED', 'IN_PROGRESS', 'PENDING_REVIEW', 'APPROVED_FOR_DEPLOY', 'PENDING_VERIFICATION', 'RESOLVED', 'UNRESOLVED', 'REJECTED_BY_ASSIGNEE'];
 
     /** How long a finished ticket stays in the closed column. */
     public const CLOSED_WINDOW_DAYS = 30;
@@ -75,7 +75,7 @@ class TicketMyWork
             $rows = $rows->concat(
                 $query
                     // Waiting-for-receipt first, then in progress; the nearest deadline first, no deadline last.
-                    ->orderByRaw("CASE tickets.status WHEN 'ASSIGNED' THEN 0 WHEN 'IN_PROGRESS' THEN 1 ELSE 2 END")
+                    ->orderByRaw("CASE tickets.status WHEN 'ASSIGNED' THEN 0 WHEN 'PENDING_VERIFICATION' THEN 1 WHEN 'IN_PROGRESS' THEN 2 ELSE 3 END")
                     ->orderByRaw('tickets.expected_resolution_time IS NULL')
                     ->orderBy('tickets.expected_resolution_time')
                     ->orderByDesc('tickets.id')
@@ -113,11 +113,11 @@ class TicketMyWork
             ->select([
                 'tickets.id', 'tickets.ticket_number', 'tickets.title', 'tickets.status', 'tickets.priority', 'tickets.department_id', 'tickets.unit_id',
                 'tickets.created_by_id', 'tickets.created_by_name', 'tickets.assigned_to_id', 'tickets.expected_resolution_time', 'tickets.accepted_at',
-                'tickets.resolved_at', 'tickets.task_scope', 'tickets.task_points', 'tickets.estimated_hours', 'tickets.actual_minutes', 'tickets.credited_points', 'tickets.credited_hours', 'tickets.credited_minutes', 'tickets.credited_at', 'tickets.credited_by_id', 'tickets.created_at', 'tickets.updated_at',
+                'tickets.resolved_at', 'tickets.task_scope', 'tickets.task_points', 'tickets.estimated_hours', 'tickets.actual_minutes', 'tickets.credited_points', 'tickets.credited_hours', 'tickets.credited_minutes', 'tickets.requires_deployment', 'tickets.review_approved_by_id', 'tickets.review_approved_at', 'tickets.deployed_by_id', 'tickets.deployed_at', 'tickets.live_url', 'tickets.verified_at', 'tickets.review_round', 'tickets.credited_at', 'tickets.credited_by_id', 'tickets.created_at', 'tickets.updated_at',
                 DB::raw('SUBSTR(tickets.description, 1, '.self::DESCRIPTION_READ.') AS description'),
             ])
             ->where('tickets.assigned_to_id', $user->id)
-            ->with(['department:id,name,name_ar', 'unit:id,name_ar', 'creditor:id,name']);
+            ->with(['department:id,name,name_ar', 'unit:id,name_ar', 'creditor:id,name', 'reviewApprover:id,name', 'deployer:id,name']);
     }
 
     /** @return array<string, mixed> */
@@ -146,6 +146,10 @@ class TicketMyWork
             'actual_minutes' => $t->actual_minutes,
             // The assignee's own credit status (none | pending_review | credited); only ever their own tickets.
             'credit' => $this->access->creditInfo($t),
+            // Only ever the assignee's own tickets: the flow stage, who acts next and (for the live test) the page to open.
+            'requires_deployment' => (bool) $t->requires_deployment,
+            'workflow' => $this->access->workflow($t),
+            'deployment' => $this->access->deploymentInfo($t),
             'created_at' => $t->created_at?->toIso8601String(),
             'updated_at' => $t->updated_at?->toIso8601String(),
             'capabilities' => [

@@ -40,6 +40,59 @@ class TicketWorkEstimate
 
     public const KEYS = ['task_scope', 'task_points', 'estimated_hours'];
 
+    /** The «requires a live deployment» flag a manager may set together with the estimate (optional boolean; absent = keep). */
+    public const FLAG = 'requires_deployment';
+
+    /** @return array<string, array<int, mixed>> */
+    public static function flagRules(): array
+    {
+        return [self::FLAG => ['sometimes', 'nullable', 'boolean']];
+    }
+
+    /** @return array<string, string> */
+    public static function flagMessages(): array
+    {
+        return [self::FLAG.'.boolean' => 'قيمة «يتطلب نشرًا على الموقع الحي» غير صالحة.'];
+    }
+
+    /** The flag as sent: true/false, or null when it was not sent (keep the stored value). */
+    public static function flagFrom(array $source): ?bool
+    {
+        if (! array_key_exists(self::FLAG, $source) || $source[self::FLAG] === null || $source[self::FLAG] === '') {
+            return null;
+        }
+
+        return filter_var($source[self::FLAG], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+    }
+
+    /** Apply the flag to the (locked) ticket when it changes it, and record the change (internal row). Returns whether it changed. */
+    public static function applyFlag(Ticket $ticket, User $actor, ?bool $flag): bool
+    {
+        if ($flag === null || (bool) $ticket->requires_deployment === $flag) {
+            return false;
+        }
+
+        // Once the work has been submitted for review at least once, the ticket can no longer LEAVE the deployment flow (a
+        // failed verification must not become a way to close it without a live check). Switching it ON stays possible.
+        if ($flag === false && (int) $ticket->review_round > 0) {
+            throw new TicketActionException('لا يمكن إلغاء اشتراط النشر بعد أن أُرسلت التذكرة للمراجعة مرة واحدة على الأقل.', 409, [], 'DEPLOYMENT_FLAG_LOCKED');
+        }
+
+        $ticket->forceFill([self::FLAG => $flag])->save();
+        TicketActivityLog::create([
+            'ticket_id' => $ticket->id,
+            'action' => 'DEPLOYMENT_FLAG_CHANGED',
+            'previous_state' => null,
+            'new_state' => null,
+            'performed_by' => $actor->id,
+            'performed_by_name' => \Illuminate\Support\Str::limit((string) $actor->name, 150, ''),
+            'details' => $flag ? 'تحديد التذكرة كمهمة تتطلب نشرًا على الموقع الحي' : 'إلغاء اشتراط النشر على الموقع الحي لهذه التذكرة',
+            'logged_at' => now(),
+        ]);
+
+        return true;
+    }
+
     /**
      * Laravel rules for the three request fields (shape only; the combination is checked by resolve()).
      *
