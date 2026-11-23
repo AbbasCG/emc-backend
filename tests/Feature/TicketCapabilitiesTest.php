@@ -163,6 +163,7 @@ class TicketCapabilitiesTest extends TestCase
 
         // Cross-check against the real endpoint: it genuinely accepts a different assignee.
         $other = $this->makeUser('tech_admin');
+        $dept->users()->attach($other->id);
         Sanctum::actingAs($leader);
         $this->postJson("/api/v1/tickets/{$ticket->id}/reassign", ['assigned_to_id' => $other->id, 'task_scope' => 'simple', 'task_points' => 30])
             ->assertOk()->assertJsonPath('data.status', 'ASSIGNED');

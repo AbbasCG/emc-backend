@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 #[ObservedBy([TicketStatusObserver::class, TicketAssignmentObserver::class])]
@@ -47,10 +48,22 @@ class Ticket extends Model
         'expected_resolution_time' => 'datetime',
         'accepted_at' => 'datetime',
         'resolved_at' => 'datetime',
-        // Planning estimate only (see TicketWorkEstimate): never credited as points or hours.
+        // Planning estimate (see TicketWorkEstimate); credited only at the final approval (TicketCreditService).
         'task_points' => 'integer',
         'estimated_hours' => 'float',
+        // Snapshot of the one credit (see TicketCreditService); all NULL until the final approval.
+        'credited_points' => 'integer',
+        'credited_hours' => 'float',
+        'credited_at' => 'datetime',
+        'submitted_at' => 'datetime',
     ];
+
+    /**
+     * The credit snapshot never leaves in a raw serialization: staff payloads carry the redacted `credit` block
+     * (TicketAccess::creditInfo) and everyone else gets nothing.
+     */
+    // credited_* are deliberately NOT fillable: only TicketCreditService writes them (forceFill), never a request.
+    protected $hidden = ['credited_points', 'credited_hours', 'credited_at', 'credited_by_id', 'submitted_by_id', 'submitted_at'];
 
     protected $appends = ['is_delayed'];
 
@@ -90,6 +103,17 @@ class Ticket extends Model
     public function assignee(): BelongsTo
     {
         return $this->belongsTo(User::class, 'assigned_to_id');
+    }
+
+    /** The person who gave the final approval that credited the ticket. */
+    public function creditor(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'credited_by_id');
+    }
+
+    public function credit(): HasOne
+    {
+        return $this->hasOne(TicketCredit::class);
     }
 
     public function attachments(): HasMany

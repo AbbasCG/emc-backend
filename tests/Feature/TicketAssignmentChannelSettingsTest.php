@@ -58,6 +58,8 @@ class TicketAssignmentChannelSettingsTest extends TestCase
         $this->dept->update(['leader_id' => $this->leader->id]);
         $this->alice = $this->user('tech_admin', ['name' => 'أليس', 'email' => 'alice@example.com']);
         $this->bob = $this->user('tech_admin', ['name' => 'بوب', 'email' => 'bob@example.com']);
+        // Eligibility is department membership (TicketAccess::eligibleAssigneesQuery); there is no global-role shortcut.
+        $this->dept->users()->attach([$this->alice->id, $this->bob->id]);
         $this->superAdmin = $this->user('super_admin');
     }
 

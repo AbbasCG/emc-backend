@@ -124,6 +124,19 @@ class TicketController extends Controller
         });
     }
 
+    /**
+     * A ticket as an action answers with it: the serialized row plus the viewer's capabilities and, for those who may
+     * read them, the redacted `credit` block (the raw credit columns never leave in a model dump).
+     *
+     * @return array<string, mixed>
+     */
+    private function actionPayload(Ticket $ticket, User $user): array
+    {
+        $data = $ticket->toArray();
+        $data['capabilities'] = $this->buildCapabilities($user, $ticket);
+
+        return $this->access->redactInternal($user, $ticket, $data);
+    }
     private function forbidden(string $message = 'ليست لديك صلاحية للوصول إلى هذه التذكرة.')
     {
         return response()->json(['success' => false, 'message' => $message], 403);
@@ -163,62 +176,21 @@ class TicketController extends Controller
                 ->get();
         }
 
-        // Assignable users: only relevant when building the approve/reassign
-        // UI, so gated the same way approve()/reassign() themselves are —
-        // canManageDepartment (department leader or global), not isGlobal
-        // alone. A plain department leader is fully authorized to approve a
-        // ticket and pick its assignee; they must see the same candidate
-        // list the endpoint they're about to call will actually accept.
-        // Least privilege still holds — no email, no full user table.
+        // Assignable users: only relevant when building the approve/reassign UI, so gated the same way approve() /
+        // reassign() themselves are (department leader or global). The list is built by the SAME query the
+        // endpoints validate with (TicketAccess::eligibleAssigneesQuery): with a unit, its exact active members;
+        // without one, the department's leader, team members and members. A listed person is never refused by
+        // approve/reassign and a refused person is never listed. Only id/name/role leave the server (no e-mail).
         $assignableUsers = [];
         if ($departmentId && $this->departmentAccess->canManageDepartment($user, $departmentId)) {
-            // A unit was chosen: eligibility is exact unit membership, nothing
-            // broader — this is what stops "unit A selected, user from unit B
-            // sent anyway" from ever appearing as an option in the first place.
-            if ($unitId) {
-                $memberIds = \App\Models\TeamMember::where('department_id', $departmentId)
-                    ->where('unit_id', $unitId)
-                    ->where('status', 'active')
-                    ->pluck('user_id');
-            } else {
-                $memberIds = collect();
-                $dept = Department::find($departmentId);
-                if ($dept) {
-                    if ($dept->leader_id) {
-                        $memberIds->push($dept->leader_id);
-                    }
-                    $memberIds = $memberIds->merge(
-                        \App\Models\TeamMember::where('department_id', $departmentId)
-                            ->where('status', 'active')
-                            ->pluck('user_id')
-                    );
-                }
-                // Tech Support staff can always be assigned (they run the ticket
-                // desk) when no specific unit was chosen — unchanged from before.
-                $techDepartment = Department::where('slug', 'technology')
-                    ->orWhere('name_ar', 'LIKE', '%التقنية%')
-                    ->first();
-                if ($techDepartment) {
-                    $memberIds = $memberIds->merge(
-                        \App\Models\TeamMember::where('department_id', $techDepartment->id)
-                            ->where('status', 'active')
-                            ->pluck('user_id')
-                    );
-                }
-            }
-
-            $assignableUsers = User::query()
-                ->select('id', 'name', 'role')
-                ->where('is_active', true)
-                ->whereIn('id', $memberIds->unique()->values())
-                ->limit(200)
-                ->get();
+            $assignableUsers = $this->access->eligibleAssignees($departmentId, $unitId);
         }
-
         return response()->json([
             'success' => true,
             'departments' => $departments,
             'tech_units' => $techUnits,
+            // A department without any active technical unit never needs one: its people are assignable directly.
+            'has_units' => $departmentId ? $this->access->departmentHasUnits($departmentId) : false,
             'users' => $assignableUsers,
             'categories' => [
                 ['id' => 'OLD_ISSUE', 'label_ar' => 'مشكلة قائمة / قديمة', 'label_en' => 'Existing / Past Issue'],
@@ -234,6 +206,7 @@ class TicketController extends Controller
                 'PENDING_APPROVAL' => ['label_ar' => 'معلقة (بانتظار الاعتماد)', 'color' => 'yellow'],
                 'ASSIGNED' => ['label_ar' => 'معتمدة ومحالة', 'color' => 'blue'],
                 'IN_PROGRESS' => ['label_ar' => 'قيد المعالجة', 'color' => 'purple'],
+                'PENDING_REVIEW' => ['label_ar' => 'بانتظار المراجعة والاعتماد', 'color' => 'indigo'],
                 'RESOLVED' => ['label_ar' => 'تم الحل والإغلاق', 'color' => 'green'],
                 'UNRESOLVED' => ['label_ar' => 'تعذر الحل', 'color' => 'orange'],
                 'REJECTED_BY_ADMIN' => ['label_ar' => 'مرفوضة من الإدارة', 'color' => 'red'],
@@ -261,10 +234,10 @@ class TicketController extends Controller
         $this->ticketQuery->withLastActivity($query);
 
         if ($lite) {
-            $query->with(['department:id,name,name_ar', 'unit:id,name_ar', 'creator:id,name', 'assignee:id,name'])
+            $query->with(['department:id,name,name_ar', 'unit:id,name_ar', 'creator:id,name', 'assignee:id,name', 'creditor:id,name'])
                 ->withCount('attachments');
         } else {
-            $query->with(['department', 'unit', 'creator', 'approver', 'assignee', 'attachments']);
+            $query->with(['department', 'unit', 'creator', 'approver', 'assignee', 'creditor:id,name', 'attachments']);
         }
 
         $this->ticketQuery->sort($query, $f);
@@ -503,6 +476,7 @@ class TicketController extends Controller
             'creator',
             'approver',
             'assignee',
+            'creditor:id,name',
             'attachments',
             'activityLogs'
         ])->where('id', $id)->orWhere('ticket_number', $id)->first();
@@ -580,9 +554,7 @@ class TicketController extends Controller
 
         // The unit must actually belong to the ticket's own department.
         if ($request->filled('unit_id')) {
-            $unitBelongs = DepartmentalUnit::where('id', $request->unit_id)
-                ->where('department_id', $ticket->department_id)
-                ->exists();
+            $unitBelongs = $this->access->unitBelongsToDepartment((int) $request->unit_id, (int) $ticket->department_id);
             if (! $unitBelongs) {
                 return response()->json([
                     'success' => false,
@@ -600,9 +572,9 @@ class TicketController extends Controller
             if (! $assignee || ! $this->assigneeEligible($assignee, (int) $ticket->department_id, $unitId)) {
                 return response()->json([
                     'success' => false,
-                    'message' => $unitId
-                        ? 'المستخدم المحدد ليس عضواً فعالاً في الوحدة التقنية المختارة.'
-                        : 'المستخدم المحدد غير مؤهل لإسناد تذاكر هذه الإدارة إليه.',
+                    'message' => $assignee
+                        ? $this->access->assigneeRefusal($assignee, $unitId)
+                        : 'المستخدم المحدد غير موجود.',
                     'errors' => ['assigned_to_id' => ['المستخدم المحدد غير مؤهل للتكليف بناءً على الوحدة/الإدارة المحددة.']],
                 ], 422);
             }
@@ -886,14 +858,25 @@ class TicketController extends Controller
         DB::beginTransaction();
         try {
             $prevState = $ticket->status;
-            $newStatus = $request->resolution_type;
+
+            // «تم الحل» is only the assignee SUBMITTING the work: a ticket that has someone to credit goes to
+            // PENDING_REVIEW and becomes RESOLVED (and credits) only at the final approval (TicketCreditService).
+            // A legacy IN_PROGRESS ticket with no assignee has nobody to credit and closes directly, as before.
+            $submitForReview = $request->resolution_type === 'RESOLVED' && $ticket->assigned_to_id !== null;
+            $newStatus = $submitForReview ? TicketAccess::PENDING_REVIEW : $request->resolution_type;
 
             $updateData = [
                 'status' => $newStatus,
             ];
 
-            if ($newStatus === 'RESOLVED') {
-                $updateData['resolved_at'] = now();
+            if ($request->resolution_type === 'RESOLVED') {
+                if ($submitForReview) {
+                    // Who submitted this review round (a global role may do it for the assignee): they cannot review it.
+                    $updateData['submitted_by_id'] = $user->id;
+                    $updateData['submitted_at'] = now();
+                } else {
+                    $updateData['resolved_at'] = now();
+                }
                 $updateData['resolution_summary'] = $request->resolution_summary;
             } else {
                 $updateData['unresolved_reason'] = $request->unresolved_reason;
@@ -903,7 +886,7 @@ class TicketController extends Controller
                 $updateData['internal_notes'] = $request->internal_notes;
             }
 
-            $ticket->update($updateData);
+            $ticket->forceFill($updateData)->save(); // forceFill: submitted_by_id is not mass assignable
 
             // Handle resolution proof attachments
             if ($request->hasFile('proof_files')) {
@@ -932,23 +915,29 @@ class TicketController extends Controller
             // Log activity
             TicketActivityLog::create([
                 'ticket_id' => $ticket->id,
-                'action' => $newStatus === 'RESOLVED' ? 'RESOLVED' : 'MARKED_UNRESOLVED',
+                'action' => $submitForReview ? 'SUBMITTED_FOR_REVIEW' : ($newStatus === 'RESOLVED' ? 'RESOLVED' : 'MARKED_UNRESOLVED'),
                 'previous_state' => $prevState,
                 'new_state' => $newStatus,
                 'performed_by' => $user->id,
                 'performed_by_name' => $user->name,
-                'details' => $newStatus === 'RESOLVED'
-                    ? 'تم حل المشكلة وتدوين الإجراءات المتخذة'
-                    : 'تعذر الحل: ' . $request->unresolved_reason,
+                'details' => $submitForReview
+                    ? 'أنهى المكلف التنفيذ وأرسل التذكرة للمراجعة والاعتماد النهائي'
+                    : ($newStatus === 'RESOLVED'
+                        ? 'تم حل المشكلة وتدوين الإجراءات المتخذة'
+                        : 'تعذر الحل: ' . $request->unresolved_reason),
                 'logged_at' => now(),
             ]);
 
             DB::commit();
 
+            $fresh = $ticket->fresh(['department', 'unit', 'attachments', 'activityLogs']);
+
             return response()->json([
                 'success' => true,
-                'message' => $newStatus === 'RESOLVED' ? 'تم إنهاء التذكرة كـ (تم الحل) بنجاح' : 'تم تدوين حالة تعذر الحل وتصعيد التقرير للقيادة',
-                'data' => $ticket->fresh(['department', 'unit', 'attachments', 'activityLogs']),
+                'message' => $submitForReview
+                    ? 'تم إرسال التذكرة للمراجعة والاعتماد النهائي؛ تُضاف النقاط والساعات بعد الاعتماد.'
+                    : ($newStatus === 'RESOLVED' ? 'تم إنهاء التذكرة كـ (تم الحل) بنجاح' : 'تم تدوين حالة تعذر الحل وتصعيد التقرير للقيادة'),
+                'data' => $this->actionPayload($fresh, $user),
             ]);
 
         } catch (\Exception $e) {

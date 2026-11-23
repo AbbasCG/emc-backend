@@ -79,7 +79,7 @@ class TicketAuditWorkLinksCommandTest extends TestCase
         $this->ticket(['status' => 'RESOLVED', 'resolved_at' => now()]);
 
         $report = $this->audit();
-        $this->assertCount(11, $report, 'every check is listed even when it finds nothing');
+        $this->assertCount(16, $report, 'every check is listed even when it finds nothing');
         foreach ($report as $key => $row) {
             $this->assertSame(0, $row['count'], $key);
         }

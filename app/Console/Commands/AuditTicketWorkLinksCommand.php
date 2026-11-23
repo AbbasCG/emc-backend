@@ -3,7 +3,9 @@
 namespace App\Console\Commands;
 
 use App\Models\Ticket;
+use App\Models\TicketCredit;
 use App\Models\User;
+use App\Models\VolunteerPointAward;
 use App\Services\TicketAccess;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -47,7 +49,7 @@ class AuditTicketWorkLinksCommand extends Command
                         $deleted[] = $t->id;
                     } elseif (! $u->is_active) {
                         $inactive[] = $t->id;
-                    } elseif (! $access->assigneeEligible($u, (int) $t->department_id, $t->unit_id ? (int) $t->unit_id : null)) {
+                    } elseif (! $access->assigneeEligible($u, (int) $t->department_id, $access->effectiveUnitId($t, null))) {
                         $ineligible[] = $t->id;
                     }
                 }
@@ -63,8 +65,8 @@ class AuditTicketWorkLinksCommand extends Command
             $this->ids(Ticket::query()->where('status', 'ASSIGNED')->whereNotNull('accepted_at'))];
 
         // 6. Active assigned work with no estimate (legacy: it must be set before the next reassignment).
-        $checks[] = ['active_without_estimate', 'تذكرة مُسندة بلا حجم/نقاط / Active assigned ticket without task_scope or task_points',
-            $this->ids(Ticket::query()->whereIn('status', $active)->whereNotNull('assigned_to_id')
+        $checks[] = ['active_without_estimate', 'تذكرة مُسندة بلا حجم/نقاط / Active assigned ticket without task_scope or task_points (incl. PENDING_REVIEW: the approval must supply them)',
+            $this->ids(Ticket::query()->whereIn('status', [...$active, 'PENDING_REVIEW'])->whereNotNull('assigned_to_id')
                 ->where(fn ($q) => $q->whereNull('task_scope')->orWhereNull('task_points')))];
 
         // 7. Duplicate ticket numbers (soft-deleted rows included: the unique index counts them too).
@@ -82,6 +84,29 @@ class AuditTicketWorkLinksCommand extends Command
             $this->ids(Ticket::query()->where('status', 'RESOLVED')->whereNull('resolved_at'))];
         $checks[] = ['resolved_at_on_unresolved_status', 'وقت حل على تذكرة غير محلولة / Non-RESOLVED ticket with resolved_at',
             $this->ids(Ticket::query()->where('status', '!=', 'RESOLVED')->whereNotNull('resolved_at'))];
+
+        // 10-14. Review and credit integrity. Read-only: nothing is ever credited or repaired here, and tickets that
+        //        were closed before the review step existed are deliberately NOT flagged for missing a credit.
+        $checks[] = ['pending_review_without_assignee', 'بانتظار المراجعة بلا مكلّف / PENDING_REVIEW with NULL assignee (nobody to credit)',
+            $this->ids(Ticket::query()->where('status', 'PENDING_REVIEW')->whereNull('assigned_to_id'))];
+
+        $checks[] = ['credited_without_credit_row', 'تذكرة معتمدة الرصيد بلا سجل رصيد / Ticket with credited_at but no ticket_credits row',
+            $this->ids(Ticket::query()->whereNotNull('credited_at')->whereNotIn('id', TicketCredit::query()->select('ticket_id')))];
+
+        $checks[] = ['credit_row_without_snapshot', 'سجل رصيد لتذكرة بلا لقطة اعتماد / ticket_credits row whose ticket has no credited_at snapshot',
+            DB::table('ticket_credits')->join('tickets', 'tickets.id', '=', 'ticket_credits.ticket_id')->whereNull('tickets.credited_at')
+                ->orderBy('ticket_credits.ticket_id')->pluck('ticket_credits.ticket_id')->map(fn ($i) => (int) $i)->all()];
+
+        $checks[] = ['credit_row_without_ledger_award', 'سجل رصيد بلا قيد في ليدجر النقاط / ticket_credits row without a volunteer_point_awards row',
+            DB::table('ticket_credits')->whereNotExists(function ($q) {
+                $q->select(DB::raw(1))->from('volunteer_point_awards')
+                    ->where('volunteer_point_awards.source_type', Ticket::class)
+                    ->whereColumn('volunteer_point_awards.source_id', 'ticket_credits.ticket_id');
+            })->orderBy('ticket_id')->pluck('ticket_id')->map(fn ($i) => (int) $i)->all()];
+
+        $checks[] = ['duplicate_awards_per_ticket', 'أكثر من قيد نقاط لتذكرة واحدة / More than one ledger award for the same ticket',
+            VolunteerPointAward::query()->where('source_type', Ticket::class)->select('source_id')->groupBy('source_id')->havingRaw('COUNT(*) > 1')
+                ->orderBy('source_id')->pluck('source_id')->map(fn ($i) => (int) $i)->all()];
 
         $rows = [];
         $total = 0;

@@ -2,15 +2,12 @@
 
 namespace App\Services;
 
-use App\Models\Department;
-use App\Models\TeamMember;
 use App\Models\Ticket;
 use App\Models\TicketActivityLog;
 use App\Models\User;
 use App\Support\SmartOperationalRuleConfig;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
 
 /**
  * Read-only operational intelligence for the ticket work queue.
@@ -39,8 +36,9 @@ class TicketOpsService
     /** Open ticket with no logged activity for this long is "inactive" (a page-level reading aid, not a Smart Rule). */
     public const INACTIVE_HOURS = 72;
     private const INSIGHT_LIMIT = 20;
+    private const REVIEW_ACTION = 'بانتظار اعتماد المراجعة — راجع الإنجاز أو أعده للتنفيذ';
 
-    private const STATUS_ORDER = ['PENDING_APPROVAL', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'UNRESOLVED', 'REJECTED_BY_ADMIN', 'REJECTED_BY_ASSIGNEE'];
+    private const STATUS_ORDER = ['PENDING_APPROVAL', 'ASSIGNED', 'IN_PROGRESS', 'PENDING_REVIEW', 'RESOLVED', 'UNRESOLVED', 'REJECTED_BY_ADMIN', 'REJECTED_BY_ASSIGNEE'];
     private const PRIORITY_LABELS = ['LOW' => 'منخفضة', 'MEDIUM' => 'متوسطة', 'HIGH' => 'عالية', 'CRITICAL' => 'حرجة'];
     private const STOPWORDS = ['في', 'من', 'على', 'الى', 'عن', 'مع', 'هذا', 'هذه', 'ذلك', 'التي', 'الذي', 'لا', 'ما', 'او', 'ان', 'كل'];
 
@@ -61,16 +59,19 @@ class TicketOpsService
         $now = now();
         $closed = $this->closedSql();
         $open = "tickets.status NOT IN {$closed}";
+        // What THIS viewer is told (a reporter-only viewer's PENDING_REVIEW reads as IN_PROGRESS).
+        $st = $this->query->effectiveStatusSql($user);
 
         $row = $this->scope($user, $f)->reorder()->selectRaw(
             "COUNT(*) AS total,
-             SUM(CASE WHEN tickets.status = 'PENDING_APPROVAL' THEN 1 ELSE 0 END) AS pending_approval,
-             SUM(CASE WHEN tickets.status = 'ASSIGNED' THEN 1 ELSE 0 END) AS assigned,
-             SUM(CASE WHEN tickets.status = 'IN_PROGRESS' THEN 1 ELSE 0 END) AS in_progress,
-             SUM(CASE WHEN tickets.status = 'RESOLVED' THEN 1 ELSE 0 END) AS resolved,
-             SUM(CASE WHEN tickets.status = 'UNRESOLVED' THEN 1 ELSE 0 END) AS unresolved,
-             SUM(CASE WHEN tickets.status = 'REJECTED_BY_ADMIN' THEN 1 ELSE 0 END) AS rejected_by_admin,
-             SUM(CASE WHEN tickets.status = 'REJECTED_BY_ASSIGNEE' THEN 1 ELSE 0 END) AS rejected_by_assignee,
+             SUM(CASE WHEN {$st} = 'PENDING_APPROVAL' THEN 1 ELSE 0 END) AS pending_approval,
+             SUM(CASE WHEN {$st} = 'ASSIGNED' THEN 1 ELSE 0 END) AS assigned,
+             SUM(CASE WHEN {$st} = 'IN_PROGRESS' THEN 1 ELSE 0 END) AS in_progress,
+             SUM(CASE WHEN {$st} = 'PENDING_REVIEW' THEN 1 ELSE 0 END) AS pending_review,
+             SUM(CASE WHEN {$st} = 'RESOLVED' THEN 1 ELSE 0 END) AS resolved,
+             SUM(CASE WHEN {$st} = 'UNRESOLVED' THEN 1 ELSE 0 END) AS unresolved,
+             SUM(CASE WHEN {$st} = 'REJECTED_BY_ADMIN' THEN 1 ELSE 0 END) AS rejected_by_admin,
+             SUM(CASE WHEN {$st} = 'REJECTED_BY_ASSIGNEE' THEN 1 ELSE 0 END) AS rejected_by_assignee,
              SUM(CASE WHEN {$open} THEN 1 ELSE 0 END) AS open_total,
              SUM(CASE WHEN {$open} AND tickets.expected_resolution_time IS NOT NULL AND tickets.expected_resolution_time < ? THEN 1 ELSE 0 END) AS overdue,
              SUM(CASE WHEN {$open} AND tickets.expected_resolution_time >= ? AND tickets.expected_resolution_time <= ? THEN 1 ELSE 0 END) AS due_soon,
@@ -88,6 +89,7 @@ class TicketOpsService
                 'pending_approval' => $n('pending_approval'),
                 'assigned' => $n('assigned'),
                 'in_progress' => $n('in_progress'),
+                'pending_review' => $n('pending_review'),
                 'resolved' => $n('resolved'),
                 'unresolved' => $n('unresolved'),
                 'rejected_by_admin' => $n('rejected_by_admin'),
@@ -159,13 +161,20 @@ class TicketOpsService
      */
     public function board(User $user, array $f, int $perColumn = 8): array
     {
-        $counts = $this->query->countBy($this->scope($user, $f, ignore: []), 'status');
+        $counts = $this->query->countByStatus($this->scope($user, $f, ignore: []), $user);
+        $st = $this->query->effectiveStatusSql($user);
+        // A viewer who can never hold work in review (not global, leads nothing) has no such column unless they really
+        // have tickets in it: a reporter must not learn the internal step exists.
+        $managesAny = $this->departments->isGlobal($user) || $this->query->ledDepartmentIds($user) !== [];
         $wanted = ! empty($f['status']) ? array_values(array_intersect(self::STATUS_ORDER, $f['status'])) : self::STATUS_ORDER;
 
         $columns = [];
         foreach ($wanted as $status) {
-            $cards = $this->query->withLastActivity($this->scope($user, $f, ignore: [])->where('tickets.status', $status))
-                ->with(['department:id,name,name_ar', 'assignee:id,name'])
+            if ($status === TicketAccess::PENDING_REVIEW && ! $managesAny && (int) ($counts[$status] ?? 0) === 0) {
+                continue;
+            }
+            $cards = $this->query->withLastActivity($this->scope($user, $f, ignore: [])->whereRaw("{$st} = ?", [$status]))
+                ->with(['department:id,name,name_ar', 'assignee:id,name', 'creditor:id,name'])
                 ->orderByRaw("CASE tickets.priority WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2 ELSE 1 END DESC")
                 ->orderBy('tickets.created_at', 'desc')->limit($perColumn)->get();
 
@@ -186,7 +195,7 @@ class TicketOpsService
         if ($this->access->isReporterOnly($user, $t)) {
             return [
                 'id' => $t->id, 'ticket_number' => $t->ticket_number, 'title' => $t->title, 'ticket_category' => $t->ticket_category,
-                'priority' => $t->priority, 'status' => $t->status,
+                'priority' => $t->priority, 'status' => TicketReporterView::publicStatus($t->status),
                 'department' => $t->department ? ['id' => $t->department->id, 'name_ar' => $t->department->name_ar ?: $t->department->name] : null,
                 'assignee' => null, 'expected_resolution_time' => null, 'is_delayed' => false,
                 'created_at' => $t->created_at?->toIso8601String(), 'capabilities' => $this->access->capabilities($user, $t),
@@ -195,7 +204,7 @@ class TicketOpsService
 
         // The planning estimate is for managers, global roles and the assignee (TicketAccess::canSeeInternal).
         $estimate = $this->access->canSeeInternal($user, $t)
-            ? ['task_scope' => $t->task_scope, 'task_points' => $t->task_points, 'estimated_hours' => $t->estimated_hours]
+            ? ['task_scope' => $t->task_scope, 'task_points' => $t->task_points, 'estimated_hours' => $t->estimated_hours, 'credit' => $this->access->creditInfo($t)]
             : [];
 
         return $estimate + [
@@ -249,7 +258,7 @@ class TicketOpsService
         return [
             'window' => ['days' => $days, 'from' => $since->toDateString(), 'to' => now()->toDateString()],
             'volume' => $volume,
-            'by_status' => $this->distribution($this->query->countBy(clone $created, 'status'), self::STATUS_ORDER),
+            'by_status' => $this->distribution($this->query->countByStatus(clone $created, $user), self::STATUS_ORDER),
             'by_priority' => $this->distribution($this->query->countBy(clone $created, 'priority'), array_keys(self::PRIORITY_LABELS)),
             'department_workload' => $byDepartment,
             'assignment' => ['top_assignees' => $assignees, 'unassigned_open' => (clone $openScope())->whereNull('tickets.assigned_to_id')->count()],
@@ -351,6 +360,14 @@ class TicketOpsService
                     $since = $t->expected_resolution_time ?? $t->created_at;
                     $hours = (int) $since->diffInHours($now, true);
                     $critical = $hours >= (int) $overdueRule['critical_after_hours'];
+                    if ($t->status === TicketAccess::PENDING_REVIEW) {
+                        // The assignee has finished: the delay is the reviewer's. No "contact the assignee / reassign"
+                        // (a reassignment is refused for a ticket in review) and no priority bump.
+                        $push($t, 'ticket_overdue', $critical ? 'critical' : 'high', ($critical ? 90 : 78) + min(9, intdiv($hours, 24)), 'بانتظار اعتماد المراجعة',
+                            'تجاوزت موعد حلّها منذ '.$this->age($hours).' وهي بانتظار المراجعة.', $since, self::REVIEW_ACTION);
+
+                        return;
+                    }
                     $push($t, 'ticket_overdue', $critical ? 'critical' : 'high', ($critical ? 90 : 78) + min(9, intdiv($hours, 24)), 'تذكرة متأخرة',
                         'تجاوزت موعد حلّها منذ '.$this->age($hours).'.', $since, 'تواصل مع المكلف أو أعد توجيه التذكرة.',
                         $critical ? $this->raise($t->priority, 'HIGH', 'متأخرة '.$this->age($hours).' عن موعدها') : null);
@@ -380,13 +397,14 @@ class TicketOpsService
 
         // In the hands of an assignee but silent.
         $silentCut = $now->subHours(self::INACTIVE_HOURS);
-        $base()->whereIn('tickets.status', ['ASSIGNED', 'IN_PROGRESS'])->whereNotNull('tickets.assigned_to_id')
+        $base()->whereIn('tickets.status', ['ASSIGNED', 'IN_PROGRESS', TicketAccess::PENDING_REVIEW])->whereNotNull('tickets.assigned_to_id')
             ->whereRaw('COALESCE((SELECT MAX(logged_at) FROM ticket_activity_logs WHERE ticket_id = tickets.id), tickets.created_at) < ?', [$silentCut])
             ->orderBy('tickets.updated_at')->limit(self::INSIGHT_LIMIT)->get()
             ->each(function (Ticket $t) use ($push, $now) {
                 $last = $t->last_activity_at ? CarbonImmutable::parse($t->last_activity_at) : $t->created_at;
-                $push($t, 'inactive', 'medium', 55 + min(10, intdiv((int) $last->diffInHours($now, true), 24)), 'لا نشاط على التذكرة',
-                    'لم يُسجَّل أي نشاط منذ '.$this->age((int) $last->diffInHours($now, true)).'.', $last, 'اطلب تحديثًا من المكلف.');
+                $review = $t->status === TicketAccess::PENDING_REVIEW;
+                $push($t, 'inactive', 'medium', 55 + min(10, intdiv((int) $last->diffInHours($now, true), 24)), $review ? 'بانتظار المراجعة والاعتماد' : 'لا نشاط على التذكرة',
+                    ($review ? 'أنهى المكلف العمل ولم يُراجَع منذ ' : 'لم يُسجَّل أي نشاط منذ ').$this->age((int) $last->diffInHours($now, true)).'.', $last, $review ? self::REVIEW_ACTION : 'اطلب تحديثًا من المكلف.');
             });
 
         $list = array_values($found);
@@ -440,7 +458,7 @@ class TicketOpsService
             ->where('tickets.ticket_category', $ticket->ticket_category)
             ->where('tickets.created_at', '>=', now()->subDays(90))
             ->orderByDesc('tickets.created_at')->limit(150)
-            ->get(['tickets.id', 'tickets.ticket_number', 'tickets.title', 'tickets.status', 'tickets.created_at']);
+            ->get(['tickets.id', 'tickets.ticket_number', 'tickets.title', 'tickets.status', 'tickets.created_at', 'tickets.created_by_id', 'tickets.assigned_to_id', 'tickets.department_id']);
 
         $out = [];
         foreach ($candidates as $c) {
@@ -455,7 +473,8 @@ class TicketOpsService
                 continue;
             }
             $out[] = [
-                'id' => $c->id, 'ticket_number' => $c->ticket_number, 'title' => $c->title, 'status' => $c->status,
+                'id' => $c->id, 'ticket_number' => $c->ticket_number, 'title' => $c->title,
+                'status' => $this->access->isReporterOnly($user, $c) ? TicketReporterView::publicStatus($c->status) : $c->status,
                 'created_at' => $c->created_at?->toIso8601String(),
                 'shared_words' => $shared,
                 'word_overlap_percent' => (int) round($overlap * 100),
@@ -502,25 +521,13 @@ class TicketOpsService
     public function assignmentSuggestions(Ticket $ticket): array
     {
         $deptId = (int) $ticket->department_id;
-        $unitId = $ticket->unit_id ? (int) $ticket->unit_id : null;
+        $unitId = $this->access->effectiveUnitId($ticket, null);
 
-        $ids = collect();
-        if ($unitId) {
-            $ids = TeamMember::where('department_id', $deptId)->where('unit_id', $unitId)->where('status', 'active')->pluck('user_id');
-        } else {
-            $dept = Department::find($deptId);
-            $ids = collect([$dept?->leader_id])->filter()
-                ->merge(TeamMember::where('department_id', $deptId)->where('status', 'active')->pluck('user_id'))
-                ->merge(DB::table('user_departments')->where('department_id', $deptId)->pluck('user_id'));
-        }
-        $ids = $ids->unique()->values();
-
-        // Every id above comes from the very sources assigneeEligible() accepts: an active member of the
-        // ticket's unit (and department), or the department's leader / team member / member. Re-asking the
-        // question per person cost one query each, so eligibility is guaranteed by construction here and
-        // pinned by a test that sends every suggestion through the real reassign endpoint.
-        $users = User::query()->where('is_active', true)->whereIn('id', $ids)->orderBy('name')->limit(200)->get(['id', 'name', 'role']);
-
+        // The same query the form metadata lists with and approve / reassign / bulk validate with
+        // (TicketAccess::eligibleAssigneesQuery): a suggestion can never be refused for eligibility, and the
+        // department without technical units is handled by the same rule (the ticket's unit counts only while it
+        // is still a live unit of the department).
+        $users = $this->access->eligibleAssignees($deptId, $unitId);
         $load = $users->isEmpty() ? collect() : Ticket::query()->whereIn('assigned_to_id', $users->pluck('id'))
             ->whereNotIn('status', [...TicketAccess::CLOSED_STATUSES, 'REJECTED_BY_ASSIGNEE'])->selectRaw('assigned_to_id, COUNT(*) AS c')->groupBy('assigned_to_id')->pluck('c', 'assigned_to_id');
 

@@ -1874,6 +1874,55 @@ class NotificationService
             ['ticket_id' => $ticketId, 'assignment_key' => $key], $assignedById);
     }
 
+    // ── Ticket completion review: the assignee hears the outcome ─────────────
+    //
+    // In-app only (no new email or preference key): the assignee is waiting for exactly this answer and it is
+    // also visible in «مهامي». TicketCreditService / TicketActions decide WHEN (after commit).
+
+    /** The final approval of the work: the ticket is closed and its points and hours were added to the assignee. */
+    public static function ticketCompletionApproved(int $assigneeId, int $ticketId, string $ticketTitle, int $points, float $hours, ?int $approvedById = null): void
+    {
+        $title = self::shortTitle($ticketTitle);
+        $hoursText = rtrim(rtrim(number_format($hours, 2, '.', ''), '0'), '.');
+
+        self::send($assigneeId, 'ticket_completion_approved',
+            'تم اعتماد إنجاز التذكرة',
+            "تم اعتماد إنجازك للتذكرة \"{$title}\" وأُضيف إلى رصيدك {$points} نقطة"
+                .($hours > 0 ? " و{$hoursText} ساعة تطوع" : '').'.',
+            [
+                'entity_type'     => 'ticket',
+                'entity_id'       => $ticketId,
+                // Class A — a ticket is credited once; the key is stable per ticket.
+                'idempotency_key' => NotificationIdempotencyKey::forEntity('ticket_completion_approved', $ticketId),
+                'action_url'      => "/dashboard/tickets/{$ticketId}",
+                'icon'            => 'check-circle',
+                'color'           => 'green',
+                'created_by'      => $approvedById,
+            ]
+        );
+    }
+
+    /** The reviewer sent the work back for more work; nothing was credited. */
+    public static function ticketReturnedForRework(int $assigneeId, int $ticketId, string $ticketTitle, string $reason, string $returnRef, ?int $returnedById = null): void
+    {
+        $title = self::shortTitle($ticketTitle);
+
+        self::send($assigneeId, 'ticket_returned_for_rework',
+            'أُعيدت التذكرة للتنفيذ',
+            "أعاد المراجع التذكرة \"{$title}\" إليك لاستكمال العمل عليها. السبب: ".mb_strimwidth(trim($reason), 0, 200, '…'),
+            [
+                'entity_type'     => 'ticket',
+                'entity_id'       => $ticketId,
+                // Class C — a ticket can be returned more than once; one key per return event.
+                'idempotency_key' => NotificationIdempotencyKey::fromComponents('ticket_returned_for_rework', [$ticketId, $assigneeId, $returnRef]),
+                'action_url'      => "/dashboard/tickets/{$ticketId}",
+                'icon'            => 'rotate-ccw',
+                'color'           => 'amber',
+                'created_by'      => $returnedById,
+            ]
+        );
+    }
+
     /**
      * A support ticket was assigned to $assigneeId (SupportTicketController::assign / updateStatus).
      * The in-app row keeps the original wording, type and link; the email is new and starts off

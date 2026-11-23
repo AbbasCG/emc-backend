@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Models\Task;
 use App\Models\User;
-use App\Models\VolunteerPointAward;
 use App\Models\VolunteerProfile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -61,33 +60,22 @@ class TaskWorkflowService
         DB::transaction(function () use ($task, $approver) {
             // 1. إضافة نقاط الأثر إلى ليدجر النقاط
             if ($task->points && $task->points > 0) {
-                // منع الازدواجية إذا كان قد تم منحه مسبقاً لهذه المهمة
-                $alreadyAwarded = VolunteerPointAward::where('source_type', Task::class)
-                    ->where('source_id', $task->id)
-                    ->exists();
-
-                if (! $alreadyAwarded) {
-                    VolunteerPointAward::create([
-                        'user_id'     => $task->assigned_to,
-                        'category'    => 'task',
-                        'points'      => $task->points,
-                        'reason'      => 'إنجاز مهمة: ' . $task->title,
-                        'note'        => 'اعتماد نهائي للمهمة #' . $task->id . ' (حجم: ' . ($task->task_scope ?? 'بسيط') . ')',
-                        'awarded_by'  => $approver->id,
-                        'source_type' => Task::class,
-                        'source_id'   => $task->id,
-                        'awarded_at'  => now(),
-                    ]);
-                }
+                // (يمنع VolunteerCreditService الازدواجية إذا كان قد تم منحه مسبقاً لهذه المهمة)
+                VolunteerCreditService::awardPoints(
+                    (int) $task->assigned_to,
+                    (int) $task->points,
+                    'task',
+                    'إنجاز مهمة: ' . $task->title,
+                    'اعتماد نهائي للمهمة #' . $task->id . ' (حجم: ' . ($task->task_scope ?? 'بسيط') . ')',
+                    $approver->id,
+                    Task::class,
+                    (int) $task->id,
+                );
             }
 
             // 2. إضافة الساعات التراكمية في ملف المتطوع
             if ($task->estimated_hours && $task->estimated_hours > 0) {
-                $profile = VolunteerProfile::firstOrCreate(
-                    ['user_id' => $task->assigned_to],
-                    ['hours_logged' => 0]
-                );
-                $profile->increment('hours_logged', $task->estimated_hours);
+                VolunteerCreditService::addHours((int) $task->assigned_to, $task->estimated_hours);
             }
 
             Log::info("Task #{$task->id} approved and credited: {$task->points} points, {$task->estimated_hours} hours to user #{$task->assigned_to}");

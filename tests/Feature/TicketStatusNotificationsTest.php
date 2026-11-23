@@ -97,7 +97,28 @@ class TicketStatusNotificationsTest extends TestCase
         return $this->postJson("/api/v1/tickets/{$t->id}/approve", ['sla_hours' => 24]);
     }
 
+    /**
+     * Resolve a ticket the way it is done now: the assignee SUBMITS the work (complete-task -> PENDING_REVIEW, which
+     * announces nothing), then the leader gives the final approval (approve-completion -> RESOLVED), which is the
+     * transition the submitter is told about. Returns the assignee's response, so a refused/failed first step
+     * reads exactly as before.
+     */
     private function resolve(Ticket $t, ?User $as = null)
+    {
+        $res = $this->submitForReview($t, $as);
+        if ($res->status() !== 200) {
+            return $res;
+        }
+
+        $this->assertSame('PENDING_REVIEW', $t->fresh()->status);
+
+        Sanctum::actingAs($this->leader);
+        $this->postJson("/api/v1/tickets/{$t->id}/approve-completion", ['task_scope' => 'simple', 'task_points' => 30])->assertOk();
+
+        return $res;
+    }
+
+    private function submitForReview(Ticket $t, ?User $as = null)
     {
         Sanctum::actingAs($as ?? $this->assignee);
 
@@ -123,9 +144,13 @@ class TicketStatusNotificationsTest extends TestCase
         return $jobs;
     }
 
+    /**
+     * Status notifications only: the assignee's own «completion approved» / «returned for rework» notices are a
+     * different feature (TicketCreditTest) and are not what these tests are about.
+     */
     private function allNotificationCount(): int
     {
-        return PlatformNotification::count();
+        return PlatformNotification::whereNotIn('type', ['ticket_completion_approved', 'ticket_returned_for_rework'])->count();
     }
 
     // ═══ Reports: resolved ═══════════════════════════════════════════════════
@@ -213,7 +238,7 @@ class TicketStatusNotificationsTest extends TestCase
 
         $this->assertSame(1, $this->allNotificationCount());
         $this->assertCount(1, $this->notificationsFor($this->submitter));
-        $this->assertCount(0, $this->notificationsFor($this->assignee), 'the resolver is not the recipient');
+        $this->assertCount(0, $this->notificationsFor($this->assignee, 'ticket_resolved'), 'the resolver is not the recipient of the status notification');
         $this->assertCount(0, $this->notificationsFor($this->leader));
         $this->assertCount(0, $this->notificationsFor($bystander));
     }
@@ -390,9 +415,14 @@ class TicketStatusNotificationsTest extends TestCase
     {
         $ticket = $this->inProgress(['assigned_to_id' => $this->submitter->id]);
 
-        $this->resolve($ticket, $this->submitter)->assertOk();
-
+        // Their own action (submitting the work for review) announces nothing to them.
+        $this->submitForReview($ticket, $this->submitter)->assertOk();
         $this->assertSame(0, $this->allNotificationCount());
+
+        // The ticket is resolved only by someone else's final approval, and THAT is news to them.
+        Sanctum::actingAs($this->leader);
+        $this->postJson("/api/v1/tickets/{$ticket->id}/approve-completion", ['task_scope' => 'simple', 'task_points' => 30])->assertOk();
+        $this->assertCount(1, $this->notificationsFor($this->submitter, 'ticket_resolved'));
     }
 
     public function test_a_failure_while_notifying_never_fails_the_status_change(): void
