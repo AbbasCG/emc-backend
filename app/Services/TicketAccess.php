@@ -2,9 +2,16 @@
 
 namespace App\Services;
 
+use App\Models\Department;
+use App\Models\DepartmentalUnit;
+use App\Models\Task;
 use App\Models\TeamMember;
 use App\Models\Ticket;
 use App\Models\User;
+use App\Models\VolunteerProfile;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 /**
  * The ONE place that answers "who may do what with a ticket".
@@ -18,8 +25,20 @@ use App\Models\User;
  */
 class TicketAccess
 {
-    /** Statuses after which a ticket is finished. */
+    /** Statuses after which a ticket is finished. PENDING_REVIEW is NOT one of them: the work is submitted but not yet finally approved. */
     public const CLOSED_STATUSES = ['RESOLVED', 'REJECTED_BY_ADMIN', 'UNRESOLVED'];
+
+    /** The assignee finished and submitted the work; it waits for the final approval (which is what credits). */
+    public const PENDING_REVIEW = 'PENDING_REVIEW';
+
+    /**
+     * Roles that give the FINAL approval of work larger than «بسيطة». The very list TaskController::hrApprove uses:
+     * regular tasks above the simple size need HR's final approval, so tickets do too.
+     */
+    public const HR_APPROVAL_ROLES = ['admin', 'super_admin', 'hr_manager', 'executive_admin'];
+
+    /** Log rows only managers, global roles and the assignee may read. */
+    public const INTERNAL_LOG_ACTIONS = ['INTERNAL_NOTE', 'ESTIMATE_UPDATED', 'CREDIT_ADDED', 'RETURNED_FOR_REWORK'];
 
     /**
      * Statuses a manager may hand to (another) person: held by someone (ASSIGNED, IN_PROGRESS) or declined
@@ -73,6 +92,12 @@ class TicketAccess
         return $ticket->assigned_to_id !== null && $ticket->assigned_to_id === $user->id;
     }
 
+    /** The ticket's actual assignee (a global role is NOT counted here, unlike isAssignee()). */
+    public function isTicketAssignee(User $user, Ticket $ticket): bool
+    {
+        return $ticket->assigned_to_id !== null && (int) $ticket->assigned_to_id === (int) $user->id;
+    }
+
     /** True when the viewer is ONLY the submitter: no management, assignment or global role over the ticket. */
     public function isReporterOnly(User $user, Ticket $ticket): bool
     {
@@ -96,25 +121,169 @@ class TicketAccess
             || ($ticket->assigned_to_id !== null && $ticket->assigned_to_id === $user->id);
     }
 
-    /**
-     * Is $assignee eligible for a ticket of $departmentId, optionally scoped to one unit? With a unit,
-     * membership must be exact (an active team_members row in that unit AND department).
-     */
-    public function assigneeEligible(User $assignee, int $departmentId, ?int $unitId): bool
+    // ── Who can be handed a ticket: ONE rule, used by the lists AND the validators ───────────────────────
+
+    /** Does the department have at least one ACTIVE technical unit? A department without any never needs a unit. */
+    public function departmentHasUnits(int $departmentId): bool
     {
-        if ($this->departments->isGlobal($assignee)) {
-            return true;
+        return DepartmentalUnit::where('department_id', $departmentId)->where('is_active', true)->exists();
+    }
+
+    /** Does this unit belong to this department (active or not)? The check every endpoint makes for a unit it was sent. */
+    public function unitBelongsToDepartment(int $unitId, int $departmentId): bool
+    {
+        return DepartmentalUnit::where('id', $unitId)->where('department_id', $departmentId)->exists();
+    }
+
+    /**
+     * The unit an assignment is judged against: the one sent with the request, else the unit the ticket already
+     * carries, but only while that unit is still an ACTIVE unit of the ticket's own department. A ticket that
+     * carries a unit its department has since deactivated (or lost) is judged by the department alone, so a
+     * department that no longer has technical units is never blocked by a stale unit id.
+     */
+    public function effectiveUnitId(Ticket $ticket, ?int $explicitUnitId): ?int
+    {
+        if ($explicitUnitId !== null) {
+            return $explicitUnitId;
         }
+
+        if (! $ticket->unit_id) {
+            return null;
+        }
+
+        $live = DepartmentalUnit::where('id', $ticket->unit_id)
+            ->where('department_id', $ticket->department_id)
+            ->where('is_active', true)
+            ->exists();
+
+        return $live ? (int) $ticket->unit_id : null;
+    }
+
+    /**
+     * THE eligibility rule, as a query over users. Everything that lists assignable people (the form metadata,
+     * the suggestions) and everything that accepts one (approve, reassign, bulk reassign, the audit) is built on
+     * this single query, so a listed person is never refused and a refused person is never listed.
+     *
+     *  - With a unit: an ACTIVE team_members row in that unit AND department. Nothing broader.
+     *  - Without a unit: the department's leader, an active team member of the department, or a member of it in
+     *    user_departments. (No standing exception for another department's staff, and no global-role shortcut: a
+     *    global role is assignable only when it actually belongs to the department.)
+     *  - Always: an active account, and not a volunteer TaskWorkflowService::canAssignTaskToUser blocks
+     *    (inactive / on leave / withdrawn), the same guard regular tasks apply.
+     *
+     * Known per-ticket difference (by design, reported per ticket): when a ticket ALREADY carries a live unit, reassign
+     * judges the assignee by that unit's members (effectiveUnitId), while `meta()` without a `unit_id` lists the whole
+     * department. A bulk reassign of unit-bearing tickets can therefore refuse some listed users for some tickets; the
+     * bulk result already states each refusal per ticket. Listing with the ticket's `unit_id` gives the exact set.
+     *
+     * @return Builder<User>
+     */
+    public function eligibleAssigneesQuery(int $departmentId, ?int $unitId): Builder
+    {
+        $query = User::query()->where('users.is_active', true);
 
         if ($unitId) {
-            return TeamMember::where('user_id', $assignee->id)
-                ->where('unit_id', $unitId)
-                ->where('department_id', $departmentId)
-                ->where('status', 'active')
-                ->exists();
+            $query->whereIn('users.id', TeamMember::query()->select('user_id')
+                ->where('unit_id', $unitId)->where('department_id', $departmentId)->where('status', 'active'));
+        } else {
+            $query->where(function ($q) use ($departmentId) {
+                $q->whereIn('users.id', Department::query()->select('leader_id')->where('id', $departmentId)->whereNotNull('leader_id'))
+                    ->orWhereIn('users.id', TeamMember::query()->select('user_id')->where('department_id', $departmentId)->where('status', 'active'))
+                    ->orWhereIn('users.id', DB::table('user_departments')->select('user_id')->where('department_id', $departmentId));
+            });
         }
 
-        return $this->departments->canAccessDepartment($assignee, $departmentId);
+        // Same statuses as TaskWorkflowService::canAssignTaskToUser (a user without a volunteer profile is allowed).
+        // whereNotNull is defensive: a single NULL inside NOT IN (...) would make the whole condition unknown and
+        // exclude EVERYONE (the column is NOT NULL today; this keeps it safe if that ever changes).
+        return $query->whereNotIn('users.id', VolunteerProfile::query()->select('user_id')->whereNotNull('user_id')->whereIn('status', [
+            VolunteerProfile::STATUS_INACTIVE, VolunteerProfile::STATUS_ON_LEAVE, VolunteerProfile::STATUS_WITHDRAWN,
+        ]));
+    }
+
+    /**
+     * The people a ticket of this department (optionally scoped to one unit) can be handed to, by name. Only id,
+     * name and role leave the server (no e-mail), capped at $limit.
+     *
+     * @return Collection<int, User>
+     */
+    public function eligibleAssignees(int $departmentId, ?int $unitId, int $limit = 200): Collection
+    {
+        return $this->eligibleAssigneesQuery($departmentId, $unitId)->orderBy('users.name')->orderBy('users.id')->limit($limit)->get(['users.id', 'users.name', 'users.role']);
+    }
+
+    /** Is $assignee eligible for a ticket of $departmentId, optionally scoped to one unit? See eligibleAssigneesQuery(). */
+    public function assigneeEligible(User $assignee, int $departmentId, ?int $unitId): bool
+    {
+        return $this->eligibleAssigneesQuery($departmentId, $unitId)->where('users.id', $assignee->id)->exists();
+    }
+
+    /** The Arabic reason an ineligible assignee is refused, always the same wording on every path. */
+    public function assigneeRefusal(User $assignee, ?int $unitId): string
+    {
+        if (! $assignee->is_active) {
+            return 'المستخدم المحدد غير فعّال ولا يمكن إسناد تذكرة إليه.';
+        }
+
+        $volunteer = TaskWorkflowService::canAssignTaskToUser((int) $assignee->id);
+        if (! $volunteer['allowed']) {
+            return $volunteer['message'];
+        }
+
+        return $unitId
+            ? 'المستخدم المحدد ليس عضواً فعالاً في الوحدة التقنية المختارة.'
+            : 'المستخدم المحدد غير مؤهل لإسناد تذاكر هذه الإدارة إليه.';
+    }
+
+    // ── Final approval of the work (the only step that credits) ───────────────────────────────────────────
+
+    /** Does this role give the FINAL approval of work larger than «بسيطة»? (mirrors TaskController::hrApprove) */
+    public function isHrApprover(User $user): bool
+    {
+        return in_array($user->role, self::HR_APPROVAL_ROLES, true);
+    }
+
+    /** Work above the simple size needs HR's final approval; a ticket with no size yet is judged once one is set. */
+    public function needsHrApproval(?string $scope): bool
+    {
+        return $scope !== null && $scope !== Task::SCOPE_SIMPLE;
+    }
+
+    /**
+     * May this user review (approve or return) the work submitted on this ticket? A department leader or a global
+     * role, and NEVER the person who did the work (not even a leader who assigned the ticket to themselves, nor a
+     * global role that is the assignee) nor the person who submitted it for review. Nobody approves their own work.
+     */
+    public function canReviewCompletion(User $user, Ticket $ticket): bool
+    {
+        return $ticket->status === self::PENDING_REVIEW
+            && $ticket->assigned_to_id !== null
+            && (int) $ticket->assigned_to_id !== (int) $user->id
+            // The person who submitted the work (a global role may submit on the assignee's behalf) cannot review it.
+            && ($ticket->submitted_by_id === null || (int) $ticket->submitted_by_id !== (int) $user->id)
+            && $this->canManage($user, (int) $ticket->department_id);
+    }
+
+    /**
+     * The `credit` block every staff payload carries (for those who may read it, see redactInternal).
+     * status: none | pending_review | credited. The numbers exist only once credited.
+     *
+     * @return array{status: string, points: ?int, hours: ?float, credited_at: ?string, credited_by_name: ?string}
+     */
+    public function creditInfo(Ticket $ticket): array
+    {
+        $credited = $ticket->credited_at !== null;
+        if ($credited && ! $ticket->relationLoaded('creditor')) {
+            $ticket->load('creditor:id,name');
+        }
+
+        return [
+            'status' => $credited ? 'credited' : ($ticket->status === self::PENDING_REVIEW ? 'pending_review' : 'none'),
+            'points' => $credited ? (int) $ticket->credited_points : null,
+            'hours' => $credited ? round((float) $ticket->credited_hours, 2) : null,
+            'credited_at' => $ticket->credited_at?->toIso8601String(),
+            'credited_by_name' => $credited ? $ticket->creditor?->name : null,
+        ];
     }
 
     /**
@@ -138,11 +307,21 @@ class TicketAccess
             'accept_task' => $isAssignee && $ticket->assigned_to_id !== null && $ticket->status === 'ASSIGNED',
             'reject_task' => $isAssignee && $ticket->assigned_to_id !== null && $ticket->status === 'ASSIGNED',
             'complete_task' => $isAssignee && $ticket->status === 'IN_PROGRESS',
+            // The final approval (the one step that credits) and the way back to the assignee. Both need a leader or
+            // a global role who is NOT the assignee; approving work above «بسيطة» also needs an HR approver. A
+            // ticket with no size yet (legacy) is approved together with the size the approver supplies, so the HR
+            // gate for it is judged by the endpoint once that size is known.
+            'approve_completion' => $this->canReviewCompletion($user, $ticket)
+                && $ticket->credited_at === null
+                && (! $this->needsHrApproval($ticket->task_scope) || $this->isHrApprover($user)),
+            'return_for_rework' => $this->canReviewCompletion($user, $ticket),
             'add_internal_note' => $canManage,
             'comment' => true,
             'change_priority' => $canManage && $open,
             // The planning estimate (size, points, hours) of an open ticket: same gate as priority.
-            'can_edit_estimate' => $canManage && $open,
+            // Never once the work is submitted (it is corrected in the approval request, under the HR gate) and never by
+            // the assignee, who must not resize their own work.
+            'can_edit_estimate' => $canManage && $open && $ticket->status !== self::PENDING_REVIEW && ! $this->isTicketAssignee($user, $ticket),
         ];
     }
 
@@ -156,21 +335,25 @@ class TicketAccess
     public function redactInternal(User $user, Ticket $ticket, array $data): array
     {
         if ($this->canSeeInternal($user, $ticket)) {
+            $data['credit'] = $this->creditInfo($ticket);
+            // The relation is only loaded to name the approver; the `credit` block carries it.
+            unset($data['creditor']);
+
             return $data;
         }
 
         $data['internal_notes'] = null;
 
-        // The planning estimate (size, points, hours) and its change history are for the same people who may
-        // read internal notes: managers, global roles and the assignee. A plain department member can open the
-        // ticket without them.
-        foreach (['task_scope', 'task_points', 'estimated_hours'] as $key) {
+        // The planning estimate (size, points, hours), the credit and their change history are for the same people
+        // who may read internal notes: managers, global roles and the assignee. A plain department member can open
+        // the ticket without them.
+        foreach (['task_scope', 'task_points', 'estimated_hours', 'credit', 'creditor', 'credited_points', 'credited_hours', 'credited_at', 'credited_by_id'] as $key) {
             unset($data[$key]);
         }
 
         foreach (['activity_logs', 'activityLogs'] as $key) {
             if (isset($data[$key]) && is_array($data[$key])) {
-                $data[$key] = array_values(array_filter($data[$key], fn ($log) => ! in_array($log['action'] ?? null, ['INTERNAL_NOTE', 'ESTIMATE_UPDATED'], true)));
+                $data[$key] = array_values(array_filter($data[$key], fn ($log) => ! in_array($log['action'] ?? null, self::INTERNAL_LOG_ACTIONS, true)));
             }
         }
 

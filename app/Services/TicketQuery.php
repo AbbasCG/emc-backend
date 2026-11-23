@@ -22,7 +22,7 @@ use Illuminate\Validation\ValidationException;
  */
 class TicketQuery
 {
-    public const STATUSES = ['PENDING_APPROVAL', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'UNRESOLVED', 'REJECTED_BY_ADMIN', 'REJECTED_BY_ASSIGNEE'];
+    public const STATUSES = ['PENDING_APPROVAL', 'ASSIGNED', 'IN_PROGRESS', 'PENDING_REVIEW', 'RESOLVED', 'UNRESOLVED', 'REJECTED_BY_ADMIN', 'REJECTED_BY_ASSIGNEE'];
     public const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
     public const CATEGORIES = ['OLD_ISSUE', 'NEW_SUGGESTION'];
     public const SORTS = ['created_at', 'updated_at', 'priority', 'status', 'ticket_number', 'title', 'due', 'last_activity'];
@@ -37,6 +37,9 @@ class TicketQuery
      * counting them while they are active would make every other card read zero.
      */
     public const KPI_TOGGLES = ['status', 'priority', 'overdue', 'unassigned', 'state', 'sla', 'attention', 'mine'];
+
+    /** @var array<int, array<int, int>> */
+    private array $led = [];
 
     public function __construct(private readonly DepartmentAccessService $departments, private readonly TicketAccess $access) {}
 
@@ -62,7 +65,7 @@ class TicketQuery
 
         $v = validator($input, [
             'search' => ['sometimes', 'nullable', 'string', 'max:100'],
-            'status' => ['sometimes', 'array', 'max:7'],
+            'status' => ['sometimes', 'array', 'max:8'],
             'status.*' => ['string', Rule::in(self::STATUSES)],
             'priority' => ['sometimes', 'array', 'max:4'],
             'priority.*' => ['string', Rule::in(self::PRIORITIES)],
@@ -125,7 +128,9 @@ class TicketQuery
         $use = fn (string $key) => ! in_array($key, $ignore, true) && array_key_exists($key, $f) && $f[$key] !== null && $f[$key] !== '' && $f[$key] !== [];
 
         if ($use('status')) {
-            $query->whereIn('tickets.status', $f['status']);
+            // Through the viewer's effective status: a submitter who only reported a ticket sees PENDING_REVIEW as
+            // IN_PROGRESS, so filtering IN_PROGRESS includes it and filtering PENDING_REVIEW cannot reveal it.
+            $query->whereRaw($this->effectiveStatusSql($user).' IN ('.implode(',', array_fill(0, count($f['status']), '?')).')', array_values($f['status']));
         }
         if ($use('priority')) {
             $query->whereIn('tickets.priority', $f['priority']);
@@ -205,7 +210,8 @@ class TicketQuery
     /**
      * Tickets where THIS user is the next actor:
      *  - the assignee of a task that is waiting for them (assigned, or in progress);
-     *  - a manager of the department: a ticket waiting for approval, or one the assignee declined.
+     *  - a manager of the department: a ticket waiting for approval, one the assignee declined, or finished work
+     *    waiting for the final approval (never one they hold themselves: nobody approves their own work).
      */
     private function needsMyAttention(Builder $query, User $user): void
     {
@@ -215,10 +221,14 @@ class TicketQuery
         $query->where(function ($q) use ($user, $global, $led) {
             $q->where(fn ($a) => $a->where('tickets.assigned_to_id', $user->id)->whereIn('tickets.status', ['ASSIGNED', 'IN_PROGRESS']));
 
+            $review = fn ($m) => $m->where('tickets.status', TicketAccess::PENDING_REVIEW)
+                ->whereNotNull('tickets.assigned_to_id')->where('tickets.assigned_to_id', '!=', $user->id);
+
             if ($global) {
-                $q->orWhereIn('tickets.status', ['PENDING_APPROVAL', 'REJECTED_BY_ASSIGNEE']);
+                $q->orWhereIn('tickets.status', ['PENDING_APPROVAL', 'REJECTED_BY_ASSIGNEE'])->orWhere($review);
             } elseif ($led->isNotEmpty()) {
                 $q->orWhere(fn ($m) => $m->whereIn('tickets.department_id', $led)->whereIn('tickets.status', ['PENDING_APPROVAL', 'REJECTED_BY_ASSIGNEE']));
+                $q->orWhere(fn ($m) => $m->whereIn('tickets.department_id', $led)->where($review));
             }
         });
     }
@@ -268,6 +278,38 @@ class TicketQuery
             'tickets.*',
             'last_activity_at' => TicketActivityLog::query()->selectRaw('MAX(logged_at)')->whereColumn('ticket_id', 'tickets.id'),
         ]);
+    }
+
+    /**
+     * The status this viewer is TOLD, as SQL. PENDING_REVIEW is an internal step: for a ticket the viewer only
+     * reported (TicketAccess::isReporterOnly: created it, leads nothing, is not global, is not its assignee) it reads
+     * IN_PROGRESS, exactly like TicketReporterView::publicStatus. For everyone else it is tickets.status. Only
+     * integers are interpolated.
+     */
+    public function effectiveStatusSql(User $user): string
+    {
+        if ($this->departments->isGlobal($user)) {
+            return 'tickets.status';
+        }
+
+        $uid = (int) $user->id;
+        $led = $this->ledDepartmentIds($user);
+        $notLed = $led === [] ? '' : ' AND tickets.department_id NOT IN ('.implode(',', $led).')';
+
+        return "(CASE WHEN tickets.status = '".TicketAccess::PENDING_REVIEW."' AND tickets.created_by_id = {$uid} AND (tickets.assigned_to_id IS NULL OR tickets.assigned_to_id <> {$uid}){$notLed} THEN 'IN_PROGRESS' ELSE tickets.status END)";
+    }
+
+    /** Departments the user leads, looked up once per request and user. @return array<int, int> */
+    public function ledDepartmentIds(User $user): array
+    {
+        return $this->led[$user->id] ??= $this->departments->getLedDepartmentIds($user)->map(fn ($id) => (int) $id)->all();
+    }
+
+    /** Rows per EFFECTIVE status (see effectiveStatusSql), as [status => count]. */
+    public function countByStatus(Builder $query, User $user): array
+    {
+        return $query->reorder()->select(DB::raw($this->effectiveStatusSql($user).' AS status_key'), DB::raw('COUNT(*) as c'))
+            ->groupBy('status_key')->pluck('c', 'status_key')->map(fn ($c) => (int) $c)->all();
     }
 
     /** Count of a query's rows grouped by one column, as [value => count]. */

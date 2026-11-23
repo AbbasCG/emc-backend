@@ -499,8 +499,8 @@ class TicketWorkEstimateTest extends TestCase
         $this->postJson("/api/v1/tickets/{$t->id}/accept-task")->assertOk();
         $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'تم إصلاح المشكلة بالكامل'])->assertOk();
 
-        $this->assertSame('RESOLVED', $t->fresh()->status);
-        $this->assertSame($awards, VolunteerPointAward::count(), 'a ticket never credits points');
+        $this->assertSame('PENDING_REVIEW', $t->fresh()->status, 'the assignee only submits the work for review');
+        $this->assertSame($awards, VolunteerPointAward::count(), 'submitting for review credits nothing');
         $this->assertSame($tasks, Task::count(), 'a ticket never creates a Task row');
         $this->assertSame(250, $t->fresh()->task_points, 'the estimate stays an estimate');
     }

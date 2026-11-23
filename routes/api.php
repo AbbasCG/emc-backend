@@ -2500,6 +2500,9 @@ Route::middleware('auth:sanctum')->prefix('v1/tickets')->group(function () {
     Route::get('/{id}/possible-duplicates', [\App\Http\Controllers\Api\TicketOpsController::class, 'possibleDuplicates'])->whereNumber('id');
     Route::patch('/{id}/priority', [\App\Http\Controllers\Api\TicketOpsController::class, 'priority'])->whereNumber('id')->middleware('throttle:30,1');
     Route::patch('/{id}/work-estimate', [\App\Http\Controllers\Api\TicketOpsController::class, 'workEstimate'])->whereNumber('id')->middleware('throttle:30,1');
+    // Final approval of a completion (the ONLY step that credits points/hours, once) and the way back for rework.
+    Route::post('/{id}/approve-completion', [\App\Http\Controllers\Api\TicketOpsController::class, 'approveCompletion'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::post('/{id}/return-for-rework', [\App\Http\Controllers\Api\TicketOpsController::class, 'returnForRework'])->whereNumber('id')->middleware('throttle:30,1');
     Route::get('/{ticketId}/attachments/{attachmentId}/download', [TicketController::class, 'downloadAttachment'])
         ->name('tickets.attachments.download');
 });

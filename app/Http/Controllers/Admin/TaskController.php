@@ -472,7 +472,17 @@ class TaskController extends Controller
 
         $finalScore = round(array_sum($scores) / count($scores), 2);
 
-        DB::transaction(function () use ($task, $user, $data, $collabNa, $finalScore) {
+        $replayed = false;
+        DB::transaction(function () use ($task, $user, $data, $collabNa, $finalScore, &$replayed) {
+            // Idempotent: a task that is already completed was already credited. A repeated evaluation changes nothing
+            // (and never re-adds hours or moves a completed task back to waiting_approval).
+            $locked = Task::lockForUpdate()->find($task->id);
+            if ($locked && $locked->status === 'completed') {
+                $replayed = true;
+
+                return;
+            }
+
             TaskEvaluation::updateOrCreate(
                 ['task_id' => $task->id],
                 [
@@ -503,7 +513,9 @@ class TaskController extends Controller
             }
         });
 
-        ActivityLogger::log('task.evaluated', $task, ['final_score' => $finalScore], $request);
+        if (! $replayed) {
+            ActivityLogger::log('task.evaluated', $task, ['final_score' => $finalScore], $request);
+        }
 
         return response()->json([
             'success' => true,
@@ -523,7 +535,17 @@ class TaskController extends Controller
             return response()->json(['success' => false, 'message' => 'اعتماد الموارد البشرية متاح لمسؤولي HR فقط.'], 403);
         }
 
-        DB::transaction(function () use ($task, $user) {
+        $replayed = false;
+        DB::transaction(function () use ($task, $user, &$replayed) {
+            // Idempotent: an already completed task was already credited (points are deduplicated by the ledger, hours are
+            // not), so a replay answers success without crediting again.
+            $locked = Task::lockForUpdate()->find($task->id);
+            if ($locked && $locked->status === 'completed') {
+                $replayed = true;
+
+                return;
+            }
+
             $task->hr_approved_at = now();
             $task->hr_approved_by = $user->id;
             $task->status = 'completed';
@@ -533,7 +555,9 @@ class TaskController extends Controller
             TaskWorkflowService::creditVolunteerHoursAndPoints($task, $user);
         });
 
-        ActivityLogger::log('task.hr_approved', $task, [], $request);
+        if (! $replayed) {
+            ActivityLogger::log('task.hr_approved', $task, [], $request);
+        }
 
         return response()->json([
             'success' => true,

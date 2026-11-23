@@ -409,7 +409,7 @@ class TicketOperationsCenterTest extends TestCase
         $this->assertCount(5, $cols['PENDING_APPROVAL']['tickets']);
         $this->assertSame(1, $cols['IN_PROGRESS']['count']);
         $this->assertSame(0, $cols['RESOLVED']['count']);
-        $this->assertSame(7, $cols->count());
+        $this->assertSame(8, $cols->count(), 'one column per status, including PENDING_REVIEW');
         $this->assertArrayHasKey('capabilities', $cols['PENDING_APPROVAL']['tickets'][0]);
     }
 

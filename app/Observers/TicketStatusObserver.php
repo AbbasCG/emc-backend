@@ -35,6 +35,13 @@ use Throwable;
  * For suggestions, ASSIGNED reached from PENDING_APPROVAL is the management
  * approval (TicketController::approve); RESOLVED is "completed / added to the
  * system". UNRESOLVED and rejections are intentionally not announced here.
+ *
+ * RESOLVED is reached by the FINAL APPROVAL of the completion
+ * (TicketCreditService, PENDING_REVIEW -> RESOLVED), not by the assignee's
+ * «تم الحل» (that only moves IN_PROGRESS -> PENDING_REVIEW, an internal step
+ * that announces nothing). So the submitter hears "resolved" exactly when the
+ * work is finally approved. The only other way to RESOLVED is a legacy
+ * IN_PROGRESS ticket with no assignee, closed directly as before.
  */
 class TicketStatusObserver
 {

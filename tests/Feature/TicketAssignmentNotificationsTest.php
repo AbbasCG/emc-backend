@@ -56,9 +56,10 @@ class TicketAssignmentNotificationsTest extends TestCase
         $this->leader = $this->user('programs_manager', ['name' => 'قائد الإدارة']);
         $this->dept->update(['leader_id' => $this->leader->id]);
         $this->submitter = $this->user('student', ['email' => 'submitter@example.com']);
-        // Global roles are always eligible assignees (TicketAccess::assigneeEligible).
+        // Eligibility is department membership (TicketAccess::eligibleAssigneesQuery); there is no global-role shortcut.
         $this->alice = $this->user('tech_admin', ['name' => 'أليس', 'email' => 'alice@example.com']);
         $this->bob = $this->user('tech_admin', ['name' => 'بوب', 'email' => 'bob@example.com']);
+        $this->dept->users()->attach([$this->alice->id, $this->bob->id]);
     }
 
     private function user(string $role, array $attrs = []): User

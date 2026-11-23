@@ -91,8 +91,9 @@ class TicketWorkEstimate
      *
      * @throws TicketActionException
      */
-    public static function resolve(Ticket $ticket, array $input, bool $allowClearHours = false): array
+    public static function resolve(Ticket $ticket, array $input, bool $allowClearHours = false, ?string $missingMessage = null): array
     {
+        $missingText = $missingMessage ?? self::MISSING_MESSAGE;
         $given = fn (string $k) => array_key_exists($k, $input) && $input[$k] !== null && $input[$k] !== '';
 
         $scope = $given('task_scope') ? (string) $input['task_scope'] : ($ticket->task_scope !== null ? (string) $ticket->task_scope : null);
@@ -104,14 +105,14 @@ class TicketWorkEstimate
         $errors = [];
 
         if ($scope === null) {
-            $errors['task_scope'] = [self::MISSING_MESSAGE];
+            $errors['task_scope'] = [$missingText];
         } elseif (! in_array($scope, self::SCOPES, true)) {
             $errors['task_scope'] = ['حجم المهمة غير صالح (بسيطة، متوسطة، كبيرة أو استراتيجية).'];
         }
 
         $points = null;
         if ($rawPoints === null) {
-            $errors['task_points'] = [self::MISSING_MESSAGE];
+            $errors['task_points'] = [$missingText];
         } else {
             $points = filter_var($rawPoints, FILTER_VALIDATE_INT);
             if ($points === false || $points < 1 || $points > self::MAX_POINTS) {
@@ -134,9 +135,9 @@ class TicketWorkEstimate
         }
 
         if ($errors !== []) {
-            $missing = isset($errors['task_scope']) && $errors['task_scope'][0] === self::MISSING_MESSAGE
-                || isset($errors['task_points']) && $errors['task_points'][0] === self::MISSING_MESSAGE;
-            $message = $missing ? self::MISSING_MESSAGE : (string) (reset($errors)[0] ?? self::MISSING_MESSAGE);
+            $missing = isset($errors['task_scope']) && $errors['task_scope'][0] === $missingText
+                || isset($errors['task_points']) && $errors['task_points'][0] === $missingText;
+            $message = $missing ? $missingText : (string) (reset($errors)[0] ?? $missingText);
 
             throw new TicketActionException($message, 422, $errors);
         }

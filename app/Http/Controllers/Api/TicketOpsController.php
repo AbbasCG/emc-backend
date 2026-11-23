@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Ticket;
 use App\Services\TicketAccess;
 use App\Services\TicketActions;
+use App\Services\TicketCreditService;
 use App\Services\TicketMyWork;
 use App\Services\TicketOpsService;
 use App\Services\TicketQuery;
@@ -33,6 +34,7 @@ class TicketOpsController extends Controller
         private readonly TicketOpsService $ops,
         private readonly TicketAccess $access,
         private readonly TicketActions $actions,
+        private readonly TicketCreditService $credits,
     ) {}
 
     // GET /v1/tickets/stats
@@ -137,6 +139,60 @@ class TicketOpsController extends Controller
         ]);
     }
 
+    // POST /v1/tickets/{id}/approve-completion
+    public function approveCompletion(Request $request, int $id): JsonResponse
+    {
+        // Optional corrected estimate (REQUIRED for a legacy ticket that has none) and a note for the record.
+        $validator = Validator::make($request->all(), TicketWorkEstimate::rules() + [
+            'note' => ['nullable', 'string', 'max:1000'],
+        ], TicketWorkEstimate::messages() + TicketValidationMessages::all() + [
+            'note.string' => 'الملاحظة غير صالحة.',
+            'note.max' => 'الملاحظة طويلة جدًا؛ الحد الأقصى 1000 حرف.',
+        ]);
+
+        try {
+            if ($validator->fails()) {
+                throw new TicketActionException((string) $validator->errors()->first(), 422, $validator->errors()->toArray());
+            }
+            $ticket = $this->credits->approveCompletion($id, $request->user(), TicketWorkEstimate::only($validator->validated()), $validator->validated()['note'] ?? null);
+        } catch (TicketActionException $e) {
+            return $this->refused($e);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم اعتماد إنجاز التذكرة وإضافة النقاط والساعات إلى رصيد المكلف.',
+            'data' => $this->ticketPayload($ticket->fresh(['department', 'unit', 'assignee', 'creditor:id,name', 'activityLogs']), $request->user()),
+        ]);
+    }
+
+    // POST /v1/tickets/{id}/return-for-rework
+    public function returnForRework(Request $request, int $id): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'reason' => ['required', 'string', 'min:5', 'max:1000'],
+        ], TicketValidationMessages::all() + [
+            'reason.required' => 'اكتب سبب إعادة التذكرة للتنفيذ.',
+            'reason.string' => 'السبب غير صالح.',
+            'reason.min' => 'سبب الإعادة قصير؛ اكتب 5 أحرف على الأقل.',
+            'reason.max' => 'سبب الإعادة طويل جدًا؛ الحد الأقصى 1000 حرف.',
+        ]);
+
+        try {
+            if ($validator->fails()) {
+                throw new TicketActionException((string) $validator->errors()->first(), 422, $validator->errors()->toArray());
+            }
+            $ticket = $this->actions->returnForRework($id, $request->user(), $validator->validated()['reason']);
+        } catch (TicketActionException $e) {
+            return $this->refused($e);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تمت إعادة التذكرة للمكلف لاستكمال العمل.',
+            'data' => $this->ticketPayload($ticket->fresh(['department', 'unit', 'assignee', 'activityLogs']), $request->user()),
+        ]);
+    }
     // GET /v1/tickets/my-work
     public function myWork(Request $request, TicketMyWork $myWork): JsonResponse
     {
@@ -219,6 +275,19 @@ class TicketOpsController extends Controller
         ];
     }
 
+    /**
+     * The ticket as the caller may read it: the serialized row, capabilities and (for managers, global roles and the
+     * assignee) the `credit` block; everyone else gets the redacted form.
+     *
+     * @return array<string, mixed>
+     */
+    private function ticketPayload(Ticket $ticket, $user): array
+    {
+        $data = $ticket->toArray();
+        $data['capabilities'] = $this->access->capabilities($user, $ticket);
+
+        return $this->access->redactInternal($user, $ticket, $data);
+    }
     private function notAvailable(): JsonResponse
     {
         return response()->json(['success' => false, 'message' => 'التذكرة غير موجودة أو لا تملك صلاحية عليها.'], 404);
