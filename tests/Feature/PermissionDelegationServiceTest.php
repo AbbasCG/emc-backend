@@ -8,6 +8,7 @@ use App\Models\Permission;
 use App\Models\User;
 use App\Models\UserPermissionAssignment;
 use App\Services\PermissionDelegationService;
+use App\Support\Permissions;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -49,12 +50,13 @@ class PermissionDelegationServiceTest extends TestCase
         $dept->update(['leader_id' => $actor->id]);
         $target = User::factory()->create(['is_active' => true]);
         $this->placeInDepartment($target, $dept);
-        $permission = $this->makePermission('test.delegatable');
+        // An ordinary (implicit, in Permissions::all()) key: keys outside all() are explicit-only and super_admin-governed, never delegatable by a leader.
+        $permission = $this->makePermission(Permissions::VIEW_REPORTS);
         $this->grantActorThePermission($actor, $permission);
         DelegatablePermission::create(['permission_id' => $permission->id, 'user_id' => $actor->id, 'scope_type' => 'department', 'can_grant' => true]);
 
         $svc = app(PermissionDelegationService::class);
-        $this->assertTrue($svc->canDelegate($actor, $target, 'test.delegatable'));
+        $this->assertTrue($svc->canDelegate($actor, $target, Permissions::VIEW_REPORTS));
     }
 
     public function test_unconfigured_permission_is_denied_by_default(): void

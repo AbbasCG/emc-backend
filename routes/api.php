@@ -1211,6 +1211,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     Route::get('roles',                              [RoleController::class, 'index']);
     Route::get('roles/options',                      [UserRoleController::class, 'roleOptions']);
     Route::get('roles/{role}',                       [RoleController::class, 'show']);
+    Route::get('roles/{role}/users',                 [RoleController::class, 'users'])->middleware('throttle:60,1');
     Route::post('roles',                             [RoleController::class, 'store']);
     Route::put('roles/{role}',                       [RoleController::class, 'update']);
     Route::delete('roles/{role}',                    [RoleController::class, 'destroy']);
@@ -2423,6 +2424,15 @@ Route::middleware(['auth:sanctum', 'role:super_admin,tech_admin'])->prefix('admi
     Route::get('/roles', [\App\Http\Controllers\AdminPermissionController::class, 'getRoles']);
     Route::get('/roles/{role}/delegatable', [\App\Http\Controllers\AdminPermissionController::class, 'getDelegatableConfig']);
     Route::post('/roles/{role}/delegatable/toggle', [\App\Http\Controllers\AdminPermissionController::class, 'toggleDelegatable']);
+    // Who holds a permission (roles, direct grants, effective users): read-only, for the Access Control audit.
+    Route::get('/{key}/holders', [\App\Http\Controllers\Admin\PermissionHoldersController::class, 'show'])->where('key', '[A-Za-z0-9_.\-]+')->middleware('throttle:60,1');
+});
+
+// ─── Per-user ACTION permissions (Access Control Center): view = super_admin + tech_admin; mutations per PermissionGovernance ─────
+Route::middleware(['auth:sanctum', 'role:super_admin,tech_admin'])->prefix('admin/access')->group(function () {
+    Route::get('/users/{user}/action-permissions', [\App\Http\Controllers\Admin\UserActionPermissionController::class, 'index'])->middleware('throttle:60,1');
+    Route::post('/users/{user}/action-permissions/{key}/grant', [\App\Http\Controllers\Admin\UserActionPermissionController::class, 'grant'])->where('key', '[A-Za-z0-9_.\-]+')->middleware('throttle:30,1');
+    Route::post('/users/{user}/action-permissions/{key}/revoke', [\App\Http\Controllers\Admin\UserActionPermissionController::class, 'revoke'])->where('key', '[A-Za-z0-9_.\-]+')->middleware('throttle:30,1');
 });
 
 // ─── Page Access Catalog (Phase 1 foundation — read-only) ─────────────────────

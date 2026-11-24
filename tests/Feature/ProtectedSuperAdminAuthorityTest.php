@@ -8,6 +8,7 @@ use App\Models\Role;
 use App\Models\User;
 use App\Models\UserPermissionAssignment;
 use App\Services\PermissionDelegationService;
+use App\Support\Permissions;
 use App\Support\ProtectedAuthority;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -86,7 +87,7 @@ class ProtectedSuperAdminAuthorityTest extends TestCase
     public function test_tech_admin_can_manage_an_ordinary_roles_permissions(): void
     {
         $this->makeOrdinaryRole();
-        $perm = $this->makePermission('test.ordinary_perm2');
+        $perm = $this->makePermission(Permissions::VIEW_REPORTS);
         $actor = User::factory()->create(['role' => 'tech_admin', 'is_active' => true]);
 
         $response = $this->actingAs($actor)->putJson('/api/admin/roles/operations_manager/permissions', [
@@ -273,7 +274,7 @@ class ProtectedSuperAdminAuthorityTest extends TestCase
         $target = User::factory()->create(['is_active' => true]);
         $target->departments()->attach($dept->id);
 
-        $perm = $this->makePermission('test.dept_perm');
+        $perm = $this->makePermission(Permissions::VIEW_KPI);
         UserPermissionAssignment::create([
             'user_id' => $leader->id, 'permission_id' => $perm->id,
             'state' => 'allow', 'scope_type' => 'department', 'source_type' => 'direct_admin',
@@ -281,7 +282,7 @@ class ProtectedSuperAdminAuthorityTest extends TestCase
         DelegatablePermission::create(['permission_id' => $perm->id, 'user_id' => $leader->id, 'scope_type' => 'department', 'can_grant' => true]);
 
         $svc = app(PermissionDelegationService::class);
-        $this->assertTrue($svc->canDelegate($leader, $target, 'test.dept_perm'), 'ordinary department-leader delegation must be completely unaffected by the Phase 0 hardening');
+        $this->assertTrue($svc->canDelegate($leader, $target, Permissions::VIEW_KPI), 'ordinary department-leader delegation must be completely unaffected by the Phase 0 hardening');
     }
 
     // ── 11 — ordinary admin behavior remains unchanged unless explicitly protected ─

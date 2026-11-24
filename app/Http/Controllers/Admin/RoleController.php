@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Services\ActivityLogger;
+use App\Services\RoleMembershipService;
 use App\Support\PermissionGovernance;
 use App\Support\Permissions;
 use App\Support\ProtectedAuthority;
@@ -19,20 +20,71 @@ use Illuminate\Http\Request;
  */
 class RoleController extends Controller
 {
+    public function __construct(private readonly RoleMembershipService $membership)
+    {
+    }
+
     public function index(): JsonResponse
     {
         $roles = Role::with('permissions:id,name,display_name,group')
             ->orderBy('name')
             ->get();
 
+        // users_count = the SAME membership query the members list uses (RoleMembershipService), never a client-side tally.
+        $roles->each(fn (Role $r) => $r->setAttribute('users_count', $this->membership->count($r)));
+
         return response()->json(['success' => true, 'data' => $roles]);
     }
 
     public function show(Role $role): JsonResponse
     {
+        $role->load('permissions:id,name,display_name,group');
+        $role->setAttribute('users_count', $this->membership->count($role));
+
         return response()->json([
             'success' => true,
-            'data'    => $role->load('permissions:id,name,display_name,group'),
+            'data'    => $role,
+        ]);
+    }
+
+    /**
+     * GET /api/admin/roles/{role}/users?search=&page=&per_page=
+     * Members of the role (primary users.role, plus department leaders acting with a specialised role), de-duplicated,
+     * soft-deleted excluded; `total` is exactly the `users_count` of the role. Admin tier only (the route group is wider).
+     */
+    public function users(Request $request, Role $role): JsonResponse
+    {
+        abort_unless($request->user()?->isAdmin(), 403, 'Only admin-tier accounts can list role members.');
+
+        $data = $request->validate([
+            'search' => 'nullable|string|max:100',
+            'page' => 'nullable|integer|min:1|max:10000',
+            'per_page' => 'nullable|integer|min:1|max:100',
+        ]);
+
+        $query = $this->membership->query($role);
+        if (($search = trim((string) ($data['search'] ?? ''))) !== '') {
+            $like = '%'.addcslashes($search, '\%_').'%';
+            $query->where(fn ($w) => $w->where('users.name', 'like', $like)->orWhere('users.email', 'like', $like));
+        }
+
+        $page = $query->paginate((int) ($data['per_page'] ?? 20), ['*'], 'page', (int) ($data['page'] ?? 1));
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'items' => $page->getCollection()->map(fn ($u) => [
+                    'id' => $u->id,
+                    'name' => $u->name,
+                    'email' => $u->email,
+                    'is_active' => (bool) $u->is_active,
+                    'role_source' => $u->role_source,
+                ])->values(),
+                'total' => $page->total(),
+                'page' => $page->currentPage(),
+                'per_page' => $page->perPage(),
+                'last_page' => $page->lastPage(),
+            ],
         ]);
     }
 
