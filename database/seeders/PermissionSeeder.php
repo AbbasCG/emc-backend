@@ -15,8 +15,8 @@ class PermissionSeeder extends Seeder
 
         foreach ($grouped as $group => $names) {
             foreach ($names as $name) {
-                // The two ticket-review rows are written (labels, descriptions) by their migration: never overwrite them here.
-                if (in_array($name, [Permissions::TICKETS_REVIEW_COMPLETION, Permissions::TICKETS_REVIEW_PARTICIPATED], true)) {
+                // Rows written (labels, descriptions) by their own migration: never overwrite them here.
+                if (in_array($name, [Permissions::TICKETS_REVIEW_COMPLETION, Permissions::TICKETS_REVIEW_PARTICIPATED, Permissions::CONSULTANT_APPLICATIONS_VIEW], true)) {
                     Permission::firstOrCreate(['name' => $name], ['display_name' => $this->displayName($name), 'group' => $group, 'description' => null]);
                     $count++;
 

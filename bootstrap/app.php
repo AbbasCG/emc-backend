@@ -29,6 +29,8 @@ return Application::configure(basePath: dirname(__DIR__))
             // behind it still performs its own department-scoped check.
             'role.or.leader'     => \App\Http\Middleware\DepartmentLeaderOrRoleMiddleware::class,
             'permission'         => \App\Http\Middleware\PermissionMiddleware::class,
+            // A listed role OR one explicit permission (first parameter) — a read-only way in for a role list that must not widen.
+            'role.or.permission' => \App\Http\Middleware\RoleOrPermissionMiddleware::class,
             'optional.sanctum'   => \App\Http\Middleware\OptionalSanctumAuth::class,
             'active'             => \App\Http\Middleware\EnsureUserIsActive::class,
             // Entry to the learner experience for ANY authenticated, active account (replaces role:student).
@@ -60,6 +62,7 @@ return Application::configure(basePath: dirname(__DIR__))
             \App\Http\Middleware\RoleMiddleware::class,
             \App\Http\Middleware\DepartmentLeaderOrRoleMiddleware::class,
             \App\Http\Middleware\PermissionMiddleware::class,
+            \App\Http\Middleware\RoleOrPermissionMiddleware::class,
             \App\Http\Middleware\EnsureLearnerAccess::class,
             \App\Http\Middleware\EnforceScopedTokenAccess::class,
             \App\Http\Middleware\RequireFirstPartyCredential::class,
