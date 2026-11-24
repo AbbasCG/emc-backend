@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Services\EffectivePageAccessService;
+use App\Services\UserActionPermissionService;
 use App\Services\UserPageAccessOverrideService;
 use App\Support\PageAccess\EffectivePageAccess;
 use App\Support\PageAccess\PageAccessCatalog;
@@ -44,6 +45,7 @@ class UserEffectivePageAccessController extends Controller
     public function __construct(
         private readonly EffectivePageAccessService $service,
         private readonly UserPageAccessOverrideService $overrides,
+        private readonly UserActionPermissionService $actions,
     ) {
     }
 
@@ -60,9 +62,7 @@ class UserEffectivePageAccessController extends Controller
 
         $resolved = $this->service->resolveAll($user);
 
-        return response()->json([
-            'success' => true,
-            'data' => [
+        $data = [
                 'user' => [
                     'id' => $user->id,
                     'name' => $user->name,
@@ -88,7 +88,23 @@ class UserEffectivePageAccessController extends Controller
                     },
                     $resolved
                 )),
-            ],
-        ]);
+        ];
+
+        // ACTION permissions (business capabilities) beside page access, computed with User::hasPermission() - the function the ticket /
+        // Gate checks use. Additive: existing consumers ignore the key. Only for global configurators (super_admin / tech_admin): a
+        // department leader inspecting a member never receives the member's whole permission map (the key is absent).
+        if ($actor->isSuperAdmin() || $actor->isTechAdmin()) {
+            $data['action_permissions'] = $this->actions->rows($user)
+                ->map(fn (array $r) => [
+                    'key' => $r['key'],
+                    'label_ar' => $r['label_ar'],
+                    'group' => $r['group'],
+                    'effective' => $r['effective'],
+                    'source' => $r['source'],
+                    'sources' => $r['sources'],
+                ])->values()->all();
+        }
+
+        return response()->json(['success' => true, 'data' => $data]);
     }
 }

@@ -24,14 +24,30 @@ final class PermissionGovernance
     public const MESSAGE = 'منح صلاحية «اعتماد التذاكر التي أشارك فيها» أو سحبها من الأدوار أو الأشخاص متاح للمدير العام (super_admin) فقط.';
 
     /**
-     * The guarded keys among $names.
+     * Keys outside Permissions::all() that keep their OWN, older rule instead of the blanket super_admin-only one:
+     * users.impersonate may be delegated by an admin-tier actor that ACTUALLY holds it (PermissionDelegationService::canDelegate).
+     *
+     * @var array<int, string>
+     */
+    public const HOLDER_RULE_KEYS = [Permissions::IMPERSONATE_USERS];
+
+    /**
+     * The guarded keys among $names: SUPER_ADMIN_ONLY plus EVERY other key outside Permissions::all() (explicit-grant-only keys such
+     * as executive.command_center.view and any future one): they are never implied by a role, so who holds them is decided by a
+     * super_admin alone, for grants and revokes alike. HOLDER_RULE_KEYS (users.impersonate) are the one approved exception.
      *
      * @param  array<int, string>  $names
      * @return array<int, string>
      */
     public static function guarded(array $names): array
     {
-        return array_values(array_intersect($names, self::SUPER_ADMIN_ONLY));
+        $implicit = array_flip(Permissions::all());
+
+        return array_values(array_filter(
+            array_unique($names),
+            fn ($n) => in_array($n, self::SUPER_ADMIN_ONLY, true)
+                || (! isset($implicit[$n]) && ! in_array($n, self::HOLDER_RULE_KEYS, true))
+        ));
     }
 
     /** May $actor change the holders of every key in $names? True unless a guarded key is among them and the actor is not super_admin. */
