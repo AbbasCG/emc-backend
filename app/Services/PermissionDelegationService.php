@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\User;
 use App\Models\DelegatablePermission;
 use App\Models\UserPermissionAssignment;
+use App\Support\PermissionGovernance;
 use App\Support\Permissions;
 
 /**
@@ -39,6 +40,13 @@ class PermissionDelegationService
     {
         // System level restricted permissions (cannot be delegated by managers)
         $systemPermissions = ['system.manage', 'roles.manage', 'users.impersonate', 'technology.manage', 'delegations.manage_all'];
+
+        // tickets.review_participated (approving a ticket one created / is assigned / submitted) is a conflict-of-interest
+        // permission: only an actual super_admin may grant or revoke it, for anyone. Refused BEFORE the root bypass below, so
+        // tech_admin, admin, leaders (delegatable row or not) can never hand it out. See PermissionGovernance.
+        if (! PermissionGovernance::mayChange($actor, [$permissionKey])) {
+            return false;
+        }
 
         // Cannot delegate to oneself
         if ($actor->id === $target->id) {

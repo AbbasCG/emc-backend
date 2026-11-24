@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Ticket;
 use App\Models\TicketActivityLog;
 use App\Models\User;
+use App\Models\VolunteerProfile;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -36,7 +37,17 @@ class TicketQuery
      * Filters that the statistics must IGNORE: they are the very subsets the KPI cards select, so
      * counting them while they are active would make every other card read zero.
      */
-    public const KPI_TOGGLES = ['status', 'priority', 'overdue', 'unassigned', 'state', 'sla', 'attention', 'mine'];
+    public const KPI_TOGGLES = ['status', 'priority', 'overdue', 'unassigned', 'state', 'sla', 'attention', 'mine', 'tab'];
+
+    /**
+     * The tabs of the ticket queue: a view of the viewer's VISIBLE tickets that is applied BEFORE pagination, like every filter.
+     *   open          every ticket that is not finished (TicketAccess::CLOSED_STATUSES excluded): waiting for approval, assigned,
+     *                 in progress, in review, approved for deployment, waiting for the live test, declined by the assignee
+     *   all           every status
+     *   resolved      status RESOLVED (the one status that is set only when the ticket really reached the resolved state)
+     *   needs_action  the tickets on which THIS viewer has a workflow step to take now (see needsAction)
+     */
+    public const TABS = ['open', 'all', 'resolved', 'needs_action'];
 
     /** @var array<int, array<int, int>> */
     private array $led = [];
@@ -91,7 +102,9 @@ class TicketQuery
             'per_page' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:'.self::MAX_PER_PAGE],
             'page' => ['sometimes', 'nullable', 'integer', 'min:1'],
             'lite' => ['sometimes', 'boolean'],
+            'tab' => ['sometimes', 'nullable', Rule::in(self::TABS)],
         ], [
+            'tab.in' => 'التبويب غير صالح.',
             'created_to.after_or_equal' => 'تاريخ نهاية الإنشاء يجب ألا يسبق تاريخ البداية.',
             'updated_to.after_or_equal' => 'تاريخ نهاية التحديث يجب ألا يسبق تاريخ البداية.',
             'due_to.after_or_equal' => 'تاريخ نهاية الاستحقاق يجب ألا يسبق تاريخ البداية.',
@@ -148,7 +161,10 @@ class TicketQuery
             $query->where('tickets.assigned_to_id', $user->id);
         }
         if ($use('attention') && $f['attention']) {
-            $this->needsMyAttention($query, $user);
+            $this->needsAction($query, $user);
+        }
+        if ($use('tab')) {
+            $this->applyTab($query, $f['tab'], $user);
         }
 
         if ($use('state')) {
@@ -208,31 +224,169 @@ class TicketQuery
     }
 
     /**
-     * Tickets where THIS user is the next actor:
-     *  - the assignee of a task that is waiting for them (assigned, or in progress);
-     *  - a manager of the department: a ticket waiting for approval, one the assignee declined, or finished work
-     *    waiting for the final approval (never one they hold themselves: nobody approves their own work).
+     * Apply one tab of the queue (see TABS) to a query that is already limited to what the viewer may see.
      */
-    private function needsMyAttention(Builder $query, User $user): void
+    public function applyTab(Builder $query, string $tab, User $user): Builder
+    {
+        return match ($tab) {
+            'open' => $query->whereNotIn('tickets.status', TicketAccess::CLOSED_STATUSES),
+            'resolved' => $query->where('tickets.status', 'RESOLVED'),
+            'needs_action' => $this->needsAction($query, $user),
+            default => $query,
+        };
+    }
+
+    /**
+     * The per-tab counts, from the SAME visibility and the SAME other filters as the list ($f), with the tab itself replaced:
+     * for every tab, counts[tab] equals the `total` of the list requested with that tab and those filters.
+     *
+     * @param  array<string, mixed>  $f  validated filters
+     * @return array{open: int, all: int, resolved: int, needs_action: int}
+     */
+    public function tabCounts(User $user, array $f): array
+    {
+        $counts = [];
+        foreach (self::TABS as $tab) {
+            $counts[$tab] = $this->filter($this->visible($user), array_merge($f, ['tab' => $tab]), $user)->count();
+        }
+
+        return $counts;
+    }
+
+    /**
+     * Tickets on which THIS viewer has a workflow step to take NOW (the personal queue, «تحتاج إجراء منك»). Every part mirrors a
+     * capability of TicketAccess::capabilities, so a ticket in this set always offers the viewer the matching button:
+     *  - their OWN assignment: accept / decline it (ASSIGNED), complete it (IN_PROGRESS), verify it live (PENDING_VERIFICATION of a
+     *    deployment ticket). Only the actual assignee: a global role that could act for them is not asked to;
+     *  - a department leader (or global role): decide a ticket waiting for approval, and route again a ticket the assignee declined;
+     *  - the review stages (review, deployment, a stuck live test): decided ticket by ticket by TicketAccess (canMarkDeployed /
+     *    canReturnForRework, i.e. the reviewer rules: nobody reviews their own work, and the review permission), so a change of
+     *    those rules reaches this queue by itself. See reviewActionIds.
+     */
+    private function needsAction(Builder $query, User $user): Builder
     {
         $global = $this->departments->isGlobal($user);
-        $led = $global ? collect() : $this->departments->getLedDepartmentIds($user);
+        $led = $global ? [] : $this->ledDepartmentIds($user);
 
-        $query->where(function ($q) use ($user, $global, $led) {
-            // The assignee's turn: accept, work, or verify the change on the live site.
-            $q->where(fn ($a) => $a->where('tickets.assigned_to_id', $user->id)->whereIn('tickets.status', ['ASSIGNED', 'IN_PROGRESS', TicketAccess::PENDING_VERIFICATION]));
+        return $query->where(function ($q) use ($user, $global, $led) {
+            // The assignee's turn.
+            $q->where(fn ($a) => $a->where('tickets.assigned_to_id', $user->id)->where(fn ($s) => $s->whereIn('tickets.status', ['ASSIGNED', 'IN_PROGRESS'])
+                ->orWhere(fn ($v) => $v->where('tickets.status', TicketAccess::PENDING_VERIFICATION)->where('tickets.requires_deployment', true))));
 
-            // The managers' turn: review finished work, and put the approved deployment tickets on the live site.
-            $review = fn ($m) => $m->whereIn('tickets.status', [TicketAccess::PENDING_REVIEW, TicketAccess::APPROVED_FOR_DEPLOY])
-                ->whereNotNull('tickets.assigned_to_id')->where('tickets.assigned_to_id', '!=', $user->id);
-
+            // The managers' turn: decide, or route again.
             if ($global) {
-                $q->orWhereIn('tickets.status', ['PENDING_APPROVAL', 'REJECTED_BY_ASSIGNEE'])->orWhere($review);
-            } elseif ($led->isNotEmpty()) {
+                $q->orWhereIn('tickets.status', ['PENDING_APPROVAL', 'REJECTED_BY_ASSIGNEE']);
+            } elseif ($led !== []) {
                 $q->orWhere(fn ($m) => $m->whereIn('tickets.department_id', $led)->whereIn('tickets.status', ['PENDING_APPROVAL', 'REJECTED_BY_ASSIGNEE']));
-                $q->orWhere(fn ($m) => $m->whereIn('tickets.department_id', $led)->where($review));
+            }
+
+            // The review stages (review, put it live, a stuck live test).
+            $q->orWhere(fn ($r) => $this->reviewStep($r, $user, $global, $led));
+        });
+    }
+
+    /**
+     * The review-stage part of needsAction, as SQL, mirroring TicketAccess one for one (a parity test compares the two for every
+     * kind of viewer and relation):
+     *
+     *  - canMarkDeployed: a deployment ticket in APPROVED_FOR_DEPLOY, the viewer is not its assignee (a ticket with no assignee has none),
+     *    and the viewer leads the department or is a global role. It needs no review permission;
+     *  - canReturnForRework (= the reviewer rules, TicketAccess::reviewRefusal): the viewer holds tickets.review_completion; unless
+     *    they hold tickets.review_participated they did not create it, are not its assignee and did not submit it; and they lead its
+     *    department or are global. In PENDING_REVIEW (any ticket), APPROVED_FOR_DEPLOY and PENDING_VERIFICATION (deployment tickets;
+     *    the latter only while the assignee can no longer act: TicketAccess::assigneeUnavailable).
+     *
+     * @param  array<int, int>  $led
+     */
+    private function reviewStep(Builder $q, User $user, bool $global, array $led): void
+    {
+        if (! $global && $led === []) {
+            $q->whereRaw('1 = 0');
+
+            return;
+        }
+        $uid = (int) $user->id;
+        $scope = fn ($w) => $global ? $w : $w->whereIn('tickets.department_id', $led);
+
+        // Put on the live site.
+        $q->where(fn ($d) => $scope($d->where('tickets.status', TicketAccess::APPROVED_FOR_DEPLOY)->where('tickets.requires_deployment', true)
+            ->where(fn ($n) => $n->whereNull('tickets.assigned_to_id')->orWhere('tickets.assigned_to_id', '!=', $uid))));
+
+        // Review, or send back.
+        if (! $this->access->holdsReviewPermission($user)) {
+            return;
+        }
+        $q->orWhere(function ($r) use ($user, $uid, $scope) {
+            $scope($r)->whereNotNull('tickets.assigned_to_id')
+                ->where(function ($st) {
+                    $st->where('tickets.status', TicketAccess::PENDING_REVIEW)
+                        ->orWhere(fn ($d) => $d->where('tickets.requires_deployment', true)->where(fn ($x) => $x
+                            ->where('tickets.status', TicketAccess::APPROVED_FOR_DEPLOY)
+                            ->orWhere(fn ($v) => $v->where('tickets.status', TicketAccess::PENDING_VERIFICATION)->whereRaw($this->assigneeUnavailableSql()))));
+                });
+            if (! $this->access->holdsParticipationPermission($user)) {
+                $r->where(fn ($w) => $w->whereNull('tickets.created_by_id')->orWhere('tickets.created_by_id', '!=', $uid))
+                    ->where('tickets.assigned_to_id', '!=', $uid)
+                    ->where(fn ($w) => $w->whereNull('tickets.submitted_by_id')->orWhere('tickets.submitted_by_id', '!=', $uid));
             }
         });
+    }
+
+    /**
+     * TicketAccess::assigneeUnavailable as SQL: the assignee is gone (missing or soft-deleted), deactivated, or a volunteer
+     * TaskWorkflowService::canAssignTaskToUser blocks (inactive / on leave / withdrawn).
+     */
+    private function assigneeUnavailableSql(): string
+    {
+        $blocked = "'".implode("','", [VolunteerProfile::STATUS_INACTIVE, VolunteerProfile::STATUS_ON_LEAVE, VolunteerProfile::STATUS_WITHDRAWN])."'";
+
+        return "(NOT EXISTS (SELECT 1 FROM users AS au WHERE au.id = tickets.assigned_to_id AND au.is_active = 1 AND au.deleted_at IS NULL)"
+            ." OR EXISTS (SELECT 1 FROM volunteer_profiles AS vp WHERE vp.user_id = tickets.assigned_to_id AND vp.status IN ({$blocked})))";
+    }
+
+    /**
+     * Does THIS viewer have a workflow step to take on this ticket now? The per-row twin of needsAction (the same set, asked of one
+     * ticket): the list marks its rows with it so a row and the «تحتاج إجراء» tab can never disagree.
+     */
+    public function needsMyAction(User $user, Ticket $t): bool
+    {
+        if ($this->access->isTicketAssignee($user, $t) && in_array($t->status, ['ASSIGNED', 'IN_PROGRESS'], true)) {
+            return true;
+        }
+        if ($this->access->canVerifyLive($user, $t)) {
+            return true;
+        }
+        if (in_array($t->status, ['PENDING_APPROVAL', 'REJECTED_BY_ASSIGNEE'], true)) {
+            return $this->access->canManage($user, (int) $t->department_id);
+        }
+        if (in_array($t->status, TicketAccess::REVIEW_STAGES, true)) {
+            return $this->access->canMarkDeployed($user, $t) || $this->access->canReturnForRework($user, $t);
+        }
+
+        return false;
+    }
+
+    /**
+     * Who must act next on a ticket, for the staff view of a row (never given to a submitter, whose row is the folded whitelist).
+     * `actor` is one of: approver (the department leader decides), assignee (accepts, works), reviewer (final approval), deployer
+     * (puts it on the live site), verifier (the assignee tests it live). `name` is the assignee's name when the actor is the assignee.
+     *
+     * @return array{actor: string, label: string, name: ?string}|null null once the ticket is finished
+     */
+    public function awaiting(Ticket $t): ?array
+    {
+        $assignee = $t->relationLoaded('assignee') ? $t->assignee?->name : null;
+
+        return match ($t->status) {
+            'PENDING_APPROVAL' => ['actor' => 'approver', 'label' => 'بانتظار اعتماد مدير الإدارة', 'name' => null],
+            'ASSIGNED' => ['actor' => 'assignee', 'label' => 'بانتظار قبول المكلّف', 'name' => $assignee],
+            'IN_PROGRESS' => ['actor' => 'assignee', 'label' => 'قيد التنفيذ لدى المكلّف', 'name' => $assignee],
+            'PENDING_REVIEW' => ['actor' => 'reviewer', 'label' => 'بانتظار مراجعة الإنجاز', 'name' => null],
+            'APPROVED_FOR_DEPLOY' => ['actor' => 'deployer', 'label' => 'بانتظار النشر على الموقع الحي', 'name' => null],
+            'PENDING_VERIFICATION' => ['actor' => 'verifier', 'label' => 'بانتظار اختبار المكلّف على الموقع الحي', 'name' => $assignee],
+            'REJECTED_BY_ASSIGNEE' => ['actor' => 'approver', 'label' => 'اعتذر المكلّف — بانتظار إعادة التوجيه', 'name' => null],
+            default => null,
+        };
     }
 
     /** Apply the requested ordering; always ends with a stable tiebreak on id. */

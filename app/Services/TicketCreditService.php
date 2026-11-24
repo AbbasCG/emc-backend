@@ -28,8 +28,8 @@ use App\Support\TicketValidationMessages;
  * correction is validated by TicketWorkEstimate and logged (ESTIMATE_UPDATED). A legacy ticket with no size/points
  * cannot be approved until the request supplies them either.
  *
- * ORDER OF CHECKS (so an unauthorised caller can never store or probe the request): view/404, self-review and
- * submitter 403, manager 403, already credited 409, status 409, HR gate 403, then validation 422 (estimate fields, note
+ * ORDER OF CHECKS (so an unauthorised caller can never store or probe the request): view/404, review permission 403,
+ * participation permission 403 (created / assigned / submitted it), manager 403, already credited 409, status 409, HR gate 403, then validation 422 (estimate fields, note
  * and the actual duration, all in ONE 422). The 409s come before the HR gate so a reviewer with a stale screen on an
  * already credited / no longer pending ticket is told that, not that HR is needed. Nothing is persisted by a refused
  * approval.
@@ -38,7 +38,8 @@ use App\Support\TicketValidationMessages;
  * and TicketDeploymentService runs their cycle. Its last step, the assignee's live verification, credits through
  * creditNow() below, so there is still ONE implementation of what a credit is and of how it stays single.
  *
- * WHO: a leader of the ticket's department or a global role (TicketAccess::canManage) who is NOT the assignee;
+ * WHO: a leader of the ticket's department or a global role (TicketAccess::canManage) who holds tickets.review_completion, and
+ * also tickets.review_participated when they created the ticket, are its assignee or submitted the current round (TicketAccess::reviewRefusal);
  * work above «بسيطة» also needs an HR approver (TicketAccess::HR_APPROVAL_ROLES), mirroring regular tasks
  * (simple: the manager's evaluation credits; above simple: HR's final approval credits). The HR gate is judged
  * on the LARGER of the stored and the final scope, so a leader cannot shrink a medium ticket to «بسيطة» in the
@@ -85,8 +86,6 @@ class TicketCreditService
     /** The 422 for a ticket that reaches its approval with no size/points (legacy); the assignment path keeps its own wording. */
     public const MISSING_ESTIMATE_MESSAGE = 'حدّد حجم المهمة ونقاطها قبل اعتماد الإنجاز';
 
-    public const SUBMITTER_MESSAGE = 'لا يمكنك مراجعة عمل أرسلتَه أنت للمراجعة؛ يلزم مراجع آخر.';
-
     /** volunteer_point_awards.reason is VARCHAR(255). */
     private const LEDGER_REASON_MAX = 255;
 
@@ -122,28 +121,34 @@ class TicketCreditService
     }
 
     /**
-     * Re-read the ticket under the row lock and apply the reviewer gates every review endpoint shares: it must be visible
-     * (404), the actor must not be its assignee or the submitter of the current round (403 SELF_REVIEW, judged BEFORE the
-     * generic refusal so an ordinary member is told plainly that nobody reviews their own work) and must be allowed to
-     * manage its department (403). MUST run inside a transaction.
+     * Re-read the ticket under the row lock and apply the reviewer gates every review endpoint shares (TicketAccess::requireReviewer):
+     * it must be visible (404), the actor must hold «مراجعة واعتماد إنجاز التذاكر» (403 REVIEW_PERMISSION_REQUIRED), must also hold
+     * «اعتماد التذاكر التي أشارك فيها» when they created it, are its assignee or submitted the current round (403
+     * PARTICIPATION_PERMISSION_REQUIRED), and must lead the ticket's department or be a global role (403). MUST run inside a transaction.
      */
-    public function lockForReview(int $ticketId, User $actor, string $selfReviewMessage = 'لا يمكنك اعتماد إنجاز مهمة أنت المكلف بها؛ يلزم مراجع آخر.', string $managerMessage = 'الاعتماد النهائي لإنجاز التذكرة متاح فقط لقائد الإدارة المعنية.'): Ticket
+    public function lockForReview(int $ticketId, User $actor, string $managerMessage = 'الاعتماد النهائي لإنجاز التذكرة متاح فقط لقائد الإدارة المعنية.'): Ticket
     {
         $ticket = Ticket::lockForUpdate()->find($ticketId);
         if (! $ticket || ! $this->access->canView($actor, $ticket)) {
             throw new TicketActionException('التذكرة غير موجودة أو لا تملك صلاحية عليها.', 404);
         }
-        if ($ticket->assigned_to_id !== null && (int) $ticket->assigned_to_id === (int) $actor->id) {
-            throw new TicketActionException($selfReviewMessage, 403, [], self::CODE_SELF_REVIEW);
-        }
-        if ($ticket->submitted_by_id !== null && (int) $ticket->submitted_by_id === (int) $actor->id) {
-            throw new TicketActionException(self::SUBMITTER_MESSAGE, 403, [], self::CODE_SELF_REVIEW);
-        }
-        if (! $this->access->canManage($actor, (int) $ticket->department_id)) {
-            throw new TicketActionException($managerMessage, 403);
-        }
+        $this->access->requireReviewer($actor, $ticket, $managerMessage);
 
         return $ticket;
+    }
+
+    /**
+     * The structured facts stored on every review row (ticket_activity_logs.metadata): how the reviewer is tied to the ticket
+     * (a list of creator / assignee / submitter, empty when they are none of them) and the review round. Internal: only people who may
+     * read internal rows ever receive it (TicketAccess::redactInternal).
+     *
+     * @return array{reviewer_relation: array<int, string>, participated: bool, review_round: int}
+     */
+    public function reviewMetadata(Ticket $ticket, User $reviewer): array
+    {
+        $relation = $this->access->reviewerRelation($reviewer, $ticket);
+
+        return ['reviewer_relation' => $relation, 'participated' => $relation !== [], 'review_round' => (int) $ticket->review_round];
     }
 
     /** The 409 for a ticket that has already been credited (the primary guard of every credit path). */
@@ -263,11 +268,12 @@ class TicketCreditService
                     if ($estimateChanged) {
                         TicketWorkEstimate::log($ticket, $actor, $estimateBefore, TicketWorkEstimate::snapshot($ticket));
                     }
-                    $this->log($ticket, $actor, 'APPROVED_COMPLETION', TicketAccess::PENDING_REVIEW, 'RESOLVED', 'تم الاعتماد النهائي لإنجاز التذكرة وإغلاقها');
+                    $this->log($ticket, $actor, 'APPROVED_COMPLETION', TicketAccess::PENDING_REVIEW, 'RESOLVED', 'تم الاعتماد النهائي لإنجاز التذكرة وإغلاقها', $this->reviewMetadata($ticket, $actor));
 
                     return $note !== '' ? ' | ملاحظة الاعتماد: '.$note : '';
                 },
-                true,
+                // The assignee is told, unless they are the one approving (a reviewer holding the participation permission).
+                (int) $actor->id !== (int) $assignee->id,
             );
 
             return $ticket;
@@ -367,8 +373,12 @@ class TicketCreditService
         }
     }
 
-    /** One activity row by the performer, with a short Arabic detail. */
-    public function log(Ticket $ticket, User $by, string $action, ?string $from, ?string $to, string $details): void
+    /**
+     * One activity row by the performer, with a short Arabic detail.
+     *
+     * @param  ?array<string, mixed>  $metadata  structured facts (see reviewMetadata); never shown to anyone who may not read internal rows
+     */
+    public function log(Ticket $ticket, User $by, string $action, ?string $from, ?string $to, string $details, ?array $metadata = null): void
     {
         TicketActivityLog::create([
             'ticket_id' => $ticket->id,
@@ -378,9 +388,11 @@ class TicketCreditService
             'performed_by' => $by->id,
             'performed_by_name' => Str::limit((string) $by->name, 150, ''),
             'details' => $details,
+            'metadata' => $metadata,
             'logged_at' => now(),
         ]);
     }
+
     /**
      * The actual duration to credit: it must be ENTERED in this request. A value stored on the ticket (from anywhere)
      * never satisfies it, and neither does the estimate or 0.

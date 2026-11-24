@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Ticket;
 use App\Models\User;
+use App\Support\WorkBoardColumns;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -38,7 +39,7 @@ class TicketMyWork
     private const DESCRIPTION_READ = 600;
 
     /** The date a closed outcome is windowed AND ordered by: resolution time for RESOLVED, else the last update. */
-    private const CLOSED_DATE_SQL = 'COALESCE(CASE WHEN tickets.status = ? THEN tickets.resolved_at END, tickets.updated_at)';
+    public const CLOSED_DATE_SQL = 'COALESCE(CASE WHEN tickets.status = ? THEN tickets.resolved_at END, tickets.updated_at)';
 
     private int $openLimit = self::OPEN_LIMIT;
 
@@ -131,6 +132,9 @@ class TicketMyWork
             'title' => $t->title,
             'description' => Str::limit(trim((string) preg_replace('/\s+/u', ' ', strip_tags((string) $t->description))), 200),
             'status' => $t->status,
+            // The board column of this ticket (WorkBoardColumns): the global operations board uses the same map, so a
+            // ticket sits in the SAME column on both boards.
+            'column' => WorkBoardColumns::forTicket($t->status),
             'priority' => $t->priority,
             'department' => $t->department ? ['id' => $t->department->id, 'name' => $t->department->name_ar ?: $t->department->name] : null,
             'unit' => $t->unit ? ['id' => $t->unit->id, 'name' => $t->unit->name_ar] : null,

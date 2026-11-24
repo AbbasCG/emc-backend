@@ -8,14 +8,30 @@ use App\Models\Department;
 use App\Models\Task;
 use App\Services\DepartmentAccessService;
 use App\Services\DepartmentRosterService;
+use App\Services\OperationsWorkBoard;
+use App\Support\WorkBoardColumns;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 /**
  * لوحة التشغيل المرئية للجميع / الأجايل العام والخاص
  */
 class OperationsBoardController extends Controller
 {
+    /**
+     * The roles that may read the global work board (GET /operations/work-board): the role list of the shared /operations group
+     * (routes/api.php) PLUS the four roles the frontend lets onto /dashboard/operations/* (utils/dashboardAccess.ts) that the
+     * group never listed, so they could open the page and then got a 403: department_member, strategy_planning_manager,
+     * digital_ambassadors_manager, advisors_manager. The payload is the public-safe projection (see OperationsWorkBoard).
+     */
+    public const WORK_BOARD_ROLES = [
+        'admin', 'super_admin', 'tech_admin', 'executive_admin', 'programs_manager', 'instructor', 'hr_manager', 'finance_manager',
+        'marketing', 'marketing_manager', 'quality', 'quality_manager', 'support_agent', 'operations_manager', 'partnerships_manager',
+        'community_manager', 'volunteer', 'department_manager', 'section_lead', 'ai_manager',
+        'department_member', 'strategy_planning_manager', 'digital_ambassadors_manager', 'advisors_manager',
+    ];
+
     public function __construct(private readonly DepartmentAccessService $departmentAccess)
     {
     }
@@ -71,6 +87,38 @@ class OperationsBoardController extends Controller
         }
 
         return response()->json(['success' => true, 'data' => $board]);
+    }
+
+    /**
+     * GET /operations/work-board: the GLOBAL board (tasks + assigned tickets of every assignee, same columns as «مهامي ومسؤولياتي»),
+     * in the public-safe projection of OperationsWorkBoard. It does not replace GET /operations/board, which the task-management
+     * screens still read unchanged.
+     */
+    public function workBoard(Request $request, OperationsWorkBoard $board): JsonResponse
+    {
+        $f = $request->validate([
+            'scope' => ['sometimes', 'nullable', Rule::in(['all', 'mine'])],
+            'kind' => ['sometimes', 'nullable', Rule::in(['all', 'tasks', 'tickets'])],
+            'department_id' => ['sometimes', 'nullable', 'integer', 'min:1'],
+            'search' => ['sometimes', 'nullable', 'string', 'max:100'],
+            'per_column' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:'.OperationsWorkBoard::MAX_PER_COLUMN],
+            'column' => ['sometimes', 'nullable', Rule::in(array_keys(WorkBoardColumns::COLUMNS))],
+            'page' => ['sometimes', 'nullable', 'integer', 'min:1'],
+        ], [
+            'scope.in' => 'نطاق اللوحة غير صالح.',
+            'kind.in' => 'نوع العناصر غير صالح.',
+            'column.in' => 'العمود غير صالح.',
+        ]);
+        $f = array_filter($f, fn ($v) => $v !== null && $v !== '');
+
+        if (isset($f['page']) && empty($f['column'])) {
+            return response()->json(['success' => false, 'message' => 'الترقيم يخص عمودًا واحدًا: أرسل column مع page.', 'errors' => ['page' => ['أرسل column مع page.']]], 422);
+        }
+        if (((int) ($f['page'] ?? 1)) * ((int) ($f['per_column'] ?? OperationsWorkBoard::DEFAULT_PER_COLUMN)) > OperationsWorkBoard::MAX_DEPTH) {
+            return response()->json(['success' => false, 'message' => 'الصفحة المطلوبة بعيدة جدًا؛ ضيّق البحث أو المرشحات.', 'errors' => ['page' => ['صفحة بعيدة جدًا.']]], 422);
+        }
+
+        return response()->json(['success' => true] + $board->build($request->user(), $f));
     }
 
     public function departmentMembers(Request $request, Department $department): JsonResponse

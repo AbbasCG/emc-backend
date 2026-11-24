@@ -15,6 +15,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
+use Tests\Concerns\GrantsTicketReviewPermissions;
 use Tests\TestCase;
 
 /**
@@ -27,6 +28,7 @@ use Tests\TestCase;
 class TicketActualDurationTest extends TestCase
 {
     use RefreshDatabase;
+    use GrantsTicketReviewPermissions;
 
     private const REQUIRED = 'أدخل المدة الفعلية للإنجاز (بالساعات والدقائق) قبل الاعتماد النهائي.';
 
@@ -50,13 +52,14 @@ class TicketActualDurationTest extends TestCase
         $this->leader = $this->user('programs_manager');
         $this->dept->update(['leader_id' => $this->leader->id]);
         $this->assignee = $this->deptMember();
+        $this->grantTicketReview($this->leader);
         $this->member = $this->deptMember();
         $this->reporter = $this->user('student');
     }
 
     private function user(string $role = 'student'): User
     {
-        return User::factory()->create(['role' => $role, 'is_active' => true]);
+        return $this->grantReviewToReviewerRole(User::factory()->create(['role' => $role, 'is_active' => true]));
     }
 
     private function deptMember(): User
@@ -238,8 +241,9 @@ class TicketActualDurationTest extends TestCase
         // A valid AND an invalid value: the answer is the authorization refusal either way (never a 422 probe).
         foreach ([75, 0, null] as $value) {
             $body = ['actual_minutes' => $value];
-            $this->approve($t, $this->assignee, $body)->assertForbidden()->assertJsonPath('code', 'SELF_REVIEW');
-            $this->approve($submitted, $this->member, $body)->assertForbidden()->assertJsonPath('code', 'SELF_REVIEW');
+            // Deliberately changed: the assignee / submitter used to get SELF_REVIEW; now an ordinary member simply lacks the review permission.
+            $this->approve($t, $this->assignee, $body)->assertForbidden()->assertJsonPath('code', 'REVIEW_PERMISSION_REQUIRED');
+            $this->approve($submitted, $this->member, $body)->assertForbidden()->assertJsonPath('code', 'REVIEW_PERMISSION_REQUIRED');
             $this->approve($t, $this->deptMember(), $body)->assertForbidden();
             $this->approve($t, $this->reporter, $body)->assertForbidden();
             $this->approve($t, $otherLeader, $body)->assertNotFound();

@@ -167,8 +167,9 @@ class TicketActions
 
     /**
      * Send submitted work back to its assignee (PENDING_REVIEW -> IN_PROGRESS) with a reason. Nothing is credited
-     * and nothing already credited is touched. Same actor rule as the final approval: a leader of the department
-     * or a global role who is NOT the assignee.
+     * and nothing already credited is touched. Same actor rule as the final approval (TicketAccess::reviewRefusal): a leader of
+     * the department or a global role holding tickets.review_completion, plus tickets.review_participated when they created the
+     * ticket, are its assignee or submitted it. The manager's rescue return (assignee unavailable) is under the same rule.
      *
      * @throws TicketActionException
      */
@@ -179,16 +180,10 @@ class TicketActions
             if (! $ticket || ! $this->access->canView($actor, $ticket)) {
                 throw new TicketActionException('التذكرة غير موجودة أو لا تملك صلاحية عليها.', 404);
             }
-            // Self-review first (see TicketCreditService): the assignee or submitter gets the plain "not your own work" answer.
-            if ($ticket->assigned_to_id !== null && (int) $ticket->assigned_to_id === (int) $actor->id) {
-                throw new TicketActionException('لا يمكنك إعادة مهمة أنت المكلف بها؛ يلزم مراجع آخر.', 403, [], TicketCreditService::CODE_SELF_REVIEW);
-            }
-            if ($ticket->submitted_by_id !== null && (int) $ticket->submitted_by_id === (int) $actor->id) {
-                throw new TicketActionException(TicketCreditService::SUBMITTER_MESSAGE, 403, [], TicketCreditService::CODE_SELF_REVIEW);
-            }
-            if (! $this->access->canManage($actor, (int) $ticket->department_id)) {
-                throw new TicketActionException('إعادة التذكرة للتنفيذ متاحة فقط لقائد الإدارة المعنية.', 403);
-            }
+            // The review gate (TicketAccess::requireReviewer): review permission, participation permission when the actor created /
+            // is assigned / submitted the ticket, then department scope. The same rule as approving, so a stale or
+            // unauthorised caller cannot probe the stage.
+            $this->access->requireReviewer($actor, $ticket, 'إعادة التذكرة للتنفيذ متاحة فقط لقائد الإدارة المعنية.');
             if ($ticket->credited_at !== null) {
                 throw new TicketActionException(TicketCreditService::DUPLICATE_MESSAGE, 409, [], TicketCreditService::CODE_ALREADY_CREDITED);
             }
@@ -207,6 +202,7 @@ class TicketActions
             }
 
             $previousStatus = $ticket->status;
+            $relation = $this->access->reviewerRelation($actor, $ticket);
             // The values approved for this round (actual duration, approval, deployment) are void: the next round needs a
             // new review, approval and deployment. The old round stays in the activity log only.
             $ticket->forceFill(['status' => 'IN_PROGRESS'] + TicketDeploymentService::CLEARED_BY_REWORK)->save();
@@ -218,7 +214,10 @@ class TicketActions
                 'new_state' => 'IN_PROGRESS',
                 'performed_by' => $actor->id,
                 'performed_by_name' => Str::limit((string) $actor->name, 150, ''),
-                'details' => 'أُعيدت التذكرة للمكلف لاستكمال العمل: '.Str::limit(trim($reason), 500),
+                // Internal row (RETURNED_FOR_REWORK): the relation is stated plainly as well as stored in the metadata.
+                'details' => 'أُعيدت التذكرة للمكلف لاستكمال العمل: '.Str::limit(trim($reason), 500)
+                    .($relation !== [] ? ' | المُعيد هو '.$this->access->describeRelation($relation).' (بصلاحية اعتماد التذاكر التي يشارك فيها).' : ''),
+                'metadata' => ['reviewer_relation' => $relation, 'participated' => $relation !== [], 'review_round' => (int) $ticket->review_round],
                 'logged_at' => now(),
             ]);
 
@@ -227,14 +226,17 @@ class TicketActions
             $title = (string) $ticket->title;
             $actorId = (int) $actor->id;
             $ref = now()->format('Uu');
-            DB::afterCommit(function () use ($assigneeId, $tid, $title, $reason, $ref, $actorId) {
-                try {
-                    NotificationService::ticketReturnedForRework($assigneeId, $tid, $title, $reason, $ref, $actorId);
-                } catch (\Throwable $e) {
-                    // The return has already committed; telling the assignee is best-effort.
-                    report($e);
-                }
-            });
+            // Nobody is notified of their own action: a reviewer who is the assignee (participation permission) is not told.
+            if ($assigneeId !== $actorId) {
+                DB::afterCommit(function () use ($assigneeId, $tid, $title, $reason, $ref, $actorId) {
+                    try {
+                        NotificationService::ticketReturnedForRework($assigneeId, $tid, $title, $reason, $ref, $actorId);
+                    } catch (\Throwable $e) {
+                        // The return has already committed; telling the assignee is best-effort.
+                        report($e);
+                    }
+                });
+            }
 
             return $ticket;
         });

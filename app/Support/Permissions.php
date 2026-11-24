@@ -156,6 +156,26 @@ final class Permissions
      */
     const EXECUTIVE_COMMAND_CENTER_VIEW = 'executive.command_center.view';
 
+    /**
+     * Ticket completion review (the work queue's final approval): approve completion, approve for deployment and return
+     * for rework (TicketAccess::canReviewStage). Scope still comes from department leadership / the global roles
+     * (TicketAccess::canManage); this key is the PERMISSION half of the rule, so ticket view/assign alone never approves.
+     *
+     * Part of all(): super_admin and tech_admin keep reviewing, like every other permission. Nothing else is granted it
+     * by code or by migration; TicketReviewPermissionSeeder (opt-in) grants it to the roles that review today.
+     */
+    const TICKETS_REVIEW_COMPLETION = 'tickets.review_completion';
+
+    /**
+     * Review a ticket the reviewer PARTICIPATES in (created it, is its assignee, or submitted its completion). Needed IN
+     * ADDITION to TICKETS_REVIEW_COMPLETION for such tickets.
+     *
+     * Intentionally excluded from all(), like users.impersonate and executive.command_center.view: no role inherits it,
+     * super_admin / tech_admin included, and the Gate::before root bypass skips it. It exists only through an explicit
+     * DB grant (role editor or a per-user assignment, via the delegation endpoints) and a per-user deny removes it again.
+     */
+    const TICKETS_REVIEW_PARTICIPATED = 'tickets.review_participated';
+
     // ── Workshop Requests (granular) ─────────────────────────────────────────
     const WR_VIEW_OWN        = 'workshop_requests.view_own';
     const WR_VIEW_DEPARTMENT = 'workshop_requests.view_department';
@@ -251,6 +271,8 @@ final class Permissions
             // System
             self::VIEW_AUDIT_LOGS, self::MANAGE_SETTINGS, self::MANAGE_INTEGRATIONS,
             self::MANAGE_WEBHOOKS, self::MANAGE_API_TOKENS, self::TECH_DEPARTMENT_DASHBOARDS_VIEW,
+            // Tickets (TICKETS_REVIEW_PARTICIPATED is deliberately NOT here: explicit grant only)
+            self::TICKETS_REVIEW_COMPLETION,
             // Workshop Requests (granular)
             self::WR_VIEW_OWN, self::WR_VIEW_DEPARTMENT, self::WR_VIEW_ALL,
             self::WR_CREATE, self::WR_REVIEW, self::WR_APPROVE, self::WR_REJECT,
@@ -506,6 +528,7 @@ final class Permissions
             'system'           => [self::VIEW_AUDIT_LOGS, self::MANAGE_SETTINGS, self::MANAGE_INTEGRATIONS, self::MANAGE_WEBHOOKS, self::MANAGE_API_TOKENS],
             'tech'             => [self::TECH_DEPARTMENT_DASHBOARDS_VIEW],
             'executive'        => [self::EXECUTIVE_COMMAND_CENTER_VIEW],
+            'tickets'          => [self::TICKETS_REVIEW_COMPLETION, self::TICKETS_REVIEW_PARTICIPATED],
             // Granular module groups
             'workshop_requests'=> [self::WR_VIEW_OWN, self::WR_VIEW_DEPARTMENT, self::WR_VIEW_ALL, self::WR_CREATE, self::WR_REVIEW, self::WR_APPROVE, self::WR_REJECT, self::WR_ASSIGN, self::WR_EDIT, self::WR_DELETE, self::WR_EXPORT, self::WR_MANAGE],
             'members'          => [self::MEMBERS_VIEW, self::MEMBERS_VIEW_DEPARTMENT, self::MEMBERS_CREATE, self::MEMBERS_UPDATE, self::MEMBERS_DELETE, self::MEMBERS_RECOGNIZE, self::MEMBERS_MANAGE],
