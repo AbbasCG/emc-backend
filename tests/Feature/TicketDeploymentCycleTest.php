@@ -85,6 +85,10 @@ class TicketDeploymentCycleTest extends TestCase
     /** A deployment ticket (flag set the way only the application sets it) in the given status, estimate 2 h, simple, 30 points. */
     private function dticket(string $status = 'IN_PROGRESS', array $over = [], bool $flag = true): Ticket
     {
+        // The assignee records the actual duration at submission (not mass assignable): a ticket created already in review carries 75 minutes.
+        $actual = array_key_exists('actual_minutes', $over) ? $over['actual_minutes'] : ($status === 'PENDING_REVIEW' ? 75 : null);
+        unset($over['actual_minutes']);
+
         $t = Ticket::create(array_merge([
             'ticket_number' => 'EMC-TCK-X-'.Str::random(8), 'title' => 'تعديل صفحة الدفع', 'description' => 'وصف', 'ticket_category' => 'OLD_ISSUE', 'priority' => 'MEDIUM',
             'department_id' => $this->dept->id, 'created_by_id' => $this->reporter->id, 'created_by_name' => 'مُبلِّغ', 'status' => $status,
@@ -93,6 +97,9 @@ class TicketDeploymentCycleTest extends TestCase
         ], $over));
         if ($flag) {
             $t->forceFill(['requires_deployment' => true])->save();
+        }
+        if ($actual !== null) {
+            $t->forceFill(['actual_minutes' => $actual])->save();
         }
 
         return $t;
@@ -105,12 +112,14 @@ class TicketDeploymentCycleTest extends TestCase
         return $this->postJson("/api/v1/tickets/{$t->id}/{$endpoint}", $body);
     }
 
+    /** The assignee's one-click submission: the ACTUAL duration (75 min unless a test sends its own) is the only thing that is asked. */
     private function submit(Ticket $t, ?User $as = null, array $body = [])
     {
-        return $this->act($t, 'complete-task', $body, $as ?? $this->assignee);
+        return $this->act($t, 'complete-task', $body + ['actual_minutes' => 75], $as ?? $this->assignee);
     }
 
-    private function approveDeploy(Ticket $t, array $body = ['actual_minutes' => 75], ?User $as = null)
+    /** The one-click confirmation of the review: a stage transition only (values are the stored ones). */
+    private function approveDeploy(Ticket $t, array $body = [], ?User $as = null)
     {
         return $this->act($t, 'approve-for-deploy', $body, $as);
     }
@@ -163,7 +172,7 @@ class TicketDeploymentCycleTest extends TestCase
         $this->assertSame($before, $this->state());
 
         // 2. Approved for deployment (estimate 2 h, ACTUAL 75 min): the approved values are stored, nothing is credited.
-        $this->approveDeploy($t, ['actual_minutes' => 75, 'note' => 'جاهز للنشر'])->assertOk()
+        $this->approveDeploy($t, ['note' => 'جاهز للنشر'])->assertOk()
             ->assertJsonPath('data.status', 'APPROVED_FOR_DEPLOY')
             ->assertJsonPath('data.actual_minutes', 75)
             ->assertJsonPath('data.credit.status', 'approved')
@@ -268,7 +277,7 @@ class TicketDeploymentCycleTest extends TestCase
     {
         $t = $this->dticket();
         $this->submit($t)->assertOk();
-        $this->approveDeploy($t, ['actual_minutes' => 75])->assertOk();
+        $this->approveDeploy($t)->assertOk();
         $this->deploy($t)->assertOk();
         $before = $this->state();
 
@@ -284,8 +293,11 @@ class TicketDeploymentCycleTest extends TestCase
 
         // The next round cannot skip anything: verifying now is refused, and a new review/approval/deployment is needed.
         $this->verify($t)->assertStatus(409)->assertJsonPath('code', 'INVALID_STAGE');
-        $this->submit($t)->assertOk()->assertJsonPath('data.deployment.round', 2);
-        $this->approveDeploy($t, ['actual_minutes' => 30, 'task_points' => 40])->assertOk();
+        // The values are read-only in review, so the correction happens now (a manager, in progress) and the assignee records the new duration.
+        Sanctum::actingAs($this->leader);
+        $this->patchJson("/api/v1/tickets/{$t->id}/work-estimate", ['task_scope' => 'simple', 'task_points' => 40])->assertOk();
+        $this->submit($t, null, ['actual_minutes' => 30])->assertOk()->assertJsonPath('data.deployment.round', 2);
+        $this->approveDeploy($t)->assertOk();
         $this->verify($t)->assertStatus(409)->assertJsonPath('code', 'INVALID_STAGE');
         $this->deploy($t, ['live_url' => 'https://example.com/pay?v=2'])->assertOk();
         $this->assertSame(2, $this->notifications('ticket_live_verification_required', $this->assignee), 'one notification per round');
@@ -333,7 +345,7 @@ class TicketDeploymentCycleTest extends TestCase
     public function test_every_endpoint_refuses_the_wrong_stage(): void
     {
         $matrix = [
-            ['approve-for-deploy', ['IN_PROGRESS', 'APPROVED_FOR_DEPLOY', 'PENDING_VERIFICATION', 'ASSIGNED'], ['actual_minutes' => 75], null],
+            ['approve-for-deploy', ['IN_PROGRESS', 'APPROVED_FOR_DEPLOY', 'PENDING_VERIFICATION', 'ASSIGNED'], [], null],
             ['mark-deployed', ['IN_PROGRESS', 'PENDING_REVIEW', 'PENDING_VERIFICATION'], ['live_url' => 'https://example.com'], $this->admin],
             ['verify-resolved', ['IN_PROGRESS', 'PENDING_REVIEW', 'APPROVED_FOR_DEPLOY'], ['note' => 'تحققت'], $this->assignee],
             ['verify-failed', ['IN_PROGRESS', 'PENDING_REVIEW', 'APPROVED_FOR_DEPLOY'], ['description' => 'مشكلة ظاهرة'], $this->assignee],
@@ -359,9 +371,9 @@ class TicketDeploymentCycleTest extends TestCase
         $t = $this->dticket('PENDING_REVIEW');
         $state = $this->state();
 
-        $this->act($t, 'approve-completion', ['actual_minutes' => 75])->assertStatus(409)->assertJsonPath('code', 'DEPLOYMENT_REQUIRED')
+        $this->act($t, 'approve-completion', [])->assertStatus(409)->assertJsonPath('code', 'DEPLOYMENT_REQUIRED')
             ->assertJsonPath('message', 'هذه التذكرة تتطلب نشرًا على الموقع الحي؛ استخدم اعتماد للنشر.');
-        $this->act($this->dticket('APPROVED_FOR_DEPLOY'), 'approve-completion', ['actual_minutes' => 75], $this->admin)->assertStatus(409)->assertJsonPath('code', 'DEPLOYMENT_REQUIRED');
+        $this->act($this->dticket('APPROVED_FOR_DEPLOY'), 'approve-completion', [], $this->admin)->assertStatus(409)->assertJsonPath('code', 'DEPLOYMENT_REQUIRED');
 
         // complete-task never resolves it, whatever it is asked for.
         $working = $this->dticket();
@@ -409,7 +421,7 @@ class TicketDeploymentCycleTest extends TestCase
         $medium = $this->dticket('PENDING_REVIEW', ['task_scope' => 'medium', 'task_points' => 100]);
         $onBehalf = $this->dticket('IN_PROGRESS');
         $x = $this->user('admin');
-        $this->act($onBehalf, 'complete-task', [], $x)->assertOk(); // a global role submits for the assignee
+        $this->act($onBehalf, 'complete-task', ['actual_minutes' => 75], $x)->assertOk(); // a global role submits for the assignee
         $selfLeader = $this->dticket('PENDING_REVIEW', ['assigned_to_id' => $this->leader->id]);
         $otherLeader = $this->user('programs_manager');
         Department::create(['name' => 'O'.Str::random(4), 'name_ar' => 'أخرى', 'slug' => 'o-'.Str::random(6), 'status' => 'active', 'is_active' => true, 'leader_id' => $otherLeader->id]);
@@ -428,13 +440,13 @@ class TicketDeploymentCycleTest extends TestCase
         }
         $this->assertSame($state, $this->state());
         foreach ([$t, $medium, $onBehalf, $selfLeader] as $x2) {
-            $this->assertNull($x2->fresh()->actual_minutes);
+            $this->assertSame(75, $x2->fresh()->actual_minutes, 'the recorded duration is untouched');
             $this->assertNull($x2->fresh()->review_approved_at);
         }
 
         // An HR approver may approve the medium ticket; another global role may approve the on-behalf one.
-        $this->approveDeploy($medium, ['actual_minutes' => 120], $this->admin)->assertOk()->assertJsonPath('data.credit.points', 100);
-        $this->approveDeploy($onBehalf, ['actual_minutes' => 60], $this->user('super_admin'))->assertOk();
+        $this->approveDeploy($medium, [], $this->admin)->assertOk()->assertJsonPath('data.credit.points', 100);
+        $this->approveDeploy($onBehalf, [], $this->user('super_admin'))->assertOk();
     }
 
     public function test_mark_deployed_actor_matrix(): void
@@ -495,7 +507,7 @@ class TicketDeploymentCycleTest extends TestCase
         $this->assertSame('PENDING_REVIEW', $t->fresh()->status);
 
         // ...and the classic approval still works for it, crediting the ACTUAL time.
-        $this->act($t, 'approve-completion', ['actual_minutes' => 90])->assertOk()->assertJsonPath('data.status', 'RESOLVED')->assertJsonPath('data.credit.hours', 1.5);
+        $this->act($t, 'approve-completion', [])->assertOk()->assertJsonPath('data.status', 'RESOLVED')->assertJsonPath('data.credit.hours', 1.25);
     }
 
     // ═══ Validation ═════════════════════════════════════════════════════════
@@ -505,22 +517,21 @@ class TicketDeploymentCycleTest extends TestCase
         $t = $this->dticket('PENDING_REVIEW');
         $state = $this->state();
 
-        // approve-for-deploy: the duration, the points, the note.
-        // CHANGED: in this flow the final step is the live verification, so the requirement reads «قبل الاعتماد للنشر».
-        $deployRequired = 'أدخل المدة الفعلية للإنجاز (بالساعات والدقائق) قبل الاعتماد للنشر.';
-        $this->approveDeploy($t, [])->assertStatus(422)->assertJsonPath('code', 'ACTUAL_DURATION_REQUIRED')
-            ->assertJsonPath('message', $deployRequired)->assertJsonPath('errors.actual_minutes.0', $deployRequired);
-        $this->approveDeploy($t, ['actual_minutes' => null, 'task_points' => 51])->assertStatus(422)->assertJsonPath('errors.actual_minutes.0', $deployRequired);
-        // The classic approval keeps its own wording.
-        $classic = $this->dticket('PENDING_REVIEW', [], false);
-        $this->act($classic, 'approve-completion', [])->assertStatus(422)->assertJsonPath('errors.actual_minutes.0', 'أدخل المدة الفعلية للإنجاز (بالساعات والدقائق) قبل الاعتماد النهائي.');
-        $this->approveDeploy($t, ['actual_minutes' => 0])->assertStatus(422)->assertJsonPath('code', 'ACTUAL_DURATION_INVALID');
-        $this->approveDeploy($t, ['actual_minutes' => 60001])->assertStatus(422)->assertJsonPath('code', 'ACTUAL_DURATION_INVALID');
-        $this->approveDeploy($t, ['actual_minutes' => 60, 'task_points' => 51])->assertStatus(422)->assertJsonStructure(['errors' => ['task_points']]);
-        $this->approveDeploy($t, ['actual_minutes' => 60, 'note' => str_repeat('x', 1001)])->assertStatus(422)->assertJsonStructure(['errors' => ['note']]);
+        // approve-for-deploy: a stage transition only. Values in the body are refused, a bad note is a 422, incomplete stored data is a 422.
+        // CHANGED (was: the duration/points were validated inside the approval): the assignee records the duration at submission.
+        $this->approveDeploy($t, ['actual_minutes' => 60])->assertStatus(422)->assertJsonPath('code', 'REVIEW_VALUES_LOCKED');
+        $this->approveDeploy($t, ['actual_minutes' => null, 'task_points' => 51])->assertStatus(422)->assertJsonPath('code', 'REVIEW_VALUES_LOCKED');
+        $this->approveDeploy($t, ['task_points' => 51])->assertStatus(422)->assertJsonStructure(['errors' => ['task_points']]);
+        $this->approveDeploy($t, ['note' => str_repeat('x', 1001)])->assertStatus(422)->assertJsonStructure(['errors' => ['note']]);
+        $incomplete = $this->dticket('PENDING_REVIEW', ['actual_minutes' => null]);
+        $this->approveDeploy($incomplete)->assertStatus(422)->assertJsonPath('code', 'REVIEW_DATA_INCOMPLETE')->assertJsonStructure(['errors' => ['actual_minutes']]);
+        $this->assertSame('PENDING_REVIEW', $incomplete->fresh()->status);
+        // The classic approval is the same transition, with its own kind check.
+        $classic = $this->dticket('PENDING_REVIEW', ['actual_minutes' => null], false);
+        $this->act($classic, 'approve-completion', [])->assertStatus(422)->assertJsonPath('code', 'REVIEW_DATA_INCOMPLETE');
         $this->assertSame($state, $this->state());
         $this->assertSame('PENDING_REVIEW', $t->fresh()->status);
-        $this->assertNull($t->fresh()->actual_minutes);
+        $this->assertSame(75, $t->fresh()->actual_minutes);
 
         // mark-deployed: the link.
         $a = $this->dticket('APPROVED_FOR_DEPLOY');
@@ -587,9 +598,9 @@ class TicketDeploymentCycleTest extends TestCase
         $this->patchJson("/api/v1/tickets/{$assigned->id}/work-estimate", $bad)->assertStatus(422);
         // approve-completion and approve-for-deploy
         $classic = $this->dticket('PENDING_REVIEW', [], false);
-        $this->act($classic, 'approve-completion', ['actual_minutes' => 60] + $bad)->assertStatus(422)->assertJsonStructure(['errors' => ['task_points']]);
+        $this->act($classic, 'approve-completion', ['actual_minutes' => 60] + $bad)->assertStatus(422)->assertJsonPath('code', 'REVIEW_VALUES_LOCKED')->assertJsonStructure(['errors' => ['task_points']]);
         $deploy = $this->dticket('PENDING_REVIEW');
-        $this->approveDeploy($deploy, ['actual_minutes' => 60] + $bad)->assertStatus(422)->assertJsonStructure(['errors' => ['task_points']]);
+        $this->approveDeploy($deploy, ['actual_minutes' => 60] + $bad)->assertStatus(422)->assertJsonPath('code', 'REVIEW_VALUES_LOCKED')->assertJsonStructure(['errors' => ['task_points']]);
 
         $this->assertSame(30, $assigned->fresh()->task_points);
         $this->assertSame(0, $this->awards()->count());
@@ -628,7 +639,7 @@ class TicketDeploymentCycleTest extends TestCase
             $t = $this->dticket($status, [], false);
             Sanctum::actingAs($this->leader);
             $this->patchJson("/api/v1/tickets/{$t->id}/work-estimate", ['task_scope' => 'simple', 'task_points' => 30, 'requires_deployment' => true])
-                ->assertStatus(409)->assertJsonPath('code', 'ESTIMATE_FROZEN');
+                ->assertStatus(409)->assertJsonPath('code', 'REVIEW_VALUES_LOCKED');
             $this->assertFalse((bool) $t->fresh()->requires_deployment);
             $this->assertFalse($this->getJson("/api/v1/tickets/{$t->id}")->json('data.capabilities.can_edit_estimate'));
             // ...and the ticket cannot be reassigned in these stages either.
@@ -692,9 +703,11 @@ class TicketDeploymentCycleTest extends TestCase
                 ->assertJsonPath('data.workflow.stage', 'pending_verification')
                 ->assertJsonPath('data.actual_minutes', 75)
                 ->assertJsonPath('data.credit.status', 'approved');
-            foreach (['review_approved_by_id', 'deployed_by_id', 'live_url', 'verified_by_id', 'review_round', 'submitted_by_id'] as $raw) {
+            foreach (['review_approved_by_id', 'deployed_by_id', 'live_url', 'verified_by_id', 'submitted_by_id'] as $raw) {
                 $this->assertArrayNotHasKey($raw, $show->json('data'), "raw {$raw} never leaves");
             }
+            // CHANGED: the review round is deliberately exposed to internal viewers (stale-screen protection of confirm-review).
+            $show->assertJsonPath('data.review_round', 1);
             $row = collect($this->getJson('/api/v1/tickets')->json('data.data'))->firstWhere('id', $t->id);
             $this->assertTrue($row['requires_deployment']);
             $this->assertSame('pending_verification', $row['workflow']['stage']);
@@ -1004,7 +1017,7 @@ class TicketDeploymentCycleTest extends TestCase
 
         $this->approveDeploy($t)->assertStatus(409)->assertJsonPath('code', 'ASSIGNEE_UNAVAILABLE');
         $this->assertSame('PENDING_REVIEW', $t->fresh()->status);
-        $this->assertNull($t->fresh()->actual_minutes);
+        $this->assertSame(75, $t->fresh()->actual_minutes);
         Sanctum::actingAs($this->leader);
         $this->assertFalse($this->getJson("/api/v1/tickets/{$t->id}")->json('data.capabilities.approve_for_deploy'));
         // It can still be returned for rework and reassigned.
@@ -1065,7 +1078,7 @@ class TicketDeploymentCycleTest extends TestCase
         // An ordinary ticket still shows its resolution note to the reporter.
         $plain = $this->dticket('IN_PROGRESS', [], false);
         $this->submit($plain, null, ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'تم إصلاح الإعدادات'])->assertOk();
-        $this->act($plain, 'approve-completion', ['actual_minutes' => 60])->assertOk();
+        $this->act($plain, 'approve-completion', [])->assertOk();
         Sanctum::actingAs($this->reporter);
         $this->getJson("/api/v1/tickets/{$plain->id}")->assertJsonPath('data.resolution_note', 'تم إصلاح الإعدادات');
     }

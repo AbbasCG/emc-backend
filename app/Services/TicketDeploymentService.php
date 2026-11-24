@@ -54,55 +54,64 @@ class TicketDeploymentService
     // ── 1. approve for deployment (reviewer) ─────────────────────────────────
 
     /**
-     * Same gates and order as approve-completion: 404 view, 403 REVIEW_PERMISSION_REQUIRED / PARTICIPATION_PERMISSION_REQUIRED, 403 manager, 409
-     * (not a deployment ticket / already credited / wrong stage), 403 HR gate, then ONE 422 for the estimate fields, the
-     * note and the REQUIRED actual duration. Stores the approved values and credits NOTHING.
+     * The one-click «تأكيد المراجعة»: moves a PENDING_REVIEW ticket to the NEXT stage of its path from the STORED values only
+     * (size, points, approximate and actual duration; none can be sent). A classic ticket is closed and credited (once); a ticket
+     * that requires a live deployment goes to APPROVED_FOR_DEPLOY and credits NOTHING (deploy + live verification still follow).
+     * Gates, in order: 404 view, 403 review/participation permission, 403 manager, 409 credited / stage, 403 HR, 422 values locked,
+     * 409 assignee, 422 note, 422 REVIEW_DATA_INCOMPLETE (TicketCreditService::reviewGate).
      *
-     * @param  array<string, mixed>  $estimateInput
+     * @param  array<string, mixed>  $sentValues  locked keys the request carried
      */
-    public function approveForDeploy(int $ticketId, User $actor, array $estimateInput = [], mixed $note = null, mixed $actualMinutes = null): Ticket
+    public function confirmReview(int $ticketId, User $actor, mixed $note = null, array $sentValues = [], mixed $reviewRound = null): Ticket
     {
-        return DB::transaction(function () use ($ticketId, $actor, $estimateInput, $note, $actualMinutes) {
+        return $this->credits->guardDuplicate($ticketId, fn () => DB::transaction(function () use ($ticketId, $actor, $note, $sentValues, $reviewRound) {
+            $ticket = $this->credits->lockForReview($ticketId, $actor, 'تأكيد مراجعة التذكرة متاح فقط لقائد الإدارة المعنية.');
+            $note = $this->credits->reviewGate($ticket, $actor, null, $sentValues, $note, $reviewRound);
+
+            return $this->access->isDeploymentTicket($ticket)
+                ? $this->moveToDeploy($ticket, $actor, $note)
+                : $this->credits->creditApproved($ticket, $actor, $note);
+        }));
+    }
+
+    /**
+     * Legacy endpoint (approve-for-deploy): the same confirmation, restricted to deployment tickets and, like confirm-review,
+     * stage-transition-only (a body carrying values is refused).
+     *
+     * @param  array<string, mixed>  $sentValues
+     */
+    public function approveForDeploy(int $ticketId, User $actor, mixed $note = null, array $sentValues = [], mixed $reviewRound = null): Ticket
+    {
+        return DB::transaction(function () use ($ticketId, $actor, $note, $sentValues, $reviewRound) {
             $ticket = $this->credits->lockForReview($ticketId, $actor, 'اعتماد التذكرة للنشر متاح فقط لقائد الإدارة المعنية.');
-            $this->requireDeploymentTicket($ticket);
-            $this->credits->refuseIfCredited($ticket);
-            $this->requireStatus($ticket, TicketAccess::PENDING_REVIEW);
-            $this->credits->guardHr($ticket, $actor, $estimateInput);
+            $note = $this->credits->reviewGate($ticket, $actor, 'deploy', $sentValues, $note, $reviewRound);
 
-            // The change will have to be verified on the live site by the assignee: nobody who cannot act can be left holding it.
-            if ($this->access->assigneeUnavailable($ticket)) {
-                throw new TicketActionException('لا يمكن اعتماد التذكرة للنشر لأن المكلف غير متاح (غير فعّال أو محجوب أو محذوف)؛ أعدها للتنفيذ ثم أعد إسنادها.', 409, [], TicketCreditService::CODE_ASSIGNEE_UNAVAILABLE);
-            }
-
-            [$work, $minutes, $note] = $this->credits->validateApproval($ticket, $estimateInput, $note, $actualMinutes, TicketCreditService::ACTUAL_REQUIRED_FOR_DEPLOY_MESSAGE);
-
-            $before = TicketWorkEstimate::snapshot($ticket);
-            $changed = TicketWorkEstimate::differs($ticket, $work);
-            $now = now();
-            $relation = $this->access->reviewerRelation($actor, $ticket);
-
-            $ticket->fill($work);
-            $ticket->forceFill([
-                'status' => TicketAccess::APPROVED_FOR_DEPLOY,
-                'actual_minutes' => $minutes,
-                'review_approved_by_id' => $actor->id,
-                'review_approved_at' => $now,
-            ])->save();
-
-            if ($changed) {
-                TicketWorkEstimate::log($ticket, $actor, $before, TicketWorkEstimate::snapshot($ticket));
-            }
-            $this->credits->log(
-                $ticket, $actor, 'APPROVED_FOR_DEPLOY', TicketAccess::PENDING_REVIEW, TicketAccess::APPROVED_FOR_DEPLOY,
-                'اعتُمد العمل للنشر على الموقع الحي: '.(int) $work['task_points'].' نقطة، المدة الفعلية '.TicketCreditService::describeMinutes($minutes)
-                    .($note !== '' ? ' | ملاحظة الاعتماد: '.$note : '').' (لم يُضَف أي رصيد بعد).'
-                    // Internal row: says plainly when the approver is the creator / assignee / submitter (they hold the participation permission).
-                    .($relation !== [] ? ' | المعتمِد هو '.$this->access->describeRelation($relation).' (بصلاحية اعتماد التذاكر التي يشارك فيها).' : ''),
-                $this->credits->reviewMetadata($ticket, $actor),
-            );
-
-            return $ticket;
+            return $this->moveToDeploy($ticket, $actor, $note);
         });
+    }
+
+    /** PENDING_REVIEW -> APPROVED_FOR_DEPLOY on a gated, locked deployment ticket. The values stay exactly as stored; credits NOTHING. */
+    private function moveToDeploy(Ticket $ticket, User $actor, string $note): Ticket
+    {
+        $now = now();
+        $relation = $this->access->reviewerRelation($actor, $ticket);
+
+        $ticket->forceFill([
+            'status' => TicketAccess::APPROVED_FOR_DEPLOY,
+            'review_approved_by_id' => $actor->id,
+            'review_approved_at' => $now,
+        ])->save();
+
+        $this->credits->log(
+            $ticket, $actor, 'APPROVED_FOR_DEPLOY', TicketAccess::PENDING_REVIEW, TicketAccess::APPROVED_FOR_DEPLOY,
+            'تأكيد المراجعة والاعتماد للنشر على الموقع الحي: '.(int) $ticket->task_points.' نقطة، المدة الفعلية '.TicketCreditService::describeMinutes((int) $ticket->actual_minutes)
+                .($note !== '' ? ' | ملاحظة الاعتماد: '.$note : '').' (لم يُضَف أي رصيد بعد).'
+                // Internal row: says plainly when the approver is the creator / assignee / submitter (they hold the participation permission).
+                .($relation !== [] ? ' | المعتمِد هو '.$this->access->describeRelation($relation).' (بصلاحية اعتماد التذاكر التي يشارك فيها).' : ''),
+            $this->credits->reviewMetadata($ticket, $actor),
+        );
+
+        return $ticket;
     }
 
     // ── 2. mark deployed (department leader / global role) ───────────────────

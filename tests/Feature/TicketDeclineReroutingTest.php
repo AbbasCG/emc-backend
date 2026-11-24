@@ -154,7 +154,7 @@ class TicketDeclineReroutingTest extends TestCase
         $t = $this->declined();
 
         foreach ([$this->alice, $this->bob, $this->reporter] as $user) {
-            $this->as($user)->postJson("/api/v1/tickets/{$t->id}/reassign", ['assigned_to_id' => $this->bob->id, 'task_scope' => 'simple', 'task_points' => 30])->assertForbidden();
+            $this->as($user)->postJson("/api/v1/tickets/{$t->id}/reassign", ['assigned_to_id' => $this->bob->id, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2])->assertForbidden();
         }
         $this->assertSame('REJECTED_BY_ASSIGNEE', $t->fresh()->status);
         $this->assertSame($this->alice->id, $t->fresh()->assigned_to_id);
@@ -178,7 +178,7 @@ class TicketDeclineReroutingTest extends TestCase
         $this->assertSame('REJECTED_BY_ASSIGNEE', $legacy->fresh()->status);
         $this->assertSame(self::REASON, $legacy->fresh()->assignee_rejection_reason, 'a refused reroute changes nothing');
 
-        $this->postJson("/api/v1/tickets/{$legacy->id}/reassign", ['assigned_to_id' => $this->bob->id, 'task_scope' => 'simple', 'task_points' => 40])->assertOk();
+        $this->postJson("/api/v1/tickets/{$legacy->id}/reassign", ['assigned_to_id' => $this->bob->id, 'task_scope' => 'simple', 'task_points' => 40, 'estimated_hours' => 2])->assertOk();
         $this->assertSame([$legacy->id], collect($this->myWork($this->bob))->pluck('id')->all());
     }
 
@@ -196,7 +196,7 @@ class TicketDeclineReroutingTest extends TestCase
         $this->assertSame([$legacy->id], collect($this->myWork($this->alice))->pluck('id')->all(), 'only the refused one is still hers');
 
         // The same person again is refused alone, with shared estimate parameters the legacy one now goes through.
-        $d = $this->as($this->leader)->postJson('/api/v1/tickets/bulk', ['action' => 'reassign', 'ticket_ids' => [$legacy->id], 'assigned_to_id' => $this->alice->id, 'task_scope' => 'simple', 'task_points' => 30])
+        $d = $this->as($this->leader)->postJson('/api/v1/tickets/bulk', ['action' => 'reassign', 'ticket_ids' => [$legacy->id], 'assigned_to_id' => $this->alice->id, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2])
             ->assertOk()->json('data');
         $this->assertSame(0, $d['succeeded']);
     }

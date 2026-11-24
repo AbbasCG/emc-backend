@@ -136,7 +136,7 @@ class TicketAssigneeEligibilityTest extends TestCase
             'department_id' => $d->id, 'created_by_id' => $this->u['outsider']->id, 'created_by_name' => 'مُبلِّغ', 'status' => 'PENDING_APPROVAL',
             // CHANGED: a manager who names THEMSELVES the assignee cannot change the estimate in the same reassign, so these
             // tickets already carry the estimate the requests repeat.
-            'task_scope' => 'simple', 'task_points' => 30,
+            'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2,
         ], $over));
     }
 
@@ -144,21 +144,21 @@ class TicketAssigneeEligibilityTest extends TestCase
     {
         Sanctum::actingAs($as);
 
-        return $this->postJson("/api/v1/tickets/{$t->id}/approve", array_merge(['sla_hours' => 24, 'task_scope' => 'simple', 'task_points' => 30], $body));
+        return $this->postJson("/api/v1/tickets/{$t->id}/approve", array_merge(['sla_hours' => 24, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2], $body));
     }
 
     private function reassign(Ticket $t, User $as, array $body = [])
     {
         Sanctum::actingAs($as);
 
-        return $this->postJson("/api/v1/tickets/{$t->id}/reassign", array_merge(['task_scope' => 'simple', 'task_points' => 30], $body));
+        return $this->postJson("/api/v1/tickets/{$t->id}/reassign", array_merge(['task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2], $body));
     }
 
     private function bulk(array $ids, User $as, array $body = [])
     {
         Sanctum::actingAs($as);
 
-        return $this->postJson('/api/v1/tickets/bulk', array_merge(['action' => 'reassign', 'ticket_ids' => $ids, 'task_scope' => 'simple', 'task_points' => 30], $body));
+        return $this->postJson('/api/v1/tickets/bulk', array_merge(['action' => 'reassign', 'ticket_ids' => $ids, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2], $body));
     }
 
     /** @return array<int, int> ids listed by the form metadata, sorted */
@@ -393,7 +393,7 @@ class TicketAssigneeEligibilityTest extends TestCase
     public function test_a_ticket_carrying_a_unit_its_department_no_longer_has_is_still_assignable(): void
     {
         $stale = $this->unit($this->noUnits, 'OLD', ['is_active' => false]);
-        $t = $this->ticket($this->noUnits, ['status' => 'ASSIGNED', 'unit_id' => $stale->id, 'assigned_to_id' => $this->u['memberN1']->id, 'task_scope' => 'simple', 'task_points' => 30]);
+        $t = $this->ticket($this->noUnits, ['status' => 'ASSIGNED', 'unit_id' => $stale->id, 'assigned_to_id' => $this->u['memberN1']->id, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2]);
 
         $this->reassign($t, $this->leaderN, ['assigned_to_id' => $this->u['memberN2']->id])->assertOk()->assertJsonPath('data.assigned_to_id', $this->u['memberN2']->id);
 

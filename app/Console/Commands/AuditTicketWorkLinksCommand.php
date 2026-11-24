@@ -65,7 +65,7 @@ class AuditTicketWorkLinksCommand extends Command
             $this->ids(Ticket::query()->where('status', 'ASSIGNED')->whereNotNull('accepted_at'))];
 
         // 6. Active assigned work with no estimate (legacy: it must be set before the next reassignment).
-        $checks[] = ['active_without_estimate', 'تذكرة مُسندة بلا حجم/نقاط / Active assigned ticket without task_scope or task_points (incl. PENDING_REVIEW: the approval must supply them)',
+        $checks[] = ['active_without_estimate', 'تذكرة مُسندة بلا حجم/نقاط / Active assigned ticket without task_scope or task_points (incl. PENDING_REVIEW: it must be completed through rework before the review can be confirmed)',
             $this->ids(Ticket::query()->whereIn('status', [...$active, 'PENDING_REVIEW'])->whereNotNull('assigned_to_id')
                 ->where(fn ($q) => $q->whereNull('task_scope')->orWhereNull('task_points')))];
 

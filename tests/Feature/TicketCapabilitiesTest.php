@@ -165,7 +165,7 @@ class TicketCapabilitiesTest extends TestCase
         $other = $this->makeUser('tech_admin');
         $dept->users()->attach($other->id);
         Sanctum::actingAs($leader);
-        $this->postJson("/api/v1/tickets/{$ticket->id}/reassign", ['assigned_to_id' => $other->id, 'task_scope' => 'simple', 'task_points' => 30])
+        $this->postJson("/api/v1/tickets/{$ticket->id}/reassign", ['assigned_to_id' => $other->id, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2])
             ->assertOk()->assertJsonPath('data.status', 'ASSIGNED');
     }
 

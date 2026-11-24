@@ -21,29 +21,24 @@ use App\Support\TicketValidationMessages;
  * ledger, and tickets that were already RESOLVED / UNRESOLVED / closed before this feature existed are never
  * credited by any path (there is no backfill; only an explicit approval of a PENDING_REVIEW ticket credits).
  *
- * WHAT IS CREDITED: to the ASSIGNEE (never the approver), the POINTS of the ticket's final stored estimate
- * (task_points, scope ranges unchanged) and the HOURS of the ACTUAL duration the reviewer enters in the approval
- * (actual_minutes, REQUIRED, credited as round(minutes / 60, 2)). `estimated_hours` is planning data only: it is never
- * credited, never a fallback and never 0-substituted. The approver may correct the estimate in the same request; the
- * correction is validated by TicketWorkEstimate and logged (ESTIMATE_UPDATED). A legacy ticket with no size/points
- * cannot be approved until the request supplies them either.
+ * WHAT IS CREDITED: to the ASSIGNEE (never the reviewer), from the values STORED on the ticket: the POINTS (task_points, scope ranges
+ * unchanged) and the HOURS of the ACTUAL duration the assignee recorded when sending the work to review (actual_minutes, credited as
+ * round(minutes / 60, 2)). `estimated_hours` is planning data only: never credited, never a fallback. Size, points and the approximate
+ * duration are set at assignment; during review all four values are READ-ONLY. The confirmation («تأكيد المراجعة») is a stage
+ * transition only: a body carrying any of them is refused (422 REVIEW_VALUES_LOCKED) and missing/invalid stored data is a 422
+ * REVIEW_DATA_INCOMPLETE (return for rework to complete it).
  *
  * ORDER OF CHECKS (so an unauthorised caller can never store or probe the request): view/404, review permission 403,
- * participation permission 403 (created / assigned / submitted it), manager 403, already credited 409, status 409, HR gate 403, then validation 422 (estimate fields, note
- * and the actual duration, all in ONE 422). The 409s come before the HR gate so a reviewer with a stale screen on an
- * already credited / no longer pending ticket is told that, not that HR is needed. Nothing is persisted by a refused
- * approval.
+ * participation permission 403 (created / assigned / submitted it), manager 403, already credited 409, status 409, HR gate 403, then
+ * 422 (values locked, note, incomplete data). Nothing is persisted by a refused confirmation.
  *
- * DEPLOYMENT TICKETS (requires_deployment) are NOT closed here: approve-completion refuses them (409 DEPLOYMENT_REQUIRED)
- * and TicketDeploymentService runs their cycle. Its last step, the assignee's live verification, credits through
- * creditNow() below, so there is still ONE implementation of what a credit is and of how it stays single.
+ * DEPLOYMENT TICKETS (requires_deployment) are NOT closed here: confirm-review moves them to APPROVED_FOR_DEPLOY instead
+ * (TicketDeploymentService) and approve-completion refuses them (409 DEPLOYMENT_REQUIRED). Their last step, the assignee's live
+ * verification, credits through creditNow() below, so there is still ONE implementation of what a credit is and of how it stays single.
  *
  * WHO: a leader of the ticket's department or a global role (TicketAccess::canManage) who holds tickets.review_completion, and
  * also tickets.review_participated when they created the ticket, are its assignee or submitted the current round (TicketAccess::reviewRefusal);
- * work above «بسيطة» also needs an HR approver (TicketAccess::HR_APPROVAL_ROLES), mirroring regular tasks
- * (simple: the manager's evaluation credits; above simple: HR's final approval credits). The HR gate is judged
- * on the LARGER of the stored and the final scope, so a leader cannot shrink a medium ticket to «بسيطة» in the
- * approval request to avoid HR.
+ * work above «بسيطة» also needs an HR approver (TicketAccess::HR_APPROVAL_ROLES), judged on the STORED size.
  *
  * EXACTLY ONCE, in three layers:
  *   1. the ticket row is locked (SELECT ... FOR UPDATE) and the credit is looked up under that lock;
@@ -72,6 +67,16 @@ class TicketCreditService
     public const CODE_NOT_A_DEPLOYMENT_TICKET = 'NOT_A_DEPLOYMENT_TICKET';
     public const CODE_ASSIGNEE_ONLY = 'ASSIGNEE_ONLY';
     public const CODE_ASSIGNEE_UNAVAILABLE = 'ASSIGNEE_UNAVAILABLE';
+    // The one-click review confirmation: the stored values are read-only during review and must already be complete.
+    public const CODE_REVIEW_VALUES_LOCKED = 'REVIEW_VALUES_LOCKED';
+    public const CODE_REVIEW_DATA_INCOMPLETE = 'REVIEW_DATA_INCOMPLETE';
+    public const CODE_STALE_REVIEW = 'STALE_REVIEW';
+
+    public const STALE_REVIEW_MESSAGE = 'تغيّرت التذكرة منذ فتحتها (أُعيدت أو أُعيد إرسالها)؛ حدّث الصفحة وراجع القيم الجديدة.';
+
+    public const REVIEW_VALUES_LOCKED_MESSAGE = 'لا يمكن تعديل الحجم أو النقاط أو المدة التقريبية أو المدة الفعلية أثناء المراجعة؛ أعد التذكرة للتنفيذ لتعديلها.';
+    /** The assignee's submission needs the actual duration (stored on the ticket; read-only afterwards). */
+    public const ACTUAL_REQUIRED_FOR_SUBMIT_MESSAGE = 'أدخل المدة الفعلية التي استغرقها العمل (بالساعات والدقائق) قبل الإرسال للمراجعة.';
 
     public const ACTUAL_REQUIRED_MESSAGE = 'أدخل المدة الفعلية للإنجاز (بالساعات والدقائق) قبل الاعتماد النهائي.';
     /** The same requirement as it reads in the deployment flow, where the final step is the live verification, not this approval. */
@@ -174,110 +179,110 @@ class TicketCreditService
     }
 
     /**
-     * Validation (422), last, in ONE response: the shape of the estimate fields and the note, then the estimate's business
-     * rules (size/points must exist — legacy tickets supply them here — and fit the size), and the ACTUAL duration. Nothing
-     * has been written yet.
+     * The shared gates of every review confirmation (confirm-review and the two legacy endpoints), on a ticket already locked
+     * and judged by lockForReview(): 409 already credited / wrong flow / wrong stage, 422 REVIEW_VALUES_LOCKED when the request
+     * tries to send a value, 403 HR gate (judged on the STORED size), 409 no assignee / assignee unavailable (deployment), 422 for
+     * a bad note, and 422 REVIEW_DATA_INCOMPLETE when a stored value is missing. Nothing is persisted by a refusal.
      *
-     * @param  array<string, mixed>  $estimateInput
-     * @return array{0: array<string, mixed>, 1: int, 2: string} the resolved estimate, the actual minutes, the trimmed note
+     * @param  ?string  $flow  'classic' (approve-completion), 'deploy' (approve-for-deploy) or null (confirm-review: by the ticket's flag)
+     * @param  array<string, mixed>  $sentValues  the locked keys the request carried
+     * @return string the trimmed note
      */
-    public function validateApproval(Ticket $ticket, array $estimateInput, mixed $note, mixed $actualMinutes, string $requiredMessage = self::ACTUAL_REQUIRED_MESSAGE): array
+    public function reviewGate(Ticket $ticket, User $actor, ?string $flow, array $sentValues, mixed $note, mixed $reviewRound = null): string
     {
-        $errors = [];
-        $message = null;
-        $work = null;
-
-        $shape = Validator::make(
-            TicketWorkEstimate::only($estimateInput) + ['note' => $note],
-            TicketWorkEstimate::rules() + ['note' => ['nullable', 'string', 'max:1000']],
-            TicketWorkEstimate::messages() + TicketValidationMessages::all() + [
-                'note.string' => 'الملاحظة غير صالحة.',
-                'note.max' => 'الملاحظة طويلة جدًا؛ الحد الأقصى 1000 حرف.',
-            ],
-        );
-        if ($shape->fails()) {
-            $errors = $shape->errors()->toArray();
-            $message = (string) $shape->errors()->first();
+        $deployment = $this->access->isDeploymentTicket($ticket);
+        if ($flow === 'deploy' && ! $deployment) {
+            throw new TicketActionException(TicketDeploymentService::NOT_DEPLOYMENT_MESSAGE, 409, [], self::CODE_NOT_A_DEPLOYMENT_TICKET);
         }
-        // The business rules run too (they re-validate every value they read), so one answer lists everything; a field
-        // already reported by the shape check keeps that message.
-        try {
-            $work = TicketWorkEstimate::resolve($ticket, TicketWorkEstimate::only($estimateInput), missingMessage: self::MISSING_ESTIMATE_MESSAGE);
-        } catch (TicketActionException $e) {
-            $errors += $e->errors;
-            $message ??= $e->getMessage();
+        $this->refuseIfCredited($ticket);
+        if ($flow === 'classic' && $deployment) {
+            // A deployment ticket is closed only by the assignee's verification on the live site.
+            throw new TicketActionException('هذه التذكرة تتطلب نشرًا على الموقع الحي؛ استخدم اعتماد للنشر.', 409, [], self::CODE_DEPLOYMENT_REQUIRED);
         }
-
-        [$minutes, $actualError, $actualCode] = $this->resolveActualMinutes($actualMinutes);
-        if ($actualCode === self::CODE_ACTUAL_REQUIRED) {
-            $actualError = $requiredMessage;
+        if ($ticket->status !== TicketAccess::PENDING_REVIEW) {
+            throw $deployment
+                ? new TicketActionException(TicketDeploymentService::INVALID_STAGE_MESSAGE, 409, [], self::CODE_INVALID_STAGE)
+                : new TicketActionException('لا يمكن اعتماد إنجاز تذكرة ليست بحالة (بانتظار المراجعة والاعتماد).', 409, [], self::CODE_NOT_PENDING_REVIEW);
         }
-        if ($actualError !== null) {
-            $errors['actual_minutes'] = [$actualError];
-            $message ??= $actualError;
+        // Stale-screen protection: a confirmation carrying the review round the reviewer SAW is refused when the ticket has moved on
+        // (returned and resubmitted). Optional for compatibility; judged right after the stage checks, before anything is written.
+        if ($reviewRound !== null && $reviewRound !== '') {
+            $isWhole = is_int($reviewRound) || (is_string($reviewRound) && preg_match('/^\d+$/', trim($reviewRound)) === 1);
+            if (! $isWhole) {
+                throw new TicketActionException('رقم جولة المراجعة غير صالح.', 422, ['review_round' => ['رقم جولة المراجعة غير صالح.']]);
+            }
+            if ((int) $reviewRound !== (int) $ticket->review_round) {
+                throw new TicketActionException(self::STALE_REVIEW_MESSAGE, 409, [], self::CODE_STALE_REVIEW);
+            }
         }
-
-        if ($errors !== []) {
-            // The headline is the first error. The machine code names the DURATION problem, so it is attached only when
-            // the duration is the only thing wrong (then headline and code agree); with other errors present the code
-            // would contradict the message, and the client reads `errors.actual_minutes` instead.
-            throw new TicketActionException((string) $message, 422, $errors, array_keys($errors) === ['actual_minutes'] ? $actualCode : null);
+        if ($this->access->needsHrApproval($ticket->task_scope) && ! $this->access->isHrApprover($actor)) {
+            throw new TicketActionException('اعتماد هذه التذكرة يحتاج إلى اعتماد الموارد البشرية لأن حجمها أعلى من «بسيطة».', 403, [], self::CODE_HR_REQUIRED);
+        }
+        if ($sentValues !== []) {
+            throw new TicketActionException(self::REVIEW_VALUES_LOCKED_MESSAGE, 422, array_fill_keys(array_keys($sentValues), [self::REVIEW_VALUES_LOCKED_MESSAGE]), self::CODE_REVIEW_VALUES_LOCKED);
+        }
+        if ($ticket->assigned_to_id === null || ! User::find($ticket->assigned_to_id)) {
+            throw new TicketActionException('لا يمكن الاعتماد: لا يوجد مكلف تُضاف إليه النقاط والساعات.', 409);
+        }
+        // A deployment ticket has to be verified live by its assignee: nobody who cannot act can be left holding it.
+        if ($deployment && $this->access->assigneeUnavailable($ticket)) {
+            throw new TicketActionException('لا يمكن اعتماد التذكرة للنشر لأن المكلف غير متاح (غير فعّال أو محجوب أو محذوف)؛ أعدها للتنفيذ ثم أعد إسنادها.', 409, [], self::CODE_ASSIGNEE_UNAVAILABLE);
         }
 
-        return [$work, $minutes, trim((string) $note)];
+        $validator = Validator::make(['note' => $note], ['note' => ['nullable', 'string', 'max:1000']], TicketValidationMessages::all() + [
+            'note.string' => 'الملاحظة غير صالحة.',
+            'note.max' => 'الملاحظة طويلة جدًا؛ الحد الأقصى 1000 حرف.',
+        ]);
+        if ($validator->fails()) {
+            throw new TicketActionException((string) $validator->errors()->first(), 422, $validator->errors()->toArray());
+        }
+
+        $missing = TicketWorkEstimate::missingForReview($ticket);
+        if ($missing !== []) {
+            $message = TicketWorkEstimate::incompleteMessage($missing);
+            throw new TicketActionException($message, 422, array_fill_keys($missing, [$message]), self::CODE_REVIEW_DATA_INCOMPLETE);
+        }
+
+        return trim((string) $note);
     }
 
     /**
-     * Approve a completed ticket's work and credit it, now (the classic flow: PENDING_REVIEW -> RESOLVED).
+     * Confirm a completed ticket's review and credit it, now (the classic flow: PENDING_REVIEW -> RESOLVED), from the STORED
+     * values only: nothing about size, points, hours or duration is accepted here.
      *
-     * @param  array<string, mixed>  $estimateInput  any subset of task_scope / task_points / estimated_hours (planning only)
-     * @param  mixed  $note  the approver's note as RECEIVED (validated here, after authorization)
-     * @param  mixed  $actualMinutes  the actual duration in minutes as RECEIVED (validated here, after authorization); null = not sent
+     * @param  mixed  $note  the reviewer's note as RECEIVED (validated here, after authorization)
+     * @param  array<string, mixed>  $sentValues  locked keys the request carried (refused with REVIEW_VALUES_LOCKED)
      *
      * @throws TicketActionException
      */
-    public function approveCompletion(int $ticketId, User $actor, array $estimateInput = [], mixed $note = null, mixed $actualMinutes = null): Ticket
+    public function approveCompletion(int $ticketId, User $actor, mixed $note = null, array $sentValues = [], mixed $reviewRound = null): Ticket
     {
-        return $this->guardDuplicate($ticketId, fn () => DB::transaction(function () use ($ticketId, $actor, $estimateInput, $note, $actualMinutes) {
+        return $this->guardDuplicate($ticketId, fn () => DB::transaction(function () use ($ticketId, $actor, $note, $sentValues, $reviewRound) {
             $ticket = $this->lockForReview($ticketId, $actor);
-            $this->refuseIfCredited($ticket);
-            // A deployment ticket is closed only by the assignee's verification on the live site.
-            if ($this->access->isDeploymentTicket($ticket)) {
-                throw new TicketActionException('هذه التذكرة تتطلب نشرًا على الموقع الحي؛ استخدم اعتماد للنشر.', 409, [], self::CODE_DEPLOYMENT_REQUIRED);
-            }
-            if ($ticket->status !== TicketAccess::PENDING_REVIEW) {
-                throw new TicketActionException('لا يمكن اعتماد إنجاز تذكرة ليست بحالة (بانتظار المراجعة والاعتماد).', 409, [], self::CODE_NOT_PENDING_REVIEW);
-            }
-            $this->guardHr($ticket, $actor, $estimateInput);
+            $note = $this->reviewGate($ticket, $actor, 'classic', $sentValues, $note, $reviewRound);
 
-            $assignee = $ticket->assigned_to_id ? User::find($ticket->assigned_to_id) : null;
-            if (! $assignee) {
-                throw new TicketActionException('لا يمكن الاعتماد: لا يوجد مكلف تُضاف إليه النقاط والساعات.', 409);
-            }
-
-            [$work, $minutes, $note] = $this->validateApproval($ticket, $estimateInput, $note, $actualMinutes);
-
-            $estimateBefore = TicketWorkEstimate::snapshot($ticket);
-            $estimateChanged = TicketWorkEstimate::differs($ticket, $work);
-
-            $ticket->fill($work);
-            $this->creditNow(
-                $ticket, $assignee, $actor, (int) $actor->id, (int) $work['task_points'], $minutes, $work['task_scope'],
-                'اعتماد نهائي للتذكرة '.$ticket->ticket_number,
-                function () use ($ticket, $actor, $estimateChanged, $estimateBefore, $note) {
-                    if ($estimateChanged) {
-                        TicketWorkEstimate::log($ticket, $actor, $estimateBefore, TicketWorkEstimate::snapshot($ticket));
-                    }
-                    $this->log($ticket, $actor, 'APPROVED_COMPLETION', TicketAccess::PENDING_REVIEW, 'RESOLVED', 'تم الاعتماد النهائي لإنجاز التذكرة وإغلاقها', $this->reviewMetadata($ticket, $actor));
-
-                    return $note !== '' ? ' | ملاحظة الاعتماد: '.$note : '';
-                },
-                // The assignee is told, unless they are the one approving (a reviewer holding the participation permission).
-                (int) $actor->id !== (int) $assignee->id,
-            );
-
-            return $ticket;
+            return $this->creditApproved($ticket, $actor, $note);
         }));
+    }
+
+    /** The classic final approval of a gated, locked ticket: the one credit from the stored points and actual minutes. MUST run in the caller's transaction. */
+    public function creditApproved(Ticket $ticket, User $actor, string $note): Ticket
+    {
+        $assignee = User::find($ticket->assigned_to_id);
+
+        $this->creditNow(
+            $ticket, $assignee, $actor, (int) $actor->id, (int) $ticket->task_points, (int) $ticket->actual_minutes, (string) $ticket->task_scope,
+            'اعتماد نهائي للتذكرة '.$ticket->ticket_number,
+            function () use ($ticket, $actor, $note) {
+                $this->log($ticket, $actor, 'APPROVED_COMPLETION', TicketAccess::PENDING_REVIEW, 'RESOLVED', 'تأكيد المراجعة: تم الاعتماد النهائي لإنجاز التذكرة وإغلاقها', $this->reviewMetadata($ticket, $actor));
+
+                return $note !== '' ? ' | ملاحظة الاعتماد: '.$note : '';
+            },
+            // The assignee is told, unless they are the one confirming (a reviewer holding the participation permission).
+            (int) $actor->id !== (int) $assignee->id,
+        );
+
+        return $ticket;
     }
 
     /**

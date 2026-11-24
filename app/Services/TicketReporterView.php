@@ -83,7 +83,7 @@ class TicketReporterView
                 'accept_task'       => false,
                 'reject_task'       => false,
                 'complete_task'     => false,
-                'approve_completion' => false,
+                'confirm_review' => false, 'approve_completion' => false,
                 'approve_for_deploy' => false,
                 'mark_deployed' => false,
                 'verify_resolved' => false,
@@ -121,7 +121,7 @@ class TicketReporterView
             'department'      => $ticket->department ? ['id' => $ticket->department->id, 'name' => $ticket->department->name_ar ?: $ticket->department->name] : null,
             'capabilities'    => [
                 'approve' => false, 'reject' => false, 'reassign' => false, 'accept_task' => false, 'reject_task' => false,
-                'complete_task' => false, 'approve_completion' => false, 'approve_for_deploy' => false, 'mark_deployed' => false, 'verify_resolved' => false, 'verify_failed' => false, 'return_for_rework' => false, 'add_internal_note' => false, 'comment' => ! in_array($ticket->status, self::FINAL_STATUSES, true), 'change_priority' => false, 'can_edit_estimate' => false,
+                'complete_task' => false, 'confirm_review' => false, 'approve_completion' => false, 'approve_for_deploy' => false, 'mark_deployed' => false, 'verify_resolved' => false, 'verify_failed' => false, 'return_for_rework' => false, 'add_internal_note' => false, 'comment' => ! in_array($ticket->status, self::FINAL_STATUSES, true), 'change_priority' => false, 'can_edit_estimate' => false,
             ],
         ];
     }

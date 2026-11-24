@@ -85,14 +85,14 @@ class TicketAssignmentNotificationsTest extends TestCase
     {
         Sanctum::actingAs($as ?? $this->leader);
 
-        return $this->postJson("/api/v1/tickets/{$t->id}/approve", array_merge(['sla_hours' => 24, 'task_scope' => 'simple', 'task_points' => 30], $body));
+        return $this->postJson("/api/v1/tickets/{$t->id}/approve", array_merge(['sla_hours' => 24, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2], $body));
     }
 
     private function reassign(Ticket $t, User $to, ?User $as = null)
     {
         Sanctum::actingAs($as ?? $this->leader);
 
-        return $this->postJson("/api/v1/tickets/{$t->id}/reassign", ['assigned_to_id' => $to->id, 'task_scope' => 'simple', 'task_points' => 30]);
+        return $this->postJson("/api/v1/tickets/{$t->id}/reassign", ['assigned_to_id' => $to->id, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2]);
     }
 
     private function assignedTo(User $u)
@@ -238,7 +238,7 @@ class TicketAssignmentNotificationsTest extends TestCase
         $b = $this->ticket(['status' => 'IN_PROGRESS', 'assigned_to_id' => $this->alice->id]);
 
         Sanctum::actingAs($this->leader);
-        $this->postJson('/api/v1/tickets/bulk', ['action' => 'reassign', 'ticket_ids' => [$a->id, $b->id], 'assigned_to_id' => $this->bob->id, 'task_scope' => 'simple', 'task_points' => 30])
+        $this->postJson('/api/v1/tickets/bulk', ['action' => 'reassign', 'ticket_ids' => [$a->id, $b->id], 'assigned_to_id' => $this->bob->id, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2])
             ->assertOk()->assertJsonPath('data.succeeded', 2);
 
         $this->assertEqualsCanonicalizing([$a->id, $b->id], $this->assignedTo($this->bob)->pluck('entity_id')->map(fn ($v) => (int) $v)->all());
@@ -251,7 +251,7 @@ class TicketAssignmentNotificationsTest extends TestCase
     {
         // CHANGED: naming yourself the assignee no longer lets you change the estimate, so the ticket already carries the one
         // the request repeats (assignment itself still works).
-        $t = $this->ticket(['status' => 'ASSIGNED', 'assigned_to_id' => $this->bob->id, 'task_scope' => 'simple', 'task_points' => 30]);
+        $t = $this->ticket(['status' => 'ASSIGNED', 'assigned_to_id' => $this->bob->id, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2]);
 
         // A global role may both manage and be assigned.
         $this->reassign($t, $this->alice, $this->alice)->assertOk();

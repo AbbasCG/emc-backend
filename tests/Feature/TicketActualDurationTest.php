@@ -19,18 +19,18 @@ use Tests\Concerns\GrantsTicketReviewPermissions;
 use Tests\TestCase;
 
 /**
- * THE MEMBER'S BALANCE RECEIVES THE ACTUAL APPROVED TIME, NOT THE PLANNING ESTIMATE.
+ * THE MEMBER'S BALANCE RECEIVES THE ACTUAL TIME THE ASSIGNEE RECORDED, NOT THE PLANNING ESTIMATE.
  *
- * `estimated_hours` («المدة التقريبية») is planning data set at assignment and is never credited. The authorised
- * reviewer enters the ACTUAL duration (`actual_minutes`) inside the final approval; it is required, validated only after
- * the authorization checks, and is what gets credited (round(minutes / 60, 2)) once.
+ * `estimated_hours` («المدة التقريبية») is planning data set at assignment and is never credited. The ASSIGNEE records the
+ * ACTUAL duration (`actual_minutes`) when sending the work to review (required there); during review it is read-only, the
+ * one-click «تأكيد المراجعة» only moves the stage, and the stored value is what gets credited (round(minutes / 60, 2)) once.
  */
 class TicketActualDurationTest extends TestCase
 {
     use RefreshDatabase;
     use GrantsTicketReviewPermissions;
 
-    private const REQUIRED = 'أدخل المدة الفعلية للإنجاز (بالساعات والدقائق) قبل الاعتماد النهائي.';
+    private const REQUIRED = 'أدخل المدة الفعلية التي استغرقها العمل (بالساعات والدقائق) قبل الإرسال للمراجعة.';
 
     private const DUPLICATE = 'تم اعتماد هذه التذكرة وإضافة رصيدها مسبقًا.';
 
@@ -72,18 +72,30 @@ class TicketActualDurationTest extends TestCase
 
     private function ticket(array $over = []): Ticket
     {
-        return Ticket::create(array_merge([
+        // actual_minutes (recorded by the assignee at submission) is not mass assignable: set it the way the app does.
+        $actual = $over['actual_minutes'] ?? null;
+        unset($over['actual_minutes']);
+
+        $ticket = Ticket::create(array_merge([
             'ticket_number' => 'EMC-TCK-D-'.Str::random(8), 'title' => 'تذكرة', 'description' => 'وصف', 'ticket_category' => 'OLD_ISSUE', 'priority' => 'MEDIUM',
             'department_id' => $this->dept->id, 'created_by_id' => $this->reporter->id, 'created_by_name' => 'مُبلِّغ', 'status' => 'PENDING_APPROVAL',
         ], $over));
+        if ($actual !== null) {
+            $ticket->forceFill(['actual_minutes' => $actual])->save();
+        }
+
+        return $ticket;
     }
 
-    /** Submitted for review: simple, 30 points, an ESTIMATE of 2 hours (never credited). */
+    /** Submitted for review: simple, 30 points, an ESTIMATE of 2 hours (never credited) and 75 actual minutes recorded by the assignee (a ticket not in review has none unless a test sets it). */
     private function submitted(array $over = []): Ticket
     {
+        $inReview = ($over['status'] ?? 'PENDING_REVIEW') === 'PENDING_REVIEW';
+
         return $this->ticket(array_merge([
             'status' => 'PENDING_REVIEW', 'assigned_to_id' => $this->assignee->id, 'approved_by_id' => $this->leader->id, 'accepted_at' => now()->subHour(),
             'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2, 'resolution_summary' => 'تم الحل',
+            'actual_minutes' => $inReview ? 75 : null,
         ], $over));
     }
 
@@ -108,11 +120,11 @@ class TicketActualDurationTest extends TestCase
 
     public function test_the_actual_duration_is_credited_not_the_estimate_and_only_once(): void
     {
-        $t = $this->submitted(); // estimate: 2 h
+        $t = $this->submitted(); // estimate: 2 h, actual recorded by the assignee: 75 min
 
-        $this->assertEqualsWithDelta(0.0, $this->hours($this->assignee), 0.001, 'nothing before the final approval');
+        $this->assertEqualsWithDelta(0.0, $this->hours($this->assignee), 0.001, 'nothing before the confirmation');
 
-        $res = $this->approve($t, null, ['actual_minutes' => 75])->assertOk()
+        $res = $this->approve($t)->assertOk()
             ->assertJsonPath('data.credit.status', 'credited')
             ->assertJsonPath('data.credit.hours', 1.25)
             ->assertJsonPath('data.credit.minutes', 75)
@@ -136,7 +148,7 @@ class TicketActualDurationTest extends TestCase
 
         // Replay, and replay with a DIFFERENT value: 409, nothing changes.
         $state = $this->state();
-        $this->approve($t, null, ['actual_minutes' => 75])->assertStatus(409)->assertJsonPath('code', 'ALREADY_CREDITED')->assertJsonPath('message', self::DUPLICATE);
+        $this->approve($t)->assertStatus(409)->assertJsonPath('code', 'ALREADY_CREDITED')->assertJsonPath('message', self::DUPLICATE);
         $this->approve($t, null, ['actual_minutes' => 600])->assertStatus(409)->assertJsonPath('code', 'ALREADY_CREDITED');
         $this->approve($t, $this->user('admin'), ['actual_minutes' => 600])->assertStatus(409)->assertJsonPath('code', 'ALREADY_CREDITED');
         $this->assertSame($state, $this->state());
@@ -148,27 +160,25 @@ class TicketActualDurationTest extends TestCase
     public function test_minutes_convert_to_hours_with_two_decimals(): void
     {
         foreach ([[1, 0.02], [20, 0.33], [90, 1.5], [60000, 1000.0]] as [$minutes, $hours]) {
-            $t = $this->submitted();
             $assignee = $this->deptMember();
-            $t->update(['assigned_to_id' => $assignee->id]);
+            $t = $this->submitted(['assigned_to_id' => $assignee->id, 'actual_minutes' => $minutes]);
 
-            $this->approve($t, null, ['actual_minutes' => $minutes])->assertOk()->assertJsonPath('data.credit.minutes', $minutes);
+            $this->approve($t)->assertOk()->assertJsonPath('data.credit.minutes', $minutes);
             $this->assertEqualsWithDelta($hours, $this->hours($assignee), 0.0001, "{$minutes} min");
         }
     }
 
+    /** CHANGED (was: ACTUAL_DURATION_REQUIRED at the approval). A ticket whose actual duration was never recorded cannot be confirmed: 422 REVIEW_DATA_INCOMPLETE. */
     public function test_an_estimate_without_an_actual_duration_is_never_credited(): void
     {
-        $t = $this->submitted(); // estimate 2 h present
+        $t = $this->submitted(['actual_minutes' => null]); // estimate 2 h present, no recorded actual
         $state = $this->state();
 
-        $this->approve($t)->assertStatus(422)
-            ->assertJsonPath('code', 'ACTUAL_DURATION_REQUIRED')
-            ->assertJsonPath('message', self::REQUIRED)
-            ->assertJsonPath('errors.actual_minutes.0', self::REQUIRED);
-        $this->approve($t, null, ['actual_minutes' => null])->assertStatus(422)->assertJsonPath('code', 'ACTUAL_DURATION_REQUIRED');
-        // Even a request that also "corrects" the estimate changes nothing when the duration is missing.
-        $this->approve($t, null, ['estimated_hours' => 9, 'task_points' => 45])->assertStatus(422)->assertJsonPath('code', 'ACTUAL_DURATION_REQUIRED');
+        $res = $this->approve($t)->assertStatus(422)->assertJsonPath('code', 'REVIEW_DATA_INCOMPLETE');
+        $this->assertNotEmpty($res->json('errors.actual_minutes'));
+        // Sending a value in the confirmation is refused, never stored.
+        $this->approve($t, null, ['actual_minutes' => 90])->assertStatus(422)->assertJsonPath('code', 'REVIEW_VALUES_LOCKED');
+        $this->approve($t, null, ['estimated_hours' => 9, 'task_points' => 45])->assertStatus(422)->assertJsonPath('code', 'REVIEW_VALUES_LOCKED');
 
         $this->assertSame($state, $this->state(), 'no credit row, no ledger, no hours, no log');
         $fresh = $t->fresh();
@@ -180,11 +190,16 @@ class TicketActualDurationTest extends TestCase
         $this->assertEqualsWithDelta(0.0, $this->hours($this->assignee), 0.001);
     }
 
+    /** CHANGED: the actual duration is entered by the assignee when submitting; the same codes and messages, refused before anything is written. */
     public function test_an_invalid_actual_duration_is_refused_with_arabic_messages(): void
     {
-        $t = $this->submitted();
+        $t = $this->submitted(['status' => 'IN_PROGRESS']);
         $state = $this->state();
+        Sanctum::actingAs($this->assignee);
+        $submit = fn (array $extra) => $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'تم الحل بالكامل'] + $extra);
 
+        $submit([])->assertStatus(422)->assertJsonPath('code', 'ACTUAL_DURATION_REQUIRED')->assertJsonPath('message', self::REQUIRED)->assertJsonPath('errors.actual_minutes.0', self::REQUIRED);
+        $submit(['actual_minutes' => null])->assertStatus(422)->assertJsonPath('code', 'ACTUAL_DURATION_REQUIRED');
         $cases = [
             [0, 'المدة الفعلية يجب ألا تقل عن دقيقة واحدة.'],
             [-5, 'المدة الفعلية يجب ألا تقل عن دقيقة واحدة.'],
@@ -195,35 +210,33 @@ class TicketActualDurationTest extends TestCase
             [[1], 'المدة الفعلية يجب أن تكون عددًا صحيحًا من الدقائق.'],
         ];
         foreach ($cases as [$value, $message]) {
-            $this->approve($t, null, ['actual_minutes' => $value])->assertStatus(422)
+            $submit(['actual_minutes' => $value])->assertStatus(422)
                 ->assertJsonPath('code', 'ACTUAL_DURATION_INVALID')->assertJsonPath('errors.actual_minutes.0', $message);
         }
 
         $this->assertSame($state, $this->state());
+        $this->assertSame('IN_PROGRESS', $t->fresh()->status, 'the submission was refused as a whole');
         $this->assertNull($t->fresh()->actual_minutes);
 
-        // The limits themselves are accepted; a numeric string too.
-        $this->approve($this->submitted(), null, ['actual_minutes' => '60'])->assertOk()->assertJsonPath('data.credit.minutes', 60);
+        // A numeric string is accepted and stored.
+        $submit(['actual_minutes' => '60'])->assertOk()->assertJsonPath('data.status', 'PENDING_REVIEW')->assertJsonPath('data.actual_minutes', 60);
+        $this->assertSame(60, $t->fresh()->actual_minutes);
     }
 
+    /** CHANGED: a legacy review ticket with nothing recorded is refused with the full list of what is missing; the confirmation supplies none of it. */
     public function test_a_legacy_review_ticket_with_no_estimate_and_no_actual_needs_both(): void
     {
-        $t = $this->submitted(['task_scope' => null, 'task_points' => null, 'estimated_hours' => null]);
+        $t = $this->submitted(['task_scope' => null, 'task_points' => null, 'estimated_hours' => null, 'actual_minutes' => null]);
         $state = $this->state();
 
-        // CHANGED: with the estimate ALSO missing the headline is the estimate's, so no ACTUAL_DURATION_* code is attached
-        // (it would contradict the message); the client reads errors.actual_minutes.
-        $res = $this->approve($t)->assertStatus(422)->assertJsonMissingPath('code');
-        $this->assertSame(self::REQUIRED, $res->json('errors.actual_minutes.0'));
-        $this->assertNotEmpty($res->json('errors.task_scope'));
-        $this->assertNotEmpty($res->json('errors.task_points'));
+        $res = $this->approve($t)->assertStatus(422)->assertJsonPath('code', 'REVIEW_DATA_INCOMPLETE');
+        foreach (['task_scope', 'task_points', 'estimated_hours', 'actual_minutes'] as $field) {
+            $this->assertNotEmpty($res->json("errors.{$field}"), $field);
+        }
 
-        $this->approve($t, null, ['actual_minutes' => 30])->assertStatus(422)->assertJsonStructure(['errors' => ['task_scope', 'task_points']])->assertJsonMissingPath('code');
-        $this->approve($t, null, ['task_scope' => 'simple', 'task_points' => 30])->assertStatus(422)->assertJsonPath('code', 'ACTUAL_DURATION_REQUIRED');
+        $this->approve($t, null, ['task_scope' => 'simple', 'task_points' => 30, 'actual_minutes' => 30])->assertStatus(422)->assertJsonPath('code', 'REVIEW_VALUES_LOCKED');
         $this->assertSame($state, $this->state());
-
-        $this->approve($t, null, ['task_scope' => 'simple', 'task_points' => 30, 'actual_minutes' => 30])->assertOk()->assertJsonPath('data.credit.hours', 0.5);
-        $this->assertNull($t->fresh()->estimated_hours, 'no estimate was invented');
+        $this->assertNull($t->fresh()->task_scope);
     }
 
     // ═══ Who can enter it ═══════════════════════════════════════════════════
@@ -252,11 +265,12 @@ class TicketActualDurationTest extends TestCase
 
         $this->assertSame($state, $this->state());
         foreach ([$t, $medium, $submitted] as $x) {
-            $this->assertNull($x->fresh()->actual_minutes);
+            $this->assertSame(75, $x->fresh()->actual_minutes);
             $this->assertSame('PENDING_REVIEW', $x->fresh()->status);
         }
     }
 
+    /** CHANGED (was: only the final approval writes it). Only the ASSIGNEE's submission writes it; every manager endpoint ignores the key. */
     public function test_the_actual_duration_can_only_be_written_by_the_final_approval(): void
     {
         $inProgress = $this->submitted(['status' => 'IN_PROGRESS']);
@@ -270,7 +284,7 @@ class TicketActualDurationTest extends TestCase
         $this->assertNull($inProgress->fresh()->actual_minutes);
 
         // approve (assignment), reassign, bulk reassign.
-        $this->postJson("/api/v1/tickets/{$pending->id}/approve", ['sla_hours' => 24, 'assigned_to_id' => $this->assignee->id, 'task_scope' => 'simple', 'task_points' => 30, 'actual_minutes' => 600])->assertOk();
+        $this->postJson("/api/v1/tickets/{$pending->id}/approve", ['sla_hours' => 24, 'assigned_to_id' => $this->assignee->id, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2, 'actual_minutes' => 600])->assertOk();
         $this->assertNull($pending->fresh()->actual_minutes);
         $this->postJson("/api/v1/tickets/{$assigned->id}/reassign", ['assigned_to_id' => $this->member->id, 'task_scope' => 'simple', 'task_points' => 30, 'actual_minutes' => 600])->assertOk();
         $this->assertNull($assigned->fresh()->actual_minutes);
@@ -284,11 +298,11 @@ class TicketActualDurationTest extends TestCase
         $this->assertArrayNotHasKey('actual_minutes', $res->json('data'));
         $this->assertNull(Ticket::find($res->json('data.id'))->actual_minutes);
 
-        // The assignee cannot slip it in while submitting the work.
+        // The assignee records it when submitting the work (and only then).
         $working = $this->submitted(['status' => 'IN_PROGRESS']);
         Sanctum::actingAs($this->assignee);
         $this->postJson("/api/v1/tickets/{$working->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'تم الحل بالكامل', 'actual_minutes' => 600])->assertOk();
-        $this->assertNull($working->fresh()->actual_minutes);
+        $this->assertSame(600, $working->fresh()->actual_minutes);
         $this->assertSame('PENDING_REVIEW', $working->fresh()->status);
 
         // And the assignee's own PATCH is refused outright.
@@ -298,16 +312,18 @@ class TicketActualDurationTest extends TestCase
 
     public function test_the_gates_still_hold_and_the_hr_gate_comes_before_the_duration_check(): void
     {
-        $medium = $this->submitted(['task_scope' => 'medium', 'task_points' => 100]);
+        $medium = $this->submitted(['task_scope' => 'medium', 'task_points' => 100, 'estimated_hours' => 4, 'actual_minutes' => 240]);
+        $incomplete = $this->submitted(['task_scope' => 'medium', 'task_points' => 100, 'actual_minutes' => null]);
 
-        // Non-HR leader without a duration: the HR refusal, not a 422.
+        // Non-HR leader: the HR refusal, before the data check.
         $this->approve($medium)->assertForbidden()->assertJsonPath('code', 'HR_APPROVAL_REQUIRED');
+        $this->approve($incomplete)->assertForbidden()->assertJsonPath('code', 'HR_APPROVAL_REQUIRED');
 
-        // An HR approver with a duration credits the ACTUAL time of the medium ticket.
-        $this->approve($medium, $this->user('admin'), ['actual_minutes' => 240])->assertOk()->assertJsonPath('data.credit.hours', 4);
+        // An HR approver credits the ACTUAL time of the medium ticket.
+        $this->approve($medium, $this->user('admin'))->assertOk()->assertJsonPath('data.credit.hours', 4);
         $this->assertSame(100, VolunteerPointAward::where('source_id', $medium->id)->sole()->points, 'points rules unchanged');
 
-        // Wrong status comes before validation: nothing to validate for a ticket that is not in review.
+        // Wrong status comes before everything else: nothing to validate for a ticket that is not in review.
         $working = $this->submitted(['status' => 'IN_PROGRESS']);
         $this->approve($working)->assertStatus(409)->assertJsonPath('code', 'NOT_PENDING_REVIEW');
     }
@@ -317,7 +333,7 @@ class TicketActualDurationTest extends TestCase
     public function test_the_actual_duration_is_for_managers_global_roles_and_the_assignee_only(): void
     {
         $t = $this->submitted();
-        $this->approve($t, null, ['actual_minutes' => 75])->assertOk();
+        $this->approve($t)->assertOk();
 
         foreach ([$this->leader, $this->assignee, $this->user('admin')] as $viewer) {
             Sanctum::actingAs($viewer);
@@ -351,15 +367,15 @@ class TicketActualDurationTest extends TestCase
         }
     }
 
-    public function test_staff_see_a_null_actual_duration_before_the_approval(): void
+    public function test_staff_see_the_recorded_actual_duration_before_the_approval(): void
     {
         $t = $this->submitted();
 
         Sanctum::actingAs($this->leader);
         $data = $this->getJson("/api/v1/tickets/{$t->id}")->assertOk()->json('data');
         $this->assertArrayHasKey('actual_minutes', $data);
-        $this->assertNull($data['actual_minutes']);
-        $this->assertNull($data['credit']['minutes']);
+        $this->assertSame(75, $data['actual_minutes'], 'recorded by the assignee at submission, read-only during review');
+        $this->assertSame(75, $data['credit']['minutes'] ?? 75);
         $this->assertSame('pending_review', $data['credit']['status']);
     }
 
@@ -393,7 +409,7 @@ class TicketActualDurationTest extends TestCase
     {
         $this->assertTrue(\Illuminate\Support\Facades\Schema::hasColumns('tickets', ['actual_minutes', 'credited_minutes']));
         $this->assertTrue(\Illuminate\Support\Facades\Schema::hasColumn('ticket_credits', 'minutes'));
-        $t = $this->submitted();
+        $t = $this->submitted(['status' => 'IN_PROGRESS']);
         $this->assertNull($t->fresh()->actual_minutes);
         $this->assertNull(DB::table('tickets')->where('id', $t->id)->value('credited_minutes'));
         $this->assertSame(0, Ticket::make()->isFillable('actual_minutes') ? 1 : 0, 'actual_minutes is not mass assignable');
@@ -406,7 +422,7 @@ class TicketActualDurationTest extends TestCase
     {
         // A non-HR leader with a stale screen on a medium ticket.
         $credited = $this->submitted(['task_scope' => 'medium', 'task_points' => 100]);
-        $this->approve($credited, $this->user('admin'), ['actual_minutes' => 60])->assertOk();
+        $this->approve($credited, $this->user('admin'))->assertOk();
         $this->approve($credited, null, ['actual_minutes' => 60])->assertStatus(409)->assertJsonPath('code', 'ALREADY_CREDITED');
         $this->approve($credited)->assertStatus(409)->assertJsonPath('code', 'ALREADY_CREDITED');
 
@@ -415,26 +431,26 @@ class TicketActualDurationTest extends TestCase
         $this->approve($returned)->assertStatus(409)->assertJsonPath('code', 'NOT_PENDING_REVIEW');
 
         // Still pending: the HR refusal wins over every validation error.
-        $pending = $this->submitted(['task_scope' => 'medium', 'task_points' => 100]);
+        $pending = $this->submitted(['task_scope' => 'medium', 'task_points' => 100, 'actual_minutes' => null]);
         $this->approve($pending)->assertForbidden()->assertJsonPath('code', 'HR_APPROVAL_REQUIRED');
         $this->approve($pending, null, ['task_points' => 9999, 'actual_minutes' => 0, 'note' => str_repeat('x', 1001)])->assertForbidden()->assertJsonPath('code', 'HR_APPROVAL_REQUIRED');
         $this->approve($pending, null, ['task_scope' => 'large', 'task_points' => 250])->assertForbidden()->assertJsonPath('code', 'HR_APPROVAL_REQUIRED');
     }
 
+    /** CHANGED (was: a stored duration never satisfied the approval, only a typed one did). Now ONLY the stored duration counts; a typed one is refused. */
     public function test_a_stored_actual_duration_never_satisfies_the_requirement(): void
     {
-        $t = $this->submitted();
-        $t->forceFill(['actual_minutes' => 90])->save(); // e.g. a data fix: not entered in this request
+        $t = $this->submitted(['actual_minutes' => 90]);
         $state = $this->state();
 
-        $this->approve($t)->assertStatus(422)->assertJsonPath('code', 'ACTUAL_DURATION_REQUIRED')->assertJsonPath('errors.actual_minutes.0', self::REQUIRED);
-        $this->approve($t, null, ['actual_minutes' => ''])->assertStatus(422)->assertJsonPath('code', 'ACTUAL_DURATION_REQUIRED');
+        $this->approve($t, null, ['actual_minutes' => 30])->assertStatus(422)->assertJsonPath('code', 'REVIEW_VALUES_LOCKED');
+        $this->approve($t, null, ['actual_minutes' => ''])->assertStatus(422)->assertJsonPath('code', 'REVIEW_VALUES_LOCKED');
         $this->assertSame($state, $this->state());
         $this->assertSame('PENDING_REVIEW', $t->fresh()->status);
 
-        // Entered now, the NEW value is what is credited (not the stored 90).
-        $this->approve($t, null, ['actual_minutes' => 30])->assertOk()->assertJsonPath('data.credit.minutes', 30);
-        $this->assertEqualsWithDelta(0.5, $this->hours($this->assignee), 0.0001);
+        // The STORED value is what is credited.
+        $this->approve($t)->assertOk()->assertJsonPath('data.credit.minutes', 90);
+        $this->assertEqualsWithDelta(1.5, $this->hours($this->assignee), 0.0001);
     }
 
     public function test_an_invalid_estimate_field_or_note_gets_the_same_refusal_as_a_valid_one_for_unauthorised_callers(): void
@@ -465,25 +481,18 @@ class TicketActualDurationTest extends TestCase
 
     public function test_one_422_carries_every_error_and_the_code_only_when_the_duration_is_the_only_problem(): void
     {
-        $t = $this->submitted();
+        $t = $this->submitted(['actual_minutes' => null, 'estimated_hours' => null]);
 
-        // Everything wrong: the headline is the first (estimate) error, no ACTUAL_DURATION_* code, all errors present.
-        $res = $this->approve($t, null, ['task_points' => 9999, 'estimated_hours' => -1, 'note' => str_repeat('x', 1001), 'actual_minutes' => 0])->assertStatus(422)->assertJsonMissingPath('code');
-        foreach (['task_points', 'estimated_hours', 'note', 'actual_minutes'] as $field) {
+        // Incomplete stored data: one 422 naming every missing value, with the stable code; a bad note is its own 422 first.
+        $res = $this->approve($t)->assertStatus(422)->assertJsonPath('code', 'REVIEW_DATA_INCOMPLETE');
+        foreach (['estimated_hours', 'actual_minutes'] as $field) {
             $this->assertNotEmpty($res->json("errors.{$field}"), $field);
         }
-        $this->assertNotSame('المدة الفعلية يجب ألا تقل عن دقيقة واحدة.', $res->json('message'), 'the headline is the estimate error');
-        $this->assertSame('نقاط المهمة البسيطة يجب أن تتراوح بين 25 و 50 نقطة.', $res->json('errors.task_points.0'), 'field names and messages kept');
-        $this->assertSame('المدة التقريبية يجب ألا تقل عن 0.01 ساعة.', $res->json('errors.estimated_hours.0'));
-        $this->assertSame('الملاحظة طويلة جدًا؛ الحد الأقصى 1000 حرف.', $res->json('errors.note.0'));
+        $this->assertArrayNotHasKey('task_scope', $res->json('errors'));
+        $this->approve($t, null, ['note' => str_repeat('x', 1001)])->assertStatus(422)->assertJsonPath('errors.note.0', 'الملاحظة طويلة جدًا؛ الحد الأقصى 1000 حرف.');
 
-        // Estimate bad, duration good: estimate errors only, no code.
-        $this->approve($t, null, ['task_points' => 9999, 'actual_minutes' => 60])->assertStatus(422)->assertJsonMissingPath('code')->assertJsonMissingPath('errors.actual_minutes');
-
-        // Duration the only problem: the codes are exactly as before.
-        $this->approve($t)->assertStatus(422)->assertJsonPath('code', 'ACTUAL_DURATION_REQUIRED')->assertJsonPath('message', self::REQUIRED);
-        $this->approve($t, null, ['actual_minutes' => 0])->assertStatus(422)->assertJsonPath('code', 'ACTUAL_DURATION_INVALID');
-        $this->approve($t, null, ['actual_minutes' => 60001])->assertStatus(422)->assertJsonPath('code', 'ACTUAL_DURATION_INVALID');
+        // Values in the body: refused with the locked code, whatever else is wrong.
+        $this->approve($t, null, ['task_points' => 9999, 'estimated_hours' => -1, 'actual_minutes' => 0])->assertStatus(422)->assertJsonPath('code', 'REVIEW_VALUES_LOCKED');
 
         $this->assertSame(0, VolunteerPointAward::count());
     }
@@ -491,7 +500,7 @@ class TicketActualDurationTest extends TestCase
     public function test_the_credit_notification_states_the_actual_time_in_natural_arabic(): void
     {
         $t = $this->submitted(['estimated_hours' => 5]);
-        $this->approve($t, null, ['actual_minutes' => 75])->assertOk();
+        $this->approve($t)->assertOk();
 
         $message = (string) DB::table('platform_notifications')->where('type', 'ticket_completion_approved')->where('user_id', $this->assignee->id)->value('message');
         $this->assertStringContainsString('ساعة و15 دقيقة', $message);
@@ -499,10 +508,9 @@ class TicketActualDurationTest extends TestCase
         $this->assertStringNotContainsString('1.25', $message);
         $this->assertStringNotContainsString('5 ساعات', $message, 'the estimate is never mentioned as credited time');
 
-        $short = $this->submitted();
         $other = $this->deptMember();
-        $short->update(['assigned_to_id' => $other->id]);
-        $this->approve($short, null, ['actual_minutes' => 1])->assertOk();
+        $short = $this->submitted(['assigned_to_id' => $other->id, 'actual_minutes' => 1]);
+        $this->approve($short)->assertOk();
         $message = (string) DB::table('platform_notifications')->where('type', 'ticket_completion_approved')->where('user_id', $other->id)->value('message');
         $this->assertStringContainsString('دقيقة.', $message);
         $this->assertStringNotContainsString('0.02', $message);

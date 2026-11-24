@@ -135,7 +135,7 @@ class CanonicalMemberToTicketAssignmentTest extends TestCase
             'created_by_name' => 'تجريبي', 'status' => 'PENDING_APPROVAL',
         ]);
         $approveRes = $this->actingAs($leader)->postJson("/api/v1/tickets/{$ticket->id}/approve", [
-            'sla_hours' => 24, 'unit_id' => $unitId, 'assigned_to_id' => $user->id, 'task_scope' => 'simple', 'task_points' => 30,
+            'sla_hours' => 24, 'unit_id' => $unitId, 'assigned_to_id' => $user->id, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2,
         ]);
         $approveRes->assertOk();
         $this->assertSame($unitId, $ticket->fresh()->unit_id);

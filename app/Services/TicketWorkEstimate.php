@@ -40,6 +40,65 @@ class TicketWorkEstimate
 
     public const KEYS = ['task_scope', 'task_points', 'estimated_hours'];
 
+    /** The four values that are READ-ONLY while a ticket is under review (the three planning keys + the assignee's actual duration). */
+    public const REVIEW_LOCKED_KEYS = ['task_scope', 'task_points', 'estimated_hours', 'actual_minutes'];
+
+    public const MISSING_HOURS_MESSAGE = 'حدّد المدة التقريبية للمهمة قبل الإسناد';
+
+    public const REVIEW_FIELD_LABELS = [
+        'task_scope' => 'حجم المهمة',
+        'task_points' => 'نقاط المهمة',
+        'estimated_hours' => 'المدة التقريبية',
+        'actual_minutes' => 'المدة الفعلية',
+    ];
+
+    /**
+     * Which of the four review values the ticket does not carry in a valid form (task_scope, task_points, estimated_hours,
+     * actual_minutes), in that order. Judged on the STORED values only: this is what a review confirmation credits from.
+     *
+     * @return array<int, string>
+     */
+    public static function missingForReview(Ticket $ticket): array
+    {
+        $missing = [];
+        $scopeOk = is_string($ticket->task_scope) && in_array($ticket->task_scope, self::SCOPES, true);
+        if (! $scopeOk) {
+            $missing[] = 'task_scope';
+        }
+
+        $points = $ticket->task_points;
+        if ($points === null || (int) $points < 1 || (int) $points > self::MAX_POINTS
+            || ($scopeOk && ! (TaskWorkflowService::validatePointsForScope((string) $ticket->task_scope, (int) $points)['valid'] ?? false))) {
+            $missing[] = 'task_points';
+        }
+
+        $hours = $ticket->estimated_hours;
+        if ($hours === null || round((float) $hours, 2) < self::MIN_HOURS || (float) $hours > self::MAX_HOURS) {
+            $missing[] = 'estimated_hours';
+        }
+
+        $actual = $ticket->actual_minutes;
+        if ($actual === null || (int) $actual < 1 || (int) $actual > TicketCreditService::MAX_ACTUAL_MINUTES) {
+            $missing[] = 'actual_minutes';
+        }
+
+        return $missing;
+    }
+
+    /** @param array<int, string> $missing */
+    public static function incompleteMessage(array $missing): string
+    {
+        $names = implode('، ', array_map(fn ($k) => self::REVIEW_FIELD_LABELS[$k] ?? $k, $missing));
+
+        return 'بيانات المراجعة غير مكتملة ('.$names.')؛ أعد التذكرة للتنفيذ لاستكمالها ثم أعد إرسالها للمراجعة.';
+    }
+
+    /** Which of the locked review values a request body tries to send (key present, even as null). @return array<int, string> */
+    public static function lockedKeysIn(array $source): array
+    {
+        return array_values(array_filter(self::REVIEW_LOCKED_KEYS, fn ($k) => array_key_exists($k, $source)));
+    }
+
     /** The «requires a live deployment» flag a manager may set together with the estimate (optional boolean; absent = keep). */
     public const FLAG = 'requires_deployment';
 
@@ -146,7 +205,7 @@ class TicketWorkEstimate
      *
      * @throws TicketActionException
      */
-    public static function resolve(Ticket $ticket, array $input, bool $allowClearHours = false, ?string $missingMessage = null): array
+    public static function resolve(Ticket $ticket, array $input, bool $allowClearHours = false, ?string $missingMessage = null, bool $requireHours = false): array
     {
         $missingText = $missingMessage ?? self::MISSING_MESSAGE;
         $given = fn (string $k) => array_key_exists($k, $input) && $input[$k] !== null && $input[$k] !== '';
@@ -183,6 +242,9 @@ class TicketWorkEstimate
             }
         }
 
+        if ($hours === null && $requireHours) {
+            $errors['estimated_hours'] = [self::MISSING_HOURS_MESSAGE];
+        }
         if ($hours !== null) {
             if (! is_numeric($hours) || round((float) $hours, 2) < self::MIN_HOURS || (float) $hours > self::MAX_HOURS) {
                 $errors['estimated_hours'] = ['المدة التقريبية يجب أن تكون بين '.self::MIN_HOURS.' و'.self::MAX_HOURS.' ساعة.'];
@@ -193,6 +255,9 @@ class TicketWorkEstimate
             $missing = isset($errors['task_scope']) && $errors['task_scope'][0] === $missingText
                 || isset($errors['task_points']) && $errors['task_points'][0] === $missingText;
             $message = $missing ? $missingText : (string) (reset($errors)[0] ?? $missingText);
+            if (! $missing && isset($errors['estimated_hours']) && $errors['estimated_hours'][0] === self::MISSING_HOURS_MESSAGE) {
+                $message = self::MISSING_HOURS_MESSAGE;
+            }
 
             throw new TicketActionException($message, 422, $errors);
         }

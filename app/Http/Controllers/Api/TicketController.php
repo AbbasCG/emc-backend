@@ -622,7 +622,7 @@ class TicketController extends Controller
         $estimateBefore = TicketWorkEstimate::snapshot($ticket);
         try {
             if ($request->filled('assigned_to_id') || $request->filled('task_scope') || $request->filled('task_points')) {
-                $estimate = TicketWorkEstimate::resolve($ticket, $estimateInput);
+                $estimate = TicketWorkEstimate::resolve($ticket, $estimateInput, requireHours: $request->filled('assigned_to_id'));
             } elseif ($request->filled('estimated_hours')) {
                 // No assignee and no size/points: only the approximate duration was given. (null never clears.)
                 $estimate = ['estimated_hours' => round((float) $request->estimated_hours, 2)];
@@ -904,6 +904,19 @@ class TicketController extends Controller
             ], 422);
         }
 
+        // Submitting work for review: the assignee records the ACTUAL duration NOW (it is read-only during review and is what
+        // gets credited). Judged after the other validation and before anything is written.
+        $actualMinutes = null;
+        if ($request->resolution_type === 'RESOLVED' && $ticket->assigned_to_id !== null) {
+            [$actualMinutes, $actualError, $actualCode] = app(TicketCreditService::class)->resolveActualMinutes($request->input('actual_minutes'));
+            if ($actualCode === TicketCreditService::CODE_ACTUAL_REQUIRED) {
+                $actualError = TicketCreditService::ACTUAL_REQUIRED_FOR_SUBMIT_MESSAGE;
+            }
+            if ($actualError !== null) {
+                return response()->json(['success' => false, 'message' => $actualError, 'code' => $actualCode, 'errors' => ['actual_minutes' => [$actualError]]], 422);
+            }
+        }
+
         DB::beginTransaction();
         try {
             $prevState = $ticket->status;
@@ -930,6 +943,7 @@ class TicketController extends Controller
                     $updateData['submitted_by_id'] = $user->id;
                     $updateData['submitted_at'] = now();
                     $updateData['review_round'] = (int) $ticket->review_round + 1;
+                    $updateData['actual_minutes'] = $actualMinutes;
                 } else {
                     $updateData['resolved_at'] = now();
                 }
@@ -981,6 +995,9 @@ class TicketController extends Controller
                     : ($newStatus === 'RESOLVED'
                         ? 'تم حل المشكلة وتدوين الإجراءات المتخذة'
                         : 'تعذر الحل: ' . $request->unresolved_reason),
+                // The details stay public (reporters read this row); the claimed duration lives in the metadata, which only internal
+                // viewers receive (TicketAccess::redactInternal), so reviewers can audit earlier rounds after a rework clears actual_minutes.
+                'metadata' => $submitForReview ? ['claimed_actual_minutes' => (int) $actualMinutes, 'review_round' => (int) $ticket->review_round] : null,
                 'logged_at' => now(),
             ]);
 
@@ -1062,6 +1079,11 @@ class TicketController extends Controller
 
         if (! $this->canManage($user, (int) $ticket->department_id)) {
             return $this->forbidden('إعادة التوجيه متاحة فقط لقائد الإدارة المعنية.');
+        }
+
+        // Under review the size, points and durations are read-only: an attempt to send one is refused with the stable code.
+        if (in_array($ticket->status, TicketAccess::REVIEW_STAGES, true) && TicketWorkEstimate::lockedKeysIn($request->all()) !== []) {
+            return response()->json((new TicketActionException(TicketCreditService::REVIEW_VALUES_LOCKED_MESSAGE, 409, [], TicketCreditService::CODE_REVIEW_VALUES_LOCKED))->body(), 409);
         }
 
         if (! in_array($ticket->status, TicketAccess::REASSIGNABLE_STATUSES, true)) {

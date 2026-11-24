@@ -142,24 +142,33 @@ class TicketOpsController extends Controller
         ]);
     }
 
-    // POST /v1/tickets/{id}/approve-completion
-    public function approveCompletion(Request $request, int $id): JsonResponse
+    // POST /v1/tickets/{id}/confirm-review  (the one-click «تأكيد المراجعة»)
+    public function confirmReview(Request $request, int $id): JsonResponse
     {
-        // NO validation here: every field (the optional corrected estimate, `note` and the REQUIRED `actual_minutes`) is
-        // read raw and validated by the service AFTER the authorization and status checks, in one 422 with all the
-        // errors. Validating first would let a reporter, a plain member or another department's leader probe the
-        // request shape (422) instead of getting the same 403/404 as with a valid body.
+        // NO validation here: the request concerns the stage transition only. The optional `note` and the refusal of any value
+        // field (REVIEW_VALUES_LOCKED) are judged by the service AFTER the authorization and stage checks, so a reporter or a
+        // plain member cannot probe the request shape (422) instead of getting the same 403/404 as with a valid body.
         try {
-            $ticket = $this->credits->approveCompletion(
-                $id,
-                $request->user(),
-                TicketWorkEstimate::only($request->all()),
-                $request->input('note'),
-                $request->input('actual_minutes'),
-            );
+            $ticket = $this->deployments->confirmReview($id, $request->user(), $request->input('note'), $this->sentValues($request), $request->input('review_round'));
         } catch (TicketActionException $e) {
             return $this->refused($e);
         }
+        $deployment = $this->access->isDeploymentTicket($ticket);
+
+        return $this->deploymentResponse($ticket, $request, $deployment
+            ? 'تم تأكيد المراجعة واعتماد العمل للنشر على الموقع الحي. لم تُضَف أي نقاط أو ساعات بعد؛ تُضاف بعد تحقق المكلّف على الموقع.'
+            : 'تم تأكيد المراجعة وإغلاق التذكرة وإضافة النقاط والساعات إلى رصيد المكلف.');
+    }
+
+    // POST /v1/tickets/{id}/approve-completion  (kept for compatibility: the same confirmation, classic tickets only)
+    public function approveCompletion(Request $request, int $id): JsonResponse
+    {
+        try {
+            $ticket = $this->credits->approveCompletion($id, $request->user(), $request->input('note'), $this->sentValues($request), $request->input('review_round'));
+        } catch (TicketActionException $e) {
+            return $this->refused($e);
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'تم اعتماد إنجاز التذكرة وإضافة النقاط والساعات إلى رصيد المكلف.',
@@ -167,23 +176,24 @@ class TicketOpsController extends Controller
         ]);
     }
 
-    // POST /v1/tickets/{id}/approve-for-deploy
+    // POST /v1/tickets/{id}/approve-for-deploy  (kept for compatibility: the same confirmation, deployment tickets only)
     public function approveForDeploy(Request $request, int $id): JsonResponse
     {
-        // Same as approve-completion: NO validation here, the service validates after the gates (one 422).
         try {
-            $ticket = $this->deployments->approveForDeploy(
-                $id,
-                $request->user(),
-                TicketWorkEstimate::only($request->all()),
-                $request->input('note'),
-                $request->input('actual_minutes'),
-            );
+            $ticket = $this->deployments->approveForDeploy($id, $request->user(), $request->input('note'), $this->sentValues($request), $request->input('review_round'));
         } catch (TicketActionException $e) {
             return $this->refused($e);
         }
 
         return $this->deploymentResponse($ticket, $request, 'تم اعتماد العمل للنشر على الموقع الحي. لم تُضَف أي نقاط أو ساعات بعد؛ تُضاف بعد تحقق المكلّف على الموقع.');
+    }
+
+    /** The read-only review values (size, points, approximate and actual duration) a request body tries to send. @return array<string, mixed> */
+    private function sentValues(Request $request): array
+    {
+        $all = $request->all();
+
+        return array_intersect_key($all, array_flip(TicketWorkEstimate::lockedKeysIn($all)));
     }
 
     // POST /v1/tickets/{id}/mark-deployed
