@@ -943,6 +943,12 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
 Route::middleware(['auth:sanctum', 'role:'.implode(',', OperationsBoardController::WORK_BOARD_ROLES), 'throttle:60,1'])->prefix('operations')->group(function () {
     Route::get('work-board', [OperationsBoardController::class, 'workBoard']);
 });
+// طلبات المستشارين — القراءة فقط (القائمة + التفاصيل): دور الفئة الإدارية أو الصلاحية الصريحة consultant_applications.view («عرض طلبات الاستشاريين»).
+// فتح الصفحة (organizational_departments.consultant_applications) لا يكفي وحده؛ الصلاحية هي ما يفتح البيانات. اعتماد/رفض الطلب (PUT .../status) يبقى في مجموعة role: أدناه.
+Route::middleware(['auth:sanctum', 'role.or.permission:consultant_applications.view,admin,super_admin,tech_admin,operations_manager'])->prefix('admin')->group(function () {
+    Route::get('consultant-applications',                         [AdminConsultantApplicationController::class, 'index']);
+    Route::get('consultant-applications/{consultantApplication}', [AdminConsultantApplicationController::class, 'show']);
+});
 // ─── Phase 3: Operations — auth:sanctum + role:admin ─────────────────────────
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations_manager'])->prefix('admin')->group(function () {
 
@@ -969,9 +975,8 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     Route::get('visitor-analytics/top',      [\App\Http\Controllers\Admin\VisitorAnalyticsController::class, 'top']);
     Route::get('visitor-analytics/errors',   [\App\Http\Controllers\Admin\VisitorAnalyticsController::class, 'errors']);
 
-    // طلبات المستشارين — مراجعة واعتماد
-    Route::get('consultant-applications',                                [AdminConsultantApplicationController::class, 'index']);
-    Route::get('consultant-applications/{consultantApplication}',        [AdminConsultantApplicationController::class, 'show']);
+    // طلبات المستشارين — اعتماد/رفض/تعديل الحالة: الفئة الإدارية فقط. القراءة (القائمة والتفاصيل) في مجموعتها الخاصة قبل هذه المجموعة
+    // (role.or.permission:consultant_applications.view)، فلا تمنح صلاحية القراءة أي كتابة.
     Route::put('consultant-applications/{consultantApplication}/status', [AdminConsultantApplicationController::class, 'updateStatus']);
 
     // Tasks
