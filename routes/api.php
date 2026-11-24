@@ -938,6 +938,11 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
         Route::post('weekly-reports',                [WeeklyReportController::class, 'store']);
     });
 });
+// The GLOBAL work board (tasks + assigned tickets of everyone, public-safe cards; see OperationsWorkBoard). Its own group because its
+// role list is the page's (OperationsBoardController::WORK_BOARD_ROLES), which is wider than the shared group above by four roles.
+Route::middleware(['auth:sanctum', 'role:'.implode(',', OperationsBoardController::WORK_BOARD_ROLES), 'throttle:60,1'])->prefix('operations')->group(function () {
+    Route::get('work-board', [OperationsBoardController::class, 'workBoard']);
+});
 // ─── Phase 3: Operations — auth:sanctum + role:admin ─────────────────────────
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations_manager'])->prefix('admin')->group(function () {
 

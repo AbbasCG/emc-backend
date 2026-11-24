@@ -9,6 +9,7 @@ use App\Models\PermissionNode;
 use App\Models\UserPermissionAssignment;
 use App\Services\DepartmentAccessService;
 use App\Services\PermissionDelegationService;
+use App\Support\PermissionGovernance;
 
 class DepartmentPermissionController extends Controller
 {
@@ -141,11 +142,15 @@ class DepartmentPermissionController extends Controller
         $manager = $request->user();
         $permissionName = $request->permission_name;
 
+        if (! PermissionGovernance::mayChange($manager, [$permissionName])) {
+            return response()->json(['success' => false, 'message' => PermissionGovernance::MESSAGE], 403);
+        }
         if (!$delegationService->canDelegate($manager, $employee, $permissionName)) {
             return response()->json(['success' => false, 'message' => 'You do not have the right to delegate this permission to this user.'], 403);
         }
 
         $permission = Permission::where('name', $permissionName)->first();
+        $previousState = UserPermissionAssignment::where('user_id', $employee->id)->where('permission_id', $permission->id)->value('state');
 
         UserPermissionAssignment::updateOrCreate(
             ['user_id' => $employee->id, 'permission_id' => $permission->id],
@@ -159,6 +164,7 @@ class DepartmentPermissionController extends Controller
         );
 
         $employee->flushPermissionCache();
+        PermissionGovernance::logChange('user_permission_granted', $employee, [$permissionName], [], ['target_user_id' => $employee->id, 'state' => 'allow', 'previous_state' => $previousState], $request);
 
         return response()->json(['success' => true, 'message' => 'Permission granted successfully.']);
     }
@@ -175,12 +181,16 @@ class DepartmentPermissionController extends Controller
         $manager = $request->user();
         $permissionName = $request->permission_name;
 
+        if (! PermissionGovernance::mayChange($manager, [$permissionName])) {
+            return response()->json(['success' => false, 'message' => PermissionGovernance::MESSAGE], 403);
+        }
         // Even to revoke, manager must have delegation rights over this user for this permission
         if (!$delegationService->canDelegate($manager, $employee, $permissionName)) {
             return response()->json(['success' => false, 'message' => 'You do not have the right to revoke this permission from this user.'], 403);
         }
 
         $permission = Permission::where('name', $permissionName)->first();
+        $previousState = UserPermissionAssignment::where('user_id', $employee->id)->where('permission_id', $permission->id)->value('state');
 
         // Either delete the assignment or explicitly deny it. 
         // We will explicitly deny it to handle inherited permissions as well.
@@ -196,6 +206,7 @@ class DepartmentPermissionController extends Controller
         );
 
         $employee->flushPermissionCache();
+        PermissionGovernance::logChange('user_permission_revoked', $employee, [], [$permissionName], ['target_user_id' => $employee->id, 'state' => 'deny', 'previous_state' => $previousState], $request);
 
         return response()->json(['success' => true, 'message' => 'Permission revoked successfully.']);
     }

@@ -20,12 +20,20 @@ class TicketActivityLog extends Model
         'performed_by',
         'performed_by_name',
         'details',
+        'metadata',
         'logged_at',
     ];
 
     protected $casts = [
         'logged_at' => 'datetime',
+        'metadata' => 'array',
     ];
+
+    /**
+     * Structured facts about a row (today: the reviewer's relation to the ticket on the review rows). Hidden in every
+     * serialization; TicketAccess::redactInternal makes it visible for the people who may read internal rows.
+     */
+    protected $hidden = ['metadata'];
 
     public function ticket(): BelongsTo
     {

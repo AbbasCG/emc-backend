@@ -19,6 +19,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
+use Tests\Concerns\GrantsTicketReviewPermissions;
 use Tests\TestCase;
 
 /**
@@ -33,6 +34,7 @@ use Tests\TestCase;
 class TicketDeploymentCycleTest extends TestCase
 {
     use RefreshDatabase;
+    use GrantsTicketReviewPermissions;
 
     private const DUPLICATE = 'تم اعتماد هذه التذكرة وإضافة رصيدها مسبقًا.';
 
@@ -60,13 +62,16 @@ class TicketDeploymentCycleTest extends TestCase
         $this->member = $this->deptMember();
         $this->reporter = $this->user('student');
         $this->admin = $this->user('admin');
+        // Reviewing is a permission now (tickets.review_completion): both the leader and the global admin hold it (never the participation one).
+        $this->grantTicketReview($this->leader);
+        $this->grantTicketReview($this->admin);
     }
 
     // ── Fixtures ─────────────────────────────────────────────────────────────
 
     private function user(string $role = 'student'): User
     {
-        return User::factory()->create(['role' => $role, 'is_active' => true]);
+        return $this->grantReviewToReviewerRole(User::factory()->create(['role' => $role, 'is_active' => true]));
     }
 
     private function deptMember(): User
@@ -412,10 +417,11 @@ class TicketDeploymentCycleTest extends TestCase
 
         // A valid AND an invalid body get the same authorization answer (no 422 probing).
         foreach ([['actual_minutes' => 75], ['actual_minutes' => 0, 'task_points' => 9999]] as $body) {
-            $this->approveDeploy($t, $body, $this->assignee)->assertForbidden()->assertJsonPath('code', 'SELF_REVIEW');
-            $this->approveDeploy($onBehalf, $body, $x)->assertForbidden()->assertJsonPath('code', 'SELF_REVIEW');
-            $this->approveDeploy($selfLeader, $body, $this->leader)->assertForbidden()->assertJsonPath('code', 'SELF_REVIEW');
-            $this->approveDeploy($t, $body, $this->member)->assertForbidden()->assertJsonMissingPath('code');
+            // Deliberately changed (was SELF_REVIEW): no review permission / the participation permission is missing.
+            $this->approveDeploy($t, $body, $this->assignee)->assertForbidden()->assertJsonPath('code', 'REVIEW_PERMISSION_REQUIRED');
+            $this->approveDeploy($onBehalf, $body, $x)->assertForbidden()->assertJsonPath('code', 'PARTICIPATION_PERMISSION_REQUIRED');
+            $this->approveDeploy($selfLeader, $body, $this->leader)->assertForbidden()->assertJsonPath('code', 'PARTICIPATION_PERMISSION_REQUIRED');
+            $this->approveDeploy($t, $body, $this->member)->assertForbidden()->assertJsonPath('code', 'REVIEW_PERMISSION_REQUIRED');
             $this->approveDeploy($t, $body, $this->reporter)->assertForbidden();
             $this->approveDeploy($t, $body, $otherLeader)->assertNotFound();
             $this->approveDeploy($medium, $body, $this->leader)->assertForbidden()->assertJsonPath('code', 'HR_APPROVAL_REQUIRED');

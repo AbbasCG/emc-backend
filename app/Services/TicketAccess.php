@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Exceptions\TicketActionException;
 use App\Models\Department;
 use App\Models\DepartmentalUnit;
 use App\Models\Task;
@@ -9,6 +10,7 @@ use App\Models\TeamMember;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Models\VolunteerProfile;
+use App\Support\Permissions;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -58,6 +60,27 @@ class TicketAccess
      * by its assignee and waiting for a manager to route it again (REJECTED_BY_ASSIGNEE).
      */
     public const REASSIGNABLE_STATUSES = ['ASSIGNED', 'IN_PROGRESS', 'REJECTED_BY_ASSIGNEE'];
+
+    /**
+     * Refusals of the review gate (approve-completion, approve-for-deploy, return-for-rework), in the order they are judged:
+     * the base permission, then the participation permission, then the department scope.
+     */
+    public const CODE_REVIEW_PERMISSION_REQUIRED = 'REVIEW_PERMISSION_REQUIRED';
+    public const CODE_PARTICIPATION_PERMISSION_REQUIRED = 'PARTICIPATION_PERMISSION_REQUIRED';
+    public const REVIEW_PERMISSION_MESSAGE = 'لا تملك صلاحية «مراجعة واعتماد إنجاز التذاكر»؛ اطلبها من مسؤول الصلاحيات.';
+
+    /** How a reviewer is tied to a ticket (the order the list is always reported in). */
+    public const RELATION_CREATOR = 'creator';
+    public const RELATION_ASSIGNEE = 'assignee';
+    public const RELATION_SUBMITTER = 'submitter';
+    public const RELATION_LABELS = ['creator' => 'منشئ التذكرة', 'assignee' => 'المكلّف بها', 'submitter' => 'من أرسل إنجازها للمراجعة'];
+
+    /** Why a viewer who manages the department cannot review right now (review_context.reason). */
+    public const REASON_MISSING_PERMISSION = 'missing_permission';
+    public const REASON_NEEDS_PARTICIPATION = 'needs_participation_permission';
+
+    /** @var array<int, bool> assignee id => unavailable?, remembered per instance (see assigneeUnavailable) */
+    private array $unavailable = [];
 
     /** @var array<int, array<int, int>> department ids led by a user id, looked up once per request */
     private array $led = [];
@@ -263,9 +286,9 @@ class TicketAccess
     }
 
     /**
-     * May this user review (approve or return) the work submitted on this ticket? A department leader or a global
-     * role, and NEVER the person who did the work (not even a leader who assigned the ticket to themselves, nor a
-     * global role that is the assignee) nor the person who submitted it for review. Nobody approves their own work.
+     * May this user review (approve or return) the work submitted on this ticket? See reviewRefusal() for the rule:
+     * the review permission, the participation permission when they created / are assigned / submitted the ticket, and
+     * the department scope (a leader of it or a global role).
      */
     public function canReviewCompletion(User $user, Ticket $ticket): bool
     {
@@ -277,10 +300,162 @@ class TicketAccess
     {
         return $ticket->status === $status
             && $ticket->assigned_to_id !== null
-            && (int) $ticket->assigned_to_id !== (int) $user->id
-            // The person who submitted the work (a global role may submit on the assignee's behalf) cannot review it.
-            && ($ticket->submitted_by_id === null || (int) $ticket->submitted_by_id !== (int) $user->id)
-            && $this->canManage($user, (int) $ticket->department_id);
+            && $this->reviewRefusal($user, $ticket) === null;
+    }
+
+    /**
+     * Does this user hold «مراجعة واعتماد إنجاز التذاكر»? Judged on the user's EFFECTIVE permissions (role + per-user
+     * allow/deny), never through the Gate, so the super_admin Gate::before bypass cannot stand in for a missing grant
+     * and a per-user deny binds everybody.
+     */
+    public function holdsReviewPermission(User $user): bool
+    {
+        return $user->hasPermission(Permissions::TICKETS_REVIEW_COMPLETION);
+    }
+
+    /** Does this user hold «اعتماد التذاكر التي أشارك فيها»? Explicit grants only (it is not part of Permissions::all()). */
+    public function holdsParticipationPermission(User $user): bool
+    {
+        return $user->hasPermission(Permissions::TICKETS_REVIEW_PARTICIPATED);
+    }
+
+    /**
+     * How $user is tied to this ticket, as a list in the fixed order creator, assignee, submitter (empty = not a
+     * participant). Every identity column counts: created_by_id, assigned_to_id and submitted_by_id (whoever submitted the
+     * current review round, possibly a global role acting for the assignee). A global role is NOT a participant merely by
+     * being global; only the actual columns count.
+     *
+     * @return array<int, string>
+     */
+    public function reviewerRelation(User $user, Ticket $ticket): array
+    {
+        $id = (int) $user->id;
+        $relation = [];
+        if ($ticket->created_by_id !== null && (int) $ticket->created_by_id === $id) {
+            $relation[] = self::RELATION_CREATOR;
+        }
+        if ($ticket->assigned_to_id !== null && (int) $ticket->assigned_to_id === $id) {
+            $relation[] = self::RELATION_ASSIGNEE;
+        }
+        if ($ticket->submitted_by_id !== null && (int) $ticket->submitted_by_id === $id) {
+            $relation[] = self::RELATION_SUBMITTER;
+        }
+
+        return $relation;
+    }
+
+    /**
+     * «منشئ التذكرة والمكلّف بها» for the internal log rows and the refusal message.
+     *
+     * @param  array<int, string>  $relation
+     */
+    public function describeRelation(array $relation): string
+    {
+        return implode(' و', array_map(fn ($r) => self::RELATION_LABELS[$r] ?? $r, $relation));
+    }
+
+    /**
+     * THE review rule, in one place. Null when $user may review this ticket (in any review stage; the stage itself is
+     * judged by the caller), otherwise why not:
+     *
+     *   1. no tickets.review_completion                                      -> CODE_REVIEW_PERMISSION_REQUIRED
+     *   2. created / assigned / submitted it and no tickets.review_participated -> CODE_PARTICIPATION_PERMISSION_REQUIRED
+     *   3. not a leader of its department and not a global role               -> 'not_manager' (the plain manager refusal)
+     *
+     * Order matters for what an unauthorised caller learns: the permission refusals say only what the caller already
+     * knows (they can open the ticket and know their own part in it); scope comes last.
+     *
+     * @return ?string one of the CODE_* constants above, or 'not_manager'
+     */
+    public function reviewRefusal(User $user, Ticket $ticket): ?string
+    {
+        if (! $this->holdsReviewPermission($user)) {
+            return self::CODE_REVIEW_PERMISSION_REQUIRED;
+        }
+        if ($this->reviewerRelation($user, $ticket) !== [] && ! $this->holdsParticipationPermission($user)) {
+            return self::CODE_PARTICIPATION_PERMISSION_REQUIRED;
+        }
+        if (! $this->canManage($user, (int) $ticket->department_id)) {
+            return 'not_manager';
+        }
+
+        return null;
+    }
+
+    /**
+     * Throw the refusal reviewRefusal() names (403, with the stable code for the two permission cases). Every review
+     * endpoint calls this right after it has found the ticket visible (404 first), before it reads the request body or the
+     * status, so a refused caller can neither probe the stage nor store anything.
+     *
+     * @throws TicketActionException
+     */
+    public function requireReviewer(User $user, Ticket $ticket, string $managerMessage): void
+    {
+        $refusal = $this->reviewRefusal($user, $ticket);
+        if ($refusal === null) {
+            return;
+        }
+
+        throw match ($refusal) {
+            // Someone tied to the ticket gets the wording that helps them: another authorised reviewer must review it (asking for the
+            // permission alone would not change that, they would still need the participation permission). An unrelated person is
+            // told to request the permission.
+            self::CODE_REVIEW_PERMISSION_REQUIRED => new TicketActionException(
+                ($relation = $this->reviewerRelation($user, $ticket)) !== []
+                    ? 'أنت '.$this->describeRelation($relation).'؛ ويلزم أن يراجع هذه التذكرة مراجع مخوّل آخر.'
+                    : self::REVIEW_PERMISSION_MESSAGE,
+                403, [], self::CODE_REVIEW_PERMISSION_REQUIRED,
+            ),
+            self::CODE_PARTICIPATION_PERMISSION_REQUIRED => new TicketActionException(
+                'أنت '.$this->describeRelation($this->reviewerRelation($user, $ticket)).'؛ ولاعتماد تذكرة تشارك فيها تلزمك صلاحية «اعتماد التذاكر التي أشارك فيها» إضافةً إلى صلاحية المراجعة، أو يعتمدها مراجع آخر.',
+                403, [], self::CODE_PARTICIPATION_PERMISSION_REQUIRED,
+            ),
+            default => new TicketActionException($managerMessage, 403),
+        };
+    }
+
+    /**
+     * Why this viewer can or cannot review the ticket right now, for the UI (`review_context` on the detail payload).
+     * Null for anyone who is not a potential reviewer of the ticket's department (no leadership and no global role) and
+     * for tickets outside a review stage, so a reporter or a plain member learns nothing.
+     *
+     * @return ?array{stage: string, can_review: bool, reason: ?string, relation: array<int, string>, needs_participation_permission: bool, required_permissions: array<int, string>}
+     */
+    public function reviewContext(User $user, Ticket $ticket): ?array
+    {
+        // Cheap, in-memory checks first: no query is made for a ticket outside a review stage or for a viewer who cannot manage it.
+        $stage = match (true) {
+            $ticket->assigned_to_id === null => null,
+            $ticket->status === self::PENDING_REVIEW => self::PENDING_REVIEW,
+            $this->isDeploymentTicket($ticket) && in_array($ticket->status, [self::APPROVED_FOR_DEPLOY, self::PENDING_VERIFICATION], true) => $ticket->status,
+            default => null,
+        };
+        if ($stage === null || ! $this->canManage($user, (int) $ticket->department_id)) {
+            return null;
+        }
+        // PENDING_VERIFICATION only matters while the assignee cannot act (the manager's rescue return): the one query of this method,
+        // asked only of a viewer who manages the department AND holds the review permission.
+        if ($stage === self::PENDING_VERIFICATION && (! $this->holdsReviewPermission($user) || ! $this->assigneeUnavailable($ticket))) {
+            return null;
+        }
+
+        $relation = $this->reviewerRelation($user, $ticket);
+        $refusal = $this->reviewRefusal($user, $ticket);
+
+        return [
+            'stage' => (string) $ticket->status,
+            'can_review' => $refusal === null,
+            'reason' => match ($refusal) {
+                self::CODE_REVIEW_PERMISSION_REQUIRED => self::REASON_MISSING_PERMISSION,
+                self::CODE_PARTICIPATION_PERMISSION_REQUIRED => self::REASON_NEEDS_PARTICIPATION,
+                default => null,
+            },
+            'relation' => $relation,
+            'needs_participation_permission' => $relation !== [],
+            'required_permissions' => $relation !== []
+                ? [Permissions::TICKETS_REVIEW_COMPLETION, Permissions::TICKETS_REVIEW_PARTICIPATED]
+                : [Permissions::TICKETS_REVIEW_COMPLETION],
+        ];
     }
 
     public function isDeploymentTicket(Ticket $ticket): bool
@@ -298,7 +473,26 @@ class TicketAccess
             return true;
         }
 
-        $assignee = User::find($ticket->assigned_to_id);
+        // Remembered per assignee for the life of this instance (a list of tickets shares one answer per person). A caller that changes
+        // an assignee's account state and keeps using the SAME instance calls forgetAssigneeAvailability().
+        $id = (int) $ticket->assigned_to_id;
+
+        return $this->unavailable[$id] ??= $this->computeAssigneeUnavailable($id);
+    }
+
+    /** Drop the remembered answers (all, or one person's) after an account or volunteer-status change made through this instance. */
+    public function forgetAssigneeAvailability(?int $userId = null): void
+    {
+        if ($userId === null) {
+            $this->unavailable = [];
+        } else {
+            unset($this->unavailable[$userId]);
+        }
+    }
+
+    private function computeAssigneeUnavailable(int $userId): bool
+    {
+        $assignee = User::find($userId);
 
         return ! $assignee || ! $assignee->is_active || ! TaskWorkflowService::canAssignTaskToUser((int) $assignee->id)['allowed'];
     }
@@ -485,10 +679,22 @@ class TicketAccess
             // The relations are only loaded to name people; the `credit` and `deployment` blocks carry the names.
             unset($data['creditor'], $data['review_approver'], $data['reviewApprover'], $data['deployer']);
 
+            // Only a potential reviewer (leader / global role) on a ticket in a review stage gets the why-not; the key is absent otherwise.
+            if (($context = $this->reviewContext($user, $ticket)) !== null) {
+                $data['review_context'] = $context;
+            }
+
+            // The log's structured metadata (the reviewer's relation to the ticket) leaves ONLY here: the model hides it in
+            // every other serialization, so a raw ->toArray() can never leak it to a reporter or a plain member.
+            if (isset($data['activity_logs']) && is_array($data['activity_logs']) && $ticket->relationLoaded('activityLogs')) {
+                $data['activity_logs'] = $ticket->activityLogs->map(fn ($log) => $log->makeVisible('metadata')->toArray())->values()->all();
+            }
+
             return $data;
         }
 
         $data['internal_notes'] = null;
+        unset($data['review_context']);
 
         // The planning estimate (size, points, hours), the credit and their change history are for the same people
         // who may read internal notes: managers, global roles and the assignee. A plain department member can open

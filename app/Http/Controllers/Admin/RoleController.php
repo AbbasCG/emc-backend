@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Services\ActivityLogger;
+use App\Support\PermissionGovernance;
 use App\Support\Permissions;
 use App\Support\ProtectedAuthority;
 use Illuminate\Http\JsonResponse;
@@ -55,7 +56,9 @@ class RoleController extends Controller
         ]);
 
         if (! empty($data['permissions'])) {
+            PermissionGovernance::requireSuperAdmin($request->user(), $data['permissions']);
             $role->syncPermissions($data['permissions']);
+            PermissionGovernance::logChange('role_permissions_changed', $role, $data['permissions'], [], ['role' => $role->name], $request);
         }
 
         app(ActivityLogger::class)->log('role_created', $role);
@@ -85,7 +88,10 @@ class RoleController extends Controller
         ]));
 
         if (array_key_exists('permissions', $data)) {
+            $before = $role->permissions()->pluck('name')->all();
+            PermissionGovernance::requireSuperAdmin($request->user(), array_merge(array_diff($data['permissions'], $before), array_diff($before, $data['permissions'])));
             $role->syncPermissions($data['permissions']);
+            $this->logRoleDiff($request, $role, $before, $data['permissions']);
         }
 
         app(ActivityLogger::class)->log('role_updated', $role);
@@ -191,7 +197,13 @@ class RoleController extends Controller
             'permissions.*' => 'string|exists:permissions,name',
         ]);
 
+        // Diff the role's permission names: adding or removing the participation key is for super_admin only (admin + manage_roles,
+        // tech_admin and leaders are refused, the rest of the edit is not applied either).
+        $before = $role->permissions()->pluck('name')->all();
+        PermissionGovernance::requireSuperAdmin($user, array_merge(array_diff($data['permissions'], $before), array_diff($before, $data['permissions'])));
+
         $role->syncPermissions($data['permissions']);
+        $this->logRoleDiff($request, $role, $before, $data['permissions']);
 
         app(ActivityLogger::class)->log(
             'role_permissions_replaced',
@@ -210,20 +222,30 @@ class RoleController extends Controller
 
     public function grantPermission(Request $request, Role $role): JsonResponse
     {
+        $data = $request->validate(['permission' => 'required|string|exists:permissions,name']);
+        PermissionGovernance::requireSuperAdmin($request->user(), [$data['permission']]);
         $this->requireSuperAdmin($request);
 
-        $data = $request->validate(['permission' => 'required|string|exists:permissions,name']);
+        $had = $role->permissions()->where('name', $data['permission'])->exists();
         $role->grantPermission($data['permission']);
+        if (! $had) {
+            PermissionGovernance::logChange('role_permissions_changed', $role, [$data['permission']], [], ['role' => $role->name], $request);
+        }
 
         return response()->json(['success' => true, 'message' => "Permission [{$data['permission']}] granted to [{$role->name}]."]);
     }
 
     public function revokePermission(Request $request, Role $role): JsonResponse
     {
+        $data = $request->validate(['permission' => 'required|string|exists:permissions,name']);
+        PermissionGovernance::requireSuperAdmin($request->user(), [$data['permission']]);
         $this->requireSuperAdmin($request);
 
-        $data = $request->validate(['permission' => 'required|string|exists:permissions,name']);
+        $had = $role->permissions()->where('name', $data['permission'])->exists();
         $role->revokePermission($data['permission']);
+        if ($had) {
+            PermissionGovernance::logChange('role_permissions_changed', $role, [], [$data['permission']], ['role' => $role->name], $request);
+        }
 
         return response()->json(['success' => true, 'message' => "Permission [{$data['permission']}] revoked from [{$role->name}]."]);
     }
@@ -248,6 +270,7 @@ class RoleController extends Controller
             'knowledge'         => 'قاعدة المعرفة',
             'ai'                => 'الذكاء الاصطناعي',
             'system'            => 'النظام والإعدادات',
+            'tickets'           => 'التذاكر',
             'workshop_requests' => 'طلبات البرامج التدريبية',
             'members'           => 'الأعضاء',
             'departments_g'     => 'الإدارات',
@@ -256,6 +279,16 @@ class RoleController extends Controller
             'assignments_g'     => 'الواجبات',
             default             => $group,
         };
+    }
+
+    /** @param array<int, string> $before @param array<int, string> $after */
+    private function logRoleDiff(Request $request, Role $role, array $before, array $after): void
+    {
+        $added = array_values(array_diff($after, $before));
+        $removed = array_values(array_diff($before, $after));
+        if ($added !== [] || $removed !== []) {
+            PermissionGovernance::logChange('role_permissions_changed', $role, $added, $removed, ['role' => $role->name], $request);
+        }
     }
 
     private function requireSuperAdmin(Request $request): void

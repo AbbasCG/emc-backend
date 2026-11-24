@@ -92,6 +92,7 @@ class PermissionController extends Controller
             'knowledge'         => 'قاعدة المعرفة',
             'ai'                => 'الذكاء الاصطناعي',
             'system'            => 'النظام والإعدادات',
+            'tickets'           => 'التذاكر',
             'workshop_requests' => 'طلبات البرامج التدريبية',
             'members'           => 'الأعضاء',
             'departments_g'     => 'الإدارات',

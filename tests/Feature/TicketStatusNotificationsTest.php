@@ -17,6 +17,7 @@ use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
+use Tests\Concerns\GrantsTicketReviewPermissions;
 use Tests\TestCase;
 
 /**
@@ -34,6 +35,7 @@ use Tests\TestCase;
 class TicketStatusNotificationsTest extends TestCase
 {
     use RefreshDatabase;
+    use GrantsTicketReviewPermissions;
 
     private const SECRET_NOTE = 'ملاحظة داخلية سرية للإدارة';
     private const SECRET_SUMMARY = 'تفاصيل الحل الداخلية الحساسة';
@@ -56,6 +58,7 @@ class TicketStatusNotificationsTest extends TestCase
         ]);
         $this->leader = $this->user('programs_manager');
         $this->dept->update(['leader_id' => $this->leader->id]);
+        $this->grantTicketReview($this->leader);
         $this->submitter = $this->user('student', ['name' => 'مقدّم البلاغ', 'email' => 'submitter@example.com']);
         $this->assignee = $this->user('student');
     }
@@ -64,7 +67,7 @@ class TicketStatusNotificationsTest extends TestCase
 
     private function user(string $role, array $attrs = []): User
     {
-        return User::factory()->create(array_merge(['role' => $role, 'is_active' => true], $attrs));
+        return $this->grantReviewToReviewerRole(User::factory()->create(array_merge(['role' => $role, 'is_active' => true], $attrs)));
     }
 
     private function ticket(array $over = []): Ticket

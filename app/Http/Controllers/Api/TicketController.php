@@ -250,7 +250,14 @@ class TicketController extends Controller
         }
 
         $this->ticketQuery->sort($query, $f);
-        $tickets = $query->paginate($f['per_page'] ?? TicketQuery::DEFAULT_PER_PAGE);
+        $perPage = $f['per_page'] ?? TicketQuery::DEFAULT_PER_PAGE;
+        $tickets = $query->paginate($perPage);
+        $tab = $f['tab'] ?? null;
+        // A tab change can leave the requested page past the end of the new result: answer with the LAST page (current_page says which)
+        // instead of an empty list for a tab that has rows.
+        if ($tab !== null && $tickets->isEmpty() && $tickets->total() > 0 && $tickets->currentPage() > $tickets->lastPage()) {
+            $tickets = $query->paginate($perPage, ['*'], 'page', $tickets->lastPage());
+        }
 
         // The people named in the `deployment` block are needed only for the rows a viewer reads as STAFF (a submitter's row is
         // a whitelist that never carries them), so they are loaded for those rows alone.
@@ -258,10 +265,11 @@ class TicketController extends Controller
 
         // Same capability computation as show() - one canonical source, so the work queue and the
         // detail page can never drift on which actions a given ticket/user pair actually permits.
-        $tickets->getCollection()->transform(function (Ticket $ticket) use ($user, $lite) {
+        $tickets->getCollection()->transform(function (Ticket $ticket) use ($user, $lite, $tab) {
             // Someone who is only the submitter gets the reporter-safe row (no assignee, deadline or notes).
             if ($this->isReporterOnly($user, $ticket)) {
-                return app(TicketReporterView::class)->row($ticket);
+                // With a tab the row keeps the same two keys as every other row (a submitter has no step and nobody to name).
+                return app(TicketReporterView::class)->row($ticket) + ($tab !== null ? ['needs_my_action' => false, 'awaiting' => null] : []);
             }
 
             $data = $ticket->toArray();
@@ -270,14 +278,26 @@ class TicketController extends Controller
                 unset($data['description']);
             }
             $data['capabilities'] = $this->buildCapabilities($user, $ticket);
+            $data = $this->access->redactInternal($user, $ticket, $data);
 
-            return $this->access->redactInternal($user, $ticket, $data);
+            if ($tab !== null) {
+                // The queue's tabs: whether THIS viewer has a step to take (the very predicate of the needs_action tab), and who must act
+                // next. `awaiting` names workflow actors, so it follows the same redaction as the status detail (managers, global roles
+                // and the assignee); a plain department member keeps the status only.
+                $data['needs_my_action'] = $this->ticketQuery->needsMyAction($user, $ticket);
+                $data['awaiting'] = $this->access->canSeeInternal($user, $ticket) ? $this->ticketQuery->awaiting($ticket) : null;
+            }
+
+            return $data;
         });
 
-        return response()->json([
-            'success' => true,
-            'data' => $tickets,
-        ]);
+        $response = ['success' => true, 'data' => $tickets];
+        if ($tab !== null) {
+            // Counts of every tab for THIS viewer: same visibility and same other filters as the list, so each equals that tab's total.
+            $response['meta'] = ['tab' => $tab, 'tab_counts' => $this->ticketQuery->tabCounts($user, $f)];
+        }
+
+        return response()->json($response);
     }
 
     /**

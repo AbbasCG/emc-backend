@@ -19,6 +19,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
+use Tests\Concerns\GrantsTicketReviewPermissions;
 use Tests\TestCase;
 
 /**
@@ -32,6 +33,7 @@ use Tests\TestCase;
 class TicketCreditTest extends TestCase
 {
     use RefreshDatabase;
+    use GrantsTicketReviewPermissions;
 
     private const DUPLICATE = 'تم اعتماد هذه التذكرة وإضافة رصيدها مسبقًا.';
 
@@ -50,6 +52,8 @@ class TicketCreditTest extends TestCase
         parent::setUp();
 
         [$this->dept, $this->leader] = $this->deptWithLeader('programs_manager');
+        // Reviewing is a permission now (tickets.review_completion); the leader of the department holds it, on top of leading it.
+        $this->grantTicketReview($this->leader);
         $this->assignee = $this->deptMember();
         $this->member = $this->deptMember();
         $this->reporter = $this->user('student');
@@ -59,7 +63,7 @@ class TicketCreditTest extends TestCase
 
     private function user(string $role = 'student'): User
     {
-        return User::factory()->create(['role' => $role, 'is_active' => true]);
+        return $this->grantReviewToReviewerRole(User::factory()->create(['role' => $role, 'is_active' => true]));
     }
 
     /** @return array{0: Department, 1: User} */
@@ -929,8 +933,9 @@ class TicketCreditTest extends TestCase
         $this->assertFalse($caps['approve_completion']);
         $this->assertFalse($caps['return_for_rework']);
         $state = $this->ledgerState();
-        $this->approveCompletion($t, $x)->assertForbidden()->assertJsonPath('code', 'SELF_REVIEW');
-        $this->returnForRework($t, $x)->assertForbidden()->assertJsonPath('code', 'SELF_REVIEW');
+        // Deliberately changed (was SELF_REVIEW): X holds the review permission but submitted this round, so the participation permission is required too.
+        $this->approveCompletion($t, $x)->assertForbidden()->assertJsonPath('code', 'PARTICIPATION_PERMISSION_REQUIRED');
+        $this->returnForRework($t, $x)->assertForbidden()->assertJsonPath('code', 'PARTICIPATION_PERMISSION_REQUIRED');
         $this->assertSame($state, $this->ledgerState());
 
         // Another reviewer can; the capability says so.
@@ -1061,8 +1066,9 @@ class TicketCreditTest extends TestCase
         $this->returnForRework($working)->assertStatus(409)->assertJsonPath('code', 'NOT_PENDING_REVIEW');
 
         $selfLeader = $this->submitted(['assigned_to_id' => $this->leader->id]);
-        $this->approveCompletion($selfLeader, $this->leader)->assertForbidden()->assertJsonPath('code', 'SELF_REVIEW');
-        $this->returnForRework($selfLeader, $this->leader)->assertForbidden()->assertJsonPath('code', 'SELF_REVIEW');
+        // Deliberately changed (was SELF_REVIEW): a leader who is the assignee needs the participation permission as well.
+        $this->approveCompletion($selfLeader, $this->leader)->assertForbidden()->assertJsonPath('code', 'PARTICIPATION_PERMISSION_REQUIRED');
+        $this->returnForRework($selfLeader, $this->leader)->assertForbidden()->assertJsonPath('code', 'PARTICIPATION_PERMISSION_REQUIRED');
 
         $medium = $this->submitted(['task_scope' => 'medium', 'task_points' => 100]);
         $this->approveCompletion($medium)->assertForbidden()->assertJsonPath('code', 'HR_APPROVAL_REQUIRED');
@@ -1076,27 +1082,34 @@ class TicketCreditTest extends TestCase
         $this->assertNotNull($noHours->fresh()->credited_hours);
     }
 
-    public function test_self_review_is_answered_plainly_before_the_leaders_only_refusal(): void
+    public function test_missing_permissions_are_answered_plainly_before_the_leaders_only_refusal(): void
     {
-        $own = 'لا يمكنك اعتماد إنجاز مهمة أنت المكلف بها؛ يلزم مراجع آخر.';
+        // Deliberately rewritten: SELF_REVIEW for the assignee / submitter became "you lack the review permission"
+        // (they hold none), and PARTICIPATION_PERMISSION_REQUIRED for a reviewer who is tied to the ticket (TicketReviewPermissionTest).
         $t = $this->submitted();
 
-        // An ordinary member who is the assignee: the self-review answer, with its code.
-        $this->approveCompletion($t, $this->assignee)->assertForbidden()->assertJsonPath('code', 'SELF_REVIEW')->assertJsonPath('message', $own);
-        $this->returnForRework($t, $this->assignee)->assertForbidden()->assertJsonPath('code', 'SELF_REVIEW')
-            ->assertJsonPath('message', 'لا يمكنك إعادة مهمة أنت المكلف بها؛ يلزم مراجع آخر.');
+        // An ordinary member who is the assignee: no review permission, with its code and message.
+        // Wording for someone tied to the ticket: another authorised reviewer must review it (no "request the permission" instruction).
+        $this->approveCompletion($t, $this->assignee)->assertForbidden()->assertJsonPath('code', 'REVIEW_PERMISSION_REQUIRED')
+            ->assertJsonPath('message', 'أنت المكلّف بها؛ ويلزم أن يراجع هذه التذكرة مراجع مخوّل آخر.');
+        $this->returnForRework($t, $this->assignee)->assertForbidden()->assertJsonPath('code', 'REVIEW_PERMISSION_REQUIRED');
 
-        // The ordinary member who SUBMITTED it for someone else (a plain member as submitter) likewise.
+        // The ordinary member who SUBMITTED it for someone else likewise.
         $other = $this->submitted();
         $other->forceFill(['submitted_by_id' => $this->member->id])->save();
-        $this->approveCompletion($other, $this->member)->assertForbidden()->assertJsonPath('code', 'SELF_REVIEW')->assertJsonPath('message', \App\Services\TicketCreditService::SUBMITTER_MESSAGE);
-        $this->returnForRework($other, $this->member)->assertForbidden()->assertJsonPath('code', 'SELF_REVIEW');
+        $this->approveCompletion($other, $this->member)->assertForbidden()->assertJsonPath('code', 'REVIEW_PERMISSION_REQUIRED');
+        $this->returnForRework($other, $this->member)->assertForbidden()->assertJsonPath('code', 'REVIEW_PERMISSION_REQUIRED');
 
-        // A plain member who is neither: the generic leaders-only 403, without a code.
-        $plain = $this->approveCompletion($t, $this->member)->assertForbidden();
+        // A plain member who is neither: the same code with the "request the permission" wording (judged before the department scope).
+        $this->approveCompletion($t, $this->member)->assertForbidden()->assertJsonPath('code', 'REVIEW_PERMISSION_REQUIRED')
+            ->assertJsonPath('message', \App\Services\TicketAccess::REVIEW_PERMISSION_MESSAGE);
+
+        // Somebody who HOLDS the permission but neither leads the department nor is global: the generic leaders-only 403, without a code.
+        $holder = $this->grantTicketReview($this->deptMember());
+        $plain = $this->approveCompletion($t, $holder)->assertForbidden();
         $this->assertStringContainsString('لقائد الإدارة', $plain->json('message'));
         $this->assertArrayNotHasKey('code', $plain->json());
-        $this->assertArrayNotHasKey('code', $this->returnForRework($t, $this->member)->assertForbidden()->json());
+        $this->assertArrayNotHasKey('code', $this->returnForRework($t, $holder)->assertForbidden()->json());
 
         // Somebody who cannot even view the ticket still gets 404.
         $this->approveCompletion($t, $this->user('student'))->assertNotFound();
