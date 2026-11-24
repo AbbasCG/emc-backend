@@ -393,11 +393,15 @@ class AccessControlActionPermissionsTest extends TestCase
     {
         $reporter = $this->user('student');
 
-        return Ticket::create(array_merge([
+        $ticket = Ticket::create(array_merge([
             'ticket_number' => 'EMC-TCK-A-'.Str::random(8), 'title' => 'تذكرة', 'description' => 'وصف', 'ticket_category' => 'OLD_ISSUE', 'priority' => 'MEDIUM',
             'department_id' => $dept->id, 'created_by_id' => $reporter->id, 'created_by_name' => 'مبلّغ', 'status' => 'PENDING_REVIEW',
             'accepted_at' => now()->subHour(), 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2, 'resolution_summary' => 'تم',
         ], $over));
+        // The assignee's recorded actual duration (not mass assignable): a complete review needs it.
+        $ticket->forceFill(['actual_minutes' => 60])->save();
+
+        return $ticket;
     }
 
     public function test_granting_participation_makes_approve_completion_available_to_that_user_only_and_page_access_alone_is_refused(): void
@@ -417,7 +421,7 @@ class AccessControlActionPermissionsTest extends TestCase
         // Before: the assignee is refused (review_completion alone is not enough on one's own ticket).
         $this->assertFalse($show($mineA, $a)->json('data.capabilities.approve_completion'));
         Sanctum::actingAs($a->fresh());
-        $this->postJson("/api/v1/tickets/{$mineA->id}/approve-completion", ['actual_minutes' => 60])->assertForbidden()->assertJsonPath('code', 'PARTICIPATION_PERMISSION_REQUIRED');
+        $this->postJson("/api/v1/tickets/{$mineA->id}/approve-completion")->assertForbidden()->assertJsonPath('code', 'PARTICIPATION_PERMISSION_REQUIRED');
 
         // The grant goes through the Access Control API.
         Sanctum::actingAs($superAdmin);
@@ -426,9 +430,9 @@ class AccessControlActionPermissionsTest extends TestCase
         $this->assertTrue($show($mineA, $a)->json('data.capabilities.approve_completion'));
         $this->assertFalse($show($mineB, $b)->json('data.capabilities.approve_completion'), 'another tech_admin is unaffected');
         Sanctum::actingAs($b->fresh());
-        $this->postJson("/api/v1/tickets/{$mineB->id}/approve-completion", ['actual_minutes' => 60])->assertForbidden()->assertJsonPath('code', 'PARTICIPATION_PERMISSION_REQUIRED');
+        $this->postJson("/api/v1/tickets/{$mineB->id}/approve-completion")->assertForbidden()->assertJsonPath('code', 'PARTICIPATION_PERMISSION_REQUIRED');
         Sanctum::actingAs($a->fresh());
-        $this->postJson("/api/v1/tickets/{$mineA->id}/approve-completion", ['actual_minutes' => 60])->assertOk()->assertJsonPath('data.status', 'RESOLVED');
+        $this->postJson("/api/v1/tickets/{$mineA->id}/approve-completion")->assertOk()->assertJsonPath('data.status', 'RESOLVED');
 
         // A user who merely has page access (a department leader without the review permission) is refused with REVIEW_PERMISSION_REQUIRED.
         $leader = $this->user('programs_manager');
@@ -436,7 +440,7 @@ class AccessControlActionPermissionsTest extends TestCase
         $other = $this->ticketFor($dept, []);
         $this->assertFalse($show($other, $leader)->json('data.capabilities.approve_completion'));
         Sanctum::actingAs($leader);
-        $this->postJson("/api/v1/tickets/{$other->id}/approve-completion", ['actual_minutes' => 60])->assertForbidden()->assertJsonPath('code', 'REVIEW_PERMISSION_REQUIRED');
+        $this->postJson("/api/v1/tickets/{$other->id}/approve-completion")->assertForbidden()->assertJsonPath('code', 'REVIEW_PERMISSION_REQUIRED');
 
         // Revoking takes the capability away again.
         Sanctum::actingAs($superAdmin);

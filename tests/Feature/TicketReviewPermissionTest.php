@@ -97,6 +97,10 @@ class TicketReviewPermissionTest extends TestCase
         if ($deployment) {
             $t->forceFill(['requires_deployment' => true]);
         }
+        // The assignee records the actual duration at submission (60 minutes here); it is read-only during review.
+        if (($over['status'] ?? 'PENDING_REVIEW') === 'PENDING_REVIEW') {
+            $t->forceFill(['actual_minutes' => 60]);
+        }
         if ($submittedBy !== null) {
             $t->forceFill(['submitted_by_id' => $submittedBy, 'submitted_at' => now()]);
         }
@@ -112,12 +116,12 @@ class TicketReviewPermissionTest extends TestCase
         return $this->postJson("/api/v1/tickets/{$t->id}/{$endpoint}", $body);
     }
 
-    private function approve(Ticket $t, User $as, array $body = ['actual_minutes' => 60])
+    private function approve(Ticket $t, User $as, array $body = [])
     {
         return $this->act($t, 'approve-completion', $as, $body);
     }
 
-    private function approveDeploy(Ticket $t, User $as, array $body = ['actual_minutes' => 60])
+    private function approveDeploy(Ticket $t, User $as, array $body = [])
     {
         return $this->act($t, 'approve-for-deploy', $as, $body);
     }
@@ -258,7 +262,7 @@ class TicketReviewPermissionTest extends TestCase
         $dept2 = Department::create(['name' => 'N'.Str::random(4), 'name_ar' => 'ثانية', 'slug' => 'n-'.Str::random(6), 'status' => 'active', 'is_active' => true, 'leader_id' => $nobody->id]);
         $this->assertNotNull($dept2);
         $fresh = $this->ticket([], deployment: true);
-        $this->approveDeploy($fresh, $this->leader, ['actual_minutes' => 60])->assertOk();
+        $this->approveDeploy($fresh, $this->leader)->assertOk();
         $this->act($fresh, 'mark-deployed', $this->grantTicketReview($this->user('admin')), ['live_url' => 'https://example.com/x'])->assertOk();
     }
 
@@ -487,11 +491,11 @@ class TicketReviewPermissionTest extends TestCase
         $admin = $this->grantTicketReview($this->user('admin'));
         $t = $this->ticket(['status' => 'IN_PROGRESS', 'created_by_id' => $this->leader->id], deployment: true);
 
-        $this->act($t, 'complete-task', $this->assignee, ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'تم التنفيذ كاملًا'])->assertOk();
+        $this->act($t, 'complete-task', $this->assignee, ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'تم التنفيذ كاملًا', 'actual_minutes' => 90])->assertOk();
         $this->assertSame($this->assignee->id, (int) $t->fresh()->submitted_by_id);
 
         // The creator-leader approves for deployment (participation permission held).
-        $this->approveDeploy($t, $this->leader, ['actual_minutes' => 90])->assertOk()->assertJsonPath('data.status', 'APPROVED_FOR_DEPLOY');
+        $this->approveDeploy($t, $this->leader)->assertOk()->assertJsonPath('data.status', 'APPROVED_FOR_DEPLOY');
         $this->assertSame(0, TicketCredit::count(), 'nothing credited before the live verification');
 
         // mark-deployed keeps its own rule: judged by a manager who is not the assignee; the review permissions are NOT extended to it.
@@ -511,7 +515,7 @@ class TicketReviewPermissionTest extends TestCase
         $this->grantTicketReview($this->leader, participated: true);
         $t = $this->ticket(['assigned_to_id' => $this->leader->id], deployment: true);
 
-        $this->approveDeploy($t, $this->leader, ['actual_minutes' => 60])->assertOk();
+        $this->approveDeploy($t, $this->leader)->assertOk();
         $this->act($t, 'mark-deployed', $this->leader, ['live_url' => 'https://example.com/live'])->assertForbidden()->assertJsonPath('code', 'SELF_REVIEW');
         $this->assertFalse($this->show($t, $this->leader)->json('data.capabilities.mark_deployed'));
     }
@@ -539,7 +543,7 @@ class TicketReviewPermissionTest extends TestCase
 
         // approve-for-deploy and return-for-rework rows (internal actions) carry it too, and say it in Arabic.
         $d = $this->ticket(['created_by_id' => $this->leader->id], deployment: true);
-        $this->approveDeploy($d, $this->leader, ['actual_minutes' => 60])->assertOk();
+        $this->approveDeploy($d, $this->leader)->assertOk();
         $row = TicketActivityLog::where('ticket_id', $d->id)->where('action', 'APPROVED_FOR_DEPLOY')->sole();
         $this->assertSame(['creator'], $row->metadata['reviewer_relation']);
         $this->assertStringContainsString('منشئ التذكرة', $row->details);

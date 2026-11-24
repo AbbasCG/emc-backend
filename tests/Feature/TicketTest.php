@@ -255,6 +255,7 @@ class TicketTest extends TestCase
         $this->actingAs($assignee)->postJson("/api/v1/tickets/{$ticket->id}/complete-task", [
             'resolution_type' => 'RESOLVED',
             'resolution_summary' => 'تم إصلاح المشكلة عبر تحديث الخادم',
+            'actual_minutes' => 45, // recorded by the assignee when sending the work to review
             // The assignee only SUBMITS the work; the ticket is RESOLVED by the final approval (TicketCreditTest).
         ])->assertOk()->assertJsonPath('data.status', 'PENDING_REVIEW');
     }
@@ -507,7 +508,7 @@ class TicketTest extends TestCase
         $ticket = $this->makeTicket($dept);
 
         $this->actingAs($leader)->postJson("/api/v1/tickets/{$ticket->id}/approve", [
-            'sla_hours' => 24, 'unit_id' => $unit->id, 'assigned_to_id' => $member->id, 'task_scope' => 'simple', 'task_points' => 30,
+            'sla_hours' => 24, 'unit_id' => $unit->id, 'assigned_to_id' => $member->id, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2,
         ])->assertOk();
 
         $this->assertSame('ASSIGNED', $ticket->fresh()->status);
@@ -574,12 +575,12 @@ class TicketTest extends TestCase
         $ticket = $this->makeTicket($dept);
 
         $this->actingAs($leader)->postJson("/api/v1/tickets/{$ticket->id}/approve", [
-            'sla_hours' => 24, 'unit_id' => $unit->id, 'assigned_to_id' => $globalAdmin->id, 'task_scope' => 'simple', 'task_points' => 30,
+            'sla_hours' => 24, 'unit_id' => $unit->id, 'assigned_to_id' => $globalAdmin->id, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2,
         ])->assertStatus(422);
 
         $this->makeUnitMemberOf($dept, $unit, $globalAdmin);
         $this->actingAs($leader)->postJson("/api/v1/tickets/{$ticket->id}/approve", [
-            'sla_hours' => 24, 'unit_id' => $unit->id, 'assigned_to_id' => $globalAdmin->id, 'task_scope' => 'simple', 'task_points' => 30,
+            'sla_hours' => 24, 'unit_id' => $unit->id, 'assigned_to_id' => $globalAdmin->id, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2,
         ])->assertOk();
     }
 

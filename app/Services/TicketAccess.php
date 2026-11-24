@@ -615,6 +615,43 @@ class TicketAccess
     }
 
     /**
+     * Would the one-click review confirmation be accepted for this viewer right now? Same judgement as
+     * TicketCreditService::reviewGate (stage, review gate, HR gate, complete stored values, an assignee for a deployment).
+     */
+    public function canConfirmReview(User $user, Ticket $ticket): bool
+    {
+        return $this->reviewBlockers($user, $ticket) === [] && $this->canReviewCompletion($user, $ticket) && $ticket->credited_at === null;
+    }
+
+    /**
+     * Why a viewer who PASSES the review permission/participation/scope cannot confirm right now (empty for anyone else and
+     * when nothing blocks): HR_APPROVAL_REQUIRED, ASSIGNEE_UNAVAILABLE (deployment tickets), REVIEW_DATA_INCOMPLETE (with the
+     * missing values named in the message).
+     *
+     * @return array<int, array{code: string, message_ar: string, missing?: array<int, string>}>
+     */
+    public function reviewBlockers(User $user, Ticket $ticket): array
+    {
+        if (! $this->canReviewCompletion($user, $ticket) || $ticket->credited_at !== null) {
+            return [];
+        }
+
+        $blockers = [];
+        if ($this->needsHrApproval($ticket->task_scope) && ! $this->isHrApprover($user)) {
+            $blockers[] = ['code' => TicketCreditService::CODE_HR_REQUIRED, 'message_ar' => 'اعتماد هذه التذكرة يحتاج إلى اعتماد الموارد البشرية لأن حجمها أعلى من «بسيطة».'];
+        }
+        if ($this->isDeploymentTicket($ticket) && $this->assigneeUnavailable($ticket)) {
+            $blockers[] = ['code' => TicketCreditService::CODE_ASSIGNEE_UNAVAILABLE, 'message_ar' => 'المكلف غير متاح (غير فعّال أو محجوب أو محذوف)؛ أعد التذكرة للتنفيذ ثم أعد إسنادها.'];
+        }
+        $missing = TicketWorkEstimate::missingForReview($ticket);
+        if ($missing !== []) {
+            $blockers[] = ['code' => TicketCreditService::CODE_REVIEW_DATA_INCOMPLETE, 'message_ar' => TicketWorkEstimate::incompleteMessage($missing), 'missing' => $missing];
+        }
+
+        return $blockers;
+    }
+
+    /**
      * The per-ticket, per-user action set. It REPORTS what the mutating endpoints would allow; it
      * never decides on its own.
      *
@@ -635,20 +672,13 @@ class TicketAccess
             'accept_task' => $isAssignee && $ticket->assigned_to_id !== null && $ticket->status === 'ASSIGNED',
             'reject_task' => $isAssignee && $ticket->assigned_to_id !== null && $ticket->status === 'ASSIGNED',
             'complete_task' => $isAssignee && $ticket->status === 'IN_PROGRESS',
-            // The final approval (the one step that credits) and the way back to the assignee. Both need a leader or
-            // a global role who is NOT the assignee; approving work above «بسيطة» also needs an HR approver. A
-            // ticket with no size yet (legacy) is approved together with the size the approver supplies, so the HR
-            // gate for it is judged by the endpoint once that size is known.
-            // A deployment ticket is approved FOR DEPLOYMENT instead (and closed only by the assignee's live verification).
-            'approve_completion' => ! $this->isDeploymentTicket($ticket)
-                && $this->canReviewCompletion($user, $ticket)
-                && $ticket->credited_at === null
-                && (! $this->needsHrApproval($ticket->task_scope) || $this->isHrApprover($user)),
-            'approve_for_deploy' => $this->isDeploymentTicket($ticket)
-                && $this->canReviewCompletion($user, $ticket)
-                && $ticket->credited_at === null
-                && (! $this->needsHrApproval($ticket->task_scope) || $this->isHrApprover($user))
-                && ! $this->assigneeUnavailable($ticket),
+            // «تأكيد المراجعة»: the one-click move to the NEXT stage of the ticket's path (classic: final approval + the one credit;
+            // deployment ticket: approved for deployment, nothing credited). It is true only when the server would accept it: the
+            // review gate, the HR gate (a size above «بسيطة») and COMPLETE stored values. `approve_completion` / `approve_for_deploy`
+            // are kept for compatibility and mirror it for their own kind of ticket.
+            'confirm_review' => $confirm = $this->canConfirmReview($user, $ticket),
+            'approve_completion' => $confirm && ! $this->isDeploymentTicket($ticket),
+            'approve_for_deploy' => $confirm && $this->isDeploymentTicket($ticket),
             'mark_deployed' => $this->canMarkDeployed($user, $ticket),
             'verify_resolved' => $this->canVerifyLive($user, $ticket),
             'verify_failed' => $this->canVerifyLive($user, $ticket),
@@ -676,6 +706,9 @@ class TicketAccess
             $data['credit'] = $this->creditInfo($ticket);
             $data['deployment'] = $this->deploymentInfo($ticket);
             $data['workflow'] = $this->workflow($ticket);
+            // The review round the viewer is looking at (incremented at every submission, classic tickets included): send it back with
+            // confirm-review so a stale screen is refused (409 STALE_REVIEW).
+            $data['review_round'] = (int) $ticket->review_round;
             // The relations are only loaded to name people; the `credit` and `deployment` blocks carry the names.
             unset($data['creditor'], $data['review_approver'], $data['reviewApprover'], $data['deployer']);
 
@@ -683,6 +716,8 @@ class TicketAccess
             if (($context = $this->reviewContext($user, $ticket)) !== null) {
                 $data['review_context'] = $context;
             }
+            // What blocks a viewer who is otherwise allowed to confirm the review (an empty list for everyone else).
+            $data['review_blockers'] = $this->reviewBlockers($user, $ticket);
 
             // The log's structured metadata (the reviewer's relation to the ticket) leaves ONLY here: the model hides it in
             // every other serialization, so a raw ->toArray() can never leak it to a reporter or a plain member.
@@ -694,7 +729,7 @@ class TicketAccess
         }
 
         $data['internal_notes'] = null;
-        unset($data['review_context']);
+        unset($data['review_context'], $data['review_blockers'], $data['review_round']);
 
         // The planning estimate (size, points, hours), the credit and their change history are for the same people
         // who may read internal notes: managers, global roles and the assignee. A plain department member can open

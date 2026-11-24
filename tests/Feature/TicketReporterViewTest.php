@@ -472,15 +472,15 @@ class TicketReporterViewTest extends TestCase
 
     public function test_the_real_dispatch_puts_the_ticket_number_and_a_date_in_the_email_but_no_internal_data(): void
     {
-        $t = $this->ticket(['status' => 'IN_PROGRESS', 'resolved_at' => null, 'task_scope' => 'simple', 'task_points' => 30]);
+        $t = $this->ticket(['status' => 'IN_PROGRESS', 'resolved_at' => null, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2]);
         Sanctum::actingAs($this->assignee);
         $this->postJson("/api/v1/tickets/{$t->id}/complete-task", [
-            'resolution_type' => 'RESOLVED', 'resolution_summary' => 'تفاصيل الحل الداخلية الحساسة',
+            'resolution_type' => 'RESOLVED', 'resolution_summary' => 'تفاصيل الحل الداخلية الحساسة', 'actual_minutes' => 60,
         ])->assertOk();
         // The email goes out at the FINAL approval, not when the assignee submits the work.
         Queue::assertNothingPushed();
         Sanctum::actingAs($this->leader);
-        $this->postJson("/api/v1/tickets/{$t->id}/approve-completion", ['actual_minutes' => 60])->assertOk();
+        $this->postJson("/api/v1/tickets/{$t->id}/approve-completion")->assertOk();
 
         $mailable = null;
         Queue::assertPushed(SendLoggedEmailJob::class, function ($job) use (&$mailable) {

@@ -248,7 +248,7 @@ class TicketWorkEstimateTest extends TestCase
 
     public function test_reassign_reuses_the_stored_estimate_and_checks_a_changed_scope_against_it(): void
     {
-        $t = $this->ticket(['status' => 'ASSIGNED', 'assigned_to_id' => $this->member->id, 'task_scope' => 'simple', 'task_points' => 30]);
+        $t = $this->ticket(['status' => 'ASSIGNED', 'assigned_to_id' => $this->member->id, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2]);
 
         // Stored values are enough.
         $this->reassign($t)->assertOk()->assertJsonPath('data.task_points', 30);
@@ -271,7 +271,7 @@ class TicketWorkEstimateTest extends TestCase
 
     public function test_bulk_reassign_applies_the_rule_per_ticket_and_a_failing_ticket_fails_alone(): void
     {
-        $withPoints = $this->ticket(['status' => 'ASSIGNED', 'assigned_to_id' => $this->member->id, 'task_scope' => 'medium', 'task_points' => 90]);
+        $withPoints = $this->ticket(['status' => 'ASSIGNED', 'assigned_to_id' => $this->member->id, 'task_scope' => 'medium', 'task_points' => 90, 'estimated_hours' => 3]);
         $legacy = $this->ticket(['status' => 'ASSIGNED', 'assigned_to_id' => $this->member->id]);
 
         Sanctum::actingAs($this->leader);
@@ -312,7 +312,7 @@ class TicketWorkEstimateTest extends TestCase
         $a = $this->ticket(['status' => 'ASSIGNED', 'assigned_to_id' => $this->member->id]);
 
         Sanctum::actingAs($this->leader);
-        $this->postJson('/api/v1/tickets/bulk', ['action' => 'reassign', 'ticket_ids' => [$a->id], 'assigned_to_id' => $this->assignee->id, 'task_scope' => 'simple', 'task_points' => 999])
+        $this->postJson('/api/v1/tickets/bulk', ['action' => 'reassign', 'ticket_ids' => [$a->id], 'assigned_to_id' => $this->assignee->id, 'task_scope' => 'simple', 'task_points' => 999, 'estimated_hours' => 2])
             ->assertStatus(422)->assertJsonStructure(['errors' => ['task_points']]);
         $this->postJson('/api/v1/tickets/bulk', ['action' => 'reassign', 'ticket_ids' => [$a->id], 'assigned_to_id' => $this->assignee->id, 'task_scope' => 'bogus'])
             ->assertStatus(422)->assertJsonValidationErrors(['task_scope']);
@@ -497,7 +497,7 @@ class TicketWorkEstimateTest extends TestCase
 
         Sanctum::actingAs($this->assignee);
         $this->postJson("/api/v1/tickets/{$t->id}/accept-task")->assertOk();
-        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'تم إصلاح المشكلة بالكامل'])->assertOk();
+        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'تم إصلاح المشكلة بالكامل', 'actual_minutes' => 60])->assertOk();
 
         $this->assertSame('PENDING_REVIEW', $t->fresh()->status, 'the assignee only submits the work for review');
         $this->assertSame($awards, VolunteerPointAward::count(), 'submitting for review credits nothing');

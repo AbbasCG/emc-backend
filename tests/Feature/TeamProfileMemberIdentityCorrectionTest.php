@@ -252,6 +252,7 @@ class TeamProfileMemberIdentityCorrectionTest extends TestCase
         ]);
         $this->actingAs($leader)->postJson("/api/v1/tickets/{$ticket->id}/approve", [
             'sla_hours' => 24, 'assigned_to_id' => $user->id, 'task_scope' => 'simple', 'task_points' => 30,
+            'estimated_hours' => 2, // the approximate duration is now required at assignment
         ])->assertOk();
 
         // Now move the member away.

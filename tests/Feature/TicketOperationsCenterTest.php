@@ -650,10 +650,10 @@ class TicketOperationsCenterTest extends TestCase
         $this->member($this->deptA);
         // CHANGED: the leader is one of the suggestions, and a manager naming THEMSELVES the assignee cannot change the
         // estimate in the same call, so the ticket already carries the estimate the request repeats.
-        $t = $this->ticket($this->deptA, ['status' => 'ASSIGNED', 'assigned_to_id' => $this->member($this->deptA)->id, 'task_scope' => 'simple', 'task_points' => 30]);
+        $t = $this->ticket($this->deptA, ['status' => 'ASSIGNED', 'assigned_to_id' => $this->member($this->deptA)->id, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2]);
 
         foreach ($this->actingAs($this->leaderA)->getJson(self::API."/{$t->id}/assignment-suggestions")->json('data.candidates') as $c) {
-            $this->actingAs($this->leaderA)->postJson(self::API."/{$t->id}/reassign", ['assigned_to_id' => $c['id'], 'task_scope' => 'simple', 'task_points' => 30])->assertOk();
+            $this->actingAs($this->leaderA)->postJson(self::API."/{$t->id}/reassign", ['assigned_to_id' => $c['id'], 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2])->assertOk();
         }
     }
 
@@ -778,7 +778,7 @@ class TicketOperationsCenterTest extends TestCase
         $pending = $this->ticket($this->deptA, ['status' => 'PENDING_APPROVAL']);
         $notifications = PlatformNotification::count();
 
-        $d = $this->actingAs($this->leaderA)->postJson(self::API.'/bulk', ['action' => 'reassign', 'assigned_to_id' => $emp->id, 'ticket_ids' => [$t1->id, $t2->id, $pending->id], 'reason' => 'إعادة توزيع', 'task_scope' => 'simple', 'task_points' => 30])->json('data');
+        $d = $this->actingAs($this->leaderA)->postJson(self::API.'/bulk', ['action' => 'reassign', 'assigned_to_id' => $emp->id, 'ticket_ids' => [$t1->id, $t2->id, $pending->id], 'reason' => 'إعادة توزيع', 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2])->json('data');
 
         $this->assertSame(2, $d['succeeded']);
         $this->assertSame($emp->id, $t1->fresh()->assigned_to_id);
@@ -1002,7 +1002,7 @@ class TicketOperationsCenterTest extends TestCase
 
         $this->actingAs($emp)->postJson(self::API."/{$t->id}/reject-task", ['assignee_rejection_reason' => 'لا أستطيع'])->assertOk();
         // Was 409 (a declined ticket could not be routed again); now handing it straight back to the decliner is a 422.
-        $this->actingAs($this->leaderA)->postJson(self::API."/{$t->id}/reassign", ['assigned_to_id' => $emp->id, 'task_scope' => 'simple', 'task_points' => 30])
+        $this->actingAs($this->leaderA)->postJson(self::API."/{$t->id}/reassign", ['assigned_to_id' => $emp->id, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2])
             ->assertStatus(422)->assertJsonStructure(["errors" => ["assigned_to_id"]]);
     }
 
@@ -1014,7 +1014,7 @@ class TicketOperationsCenterTest extends TestCase
         $new = $this->member($this->deptA);
         $t = $this->ticket($this->deptA, ['status' => 'IN_PROGRESS', 'assigned_to_id' => $old->id, 'accepted_at' => now()]);
 
-        $this->actingAs($this->leaderA)->postJson(self::API."/{$t->id}/reassign", ['assigned_to_id' => $new->id, 'reason' => 'نقل', 'task_scope' => 'simple', 'task_points' => 30])
+        $this->actingAs($this->leaderA)->postJson(self::API."/{$t->id}/reassign", ['assigned_to_id' => $new->id, 'reason' => 'نقل', 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2])
             ->assertOk()->assertJsonPath('data.assigned_to_id', $new->id)->assertJsonPath('data.status', 'ASSIGNED');
         // The estimate (set by this reassign) now has its own ESTIMATE_UPDATED row after the REASSIGNED one.
         $this->assertSame('REASSIGNED', TicketActivityLog::where('ticket_id', $t->id)->where('action', '!=', 'ESTIMATE_UPDATED')->latest('id')->value('action'));

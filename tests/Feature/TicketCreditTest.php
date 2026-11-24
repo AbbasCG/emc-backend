@@ -86,7 +86,11 @@ class TicketCreditTest extends TestCase
 
     private function ticket(array $over = []): Ticket
     {
-        return Ticket::create(array_merge([
+        // actual_minutes (the assignee's recorded duration) is not mass assignable: set it the way the app does.
+        $actual = $over['actual_minutes'] ?? null;
+        unset($over['actual_minutes']);
+
+        $ticket = Ticket::create(array_merge([
             'ticket_number' => 'EMC-TCK-C-'.Str::random(8),
             'title' => 'تعطل بوابة الدفع',
             'description' => 'وصف',
@@ -97,6 +101,12 @@ class TicketCreditTest extends TestCase
             'created_by_name' => 'مُبلِّغ',
             'status' => 'PENDING_APPROVAL',
         ], $over));
+
+        if ($actual !== null) {
+            $ticket->forceFill(['actual_minutes' => $actual])->save();
+        }
+
+        return $ticket;
     }
 
     /** A ticket whose assignee has submitted the work (simple, 30 points, 2.5 hours unless overridden). */
@@ -110,17 +120,19 @@ class TicketCreditTest extends TestCase
             'task_scope' => 'simple',
             'task_points' => 30,
             'estimated_hours' => 2.5,
+            // The assignee records the actual duration at submission (read-only during review): 150 minutes unless overridden.
+            'actual_minutes' => 150,
             'resolution_summary' => 'تم إصلاح المشكلة',
         ], $over));
     }
 
     /**
-     * The final approval. Since the ACTUAL duration is required, the helper sends 150 minutes (2.5 h, which is also what
-     * the fixtures' planning estimate says) unless a test passes its own `actual_minutes`; use approveRaw() to send none.
+     * The final approval (a stage transition only: the review values are the ones stored on the ticket, 150 actual minutes in the
+     * `submitted()` fixture). The body may carry only a `note`; value fields are refused (REVIEW_VALUES_LOCKED).
      */
     private function approveCompletion(Ticket $t, ?User $as = null, array $body = [])
     {
-        return $this->approveRaw($t, $as, array_merge(['actual_minutes' => 150], $body));
+        return $this->approveRaw($t, $as, $body);
     }
 
     private function approveRaw(Ticket $t, ?User $as = null, array $body = [])
@@ -167,7 +179,7 @@ class TicketCreditTest extends TestCase
         $this->postJson("/api/v1/tickets/{$t->id}/accept-task")->assertOk()->assertJsonPath('data.status', 'IN_PROGRESS');
         $this->assertSame($before, $this->ledgerState(), 'accepting credits nothing');
 
-        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'تم الحل بالكامل'])
+        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'تم الحل بالكامل', 'actual_minutes' => 150])
             ->assertOk()->assertJsonPath('data.status', 'PENDING_REVIEW')->assertJsonPath('data.credit.status', 'pending_review');
         $this->assertSame($before, $this->ledgerState(), 'submitting for review credits nothing');
         $fresh = $t->fresh();
@@ -201,7 +213,7 @@ class TicketCreditTest extends TestCase
 
         // A global role may act for the (missing) assignee; with nobody to credit it closes as before.
         Sanctum::actingAs($admin);
-        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'تم الحل بالكامل'])
+        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'تم الحل بالكامل', 'actual_minutes' => 150])
             ->assertOk()->assertJsonPath('data.status', 'RESOLVED');
 
         $this->assertSame($before, $this->ledgerState());
@@ -278,9 +290,9 @@ class TicketCreditTest extends TestCase
         $t = $this->submitted();
         $service = app(TicketCreditService::class);
 
-        $service->approveCompletion($t->id, $this->leader, [], null, 150);
+        $service->approveCompletion($t->id, $this->leader);
         try {
-            $service->approveCompletion($t->id, $this->leader, [], null, 150);
+            $service->approveCompletion($t->id, $this->leader);
             $this->fail('the second approval must be refused');
         } catch (TicketActionException $e) {
             $this->assertSame(409, $e->status);
@@ -322,7 +334,7 @@ class TicketCreditTest extends TestCase
         };
 
         try {
-            $racing->approveCompletion($t->id, $this->leader, [], null, 150);
+            $racing->approveCompletion($t->id, $this->leader);
             $this->fail('the unique index must stop the second credit');
         } catch (TicketActionException $e) {
             $this->assertSame(409, $e->status);
@@ -359,18 +371,18 @@ class TicketCreditTest extends TestCase
     }
 
     /**
-     * CHANGED (was: hours are optional and null hours credit zero). The estimate's hours are planning data only; whether
-     * they are set or not, the credit is the ACTUAL duration the approver enters.
+     * CHANGED (was: a ticket without estimated hours credited the actual duration the approver typed). The approximate duration is
+     * now set at assignment and is part of the complete data a review needs: without it the confirmation is a 422 and nothing changes.
      */
-    public function test_a_ticket_without_estimated_hours_still_credits_the_actual_duration(): void
+    public function test_a_ticket_without_estimated_hours_cannot_be_confirmed(): void
     {
         $t = $this->submitted(['estimated_hours' => null]);
+        $state = $this->ledgerState();
 
-        $this->approveCompletion($t, null, ['actual_minutes' => 45])->assertOk()->assertJsonPath('data.credit.points', 30)->assertJsonPath('data.credit.hours', 0.75)->assertJsonPath('data.credit.minutes', 45);
+        $this->approveCompletion($t)->assertStatus(422)->assertJsonPath('code', 'REVIEW_DATA_INCOMPLETE')->assertJsonStructure(['errors' => ['estimated_hours']]);
 
-        $this->assertSame(1, $this->awards($t)->count());
-        $this->assertEqualsWithDelta(0.75, $this->hours($this->assignee), 0.001);
-        $this->assertNull($t->fresh()->estimated_hours, 'the planning estimate is untouched');
+        $this->assertSame($state, $this->ledgerState());
+        $this->assertSame('PENDING_REVIEW', $t->fresh()->status);
     }
 
     public function test_hours_accumulate_on_the_assignees_existing_profile(): void
@@ -424,7 +436,7 @@ class TicketCreditTest extends TestCase
         Sanctum::actingAs($this->leader);
         $this->postJson("/api/v1/tickets/{$t->id}/approve", ['sla_hours' => 24, 'assigned_to_id' => $this->leader->id, 'task_scope' => 'simple', 'task_points' => 40, 'estimated_hours' => 1])->assertOk();
         $this->postJson("/api/v1/tickets/{$t->id}/accept-task")->assertOk();
-        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'أنجزتها بنفسي'])->assertOk()->assertJsonPath('data.status', 'PENDING_REVIEW');
+        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'أنجزتها بنفسي', 'actual_minutes' => 60])->assertOk()->assertJsonPath('data.status', 'PENDING_REVIEW');
 
         // They cannot approve or return it.
         $this->approveCompletion($t)->assertForbidden();
@@ -432,7 +444,7 @@ class TicketCreditTest extends TestCase
         $this->assertSame(0, $this->awards()->count());
 
         // A DIFFERENT approver closes it; the credit lands on the leader as assignee.
-        $this->approveCompletion($t, $this->user('executive_admin'), ['actual_minutes' => 60])->assertOk();
+        $this->approveCompletion($t, $this->user('executive_admin'))->assertOk();
         $award = $this->awards($t)->sole();
         $this->assertSame($this->leader->id, (int) $award->user_id);
         $this->assertSame(40, $award->points);
@@ -476,24 +488,27 @@ class TicketCreditTest extends TestCase
         $this->assertSame(250, $this->awards($t)->sole()->points);
     }
 
+    /** CHANGED (was: the approval request could shrink the size, still under the HR gate). The values are read-only now: any attempt is refused. */
     public function test_a_leader_cannot_shrink_the_size_in_the_request_to_skip_hr(): void
     {
         $t = $this->submitted(['task_scope' => 'medium', 'task_points' => 100]);
         $state = $this->ledgerState();
 
-        $this->approveCompletion($t, null, ['task_scope' => 'simple', 'task_points' => 30])->assertForbidden();
+        $this->approveCompletion($t, null, ['task_scope' => 'simple', 'task_points' => 30])->assertForbidden()->assertJsonPath('code', 'HR_APPROVAL_REQUIRED');
+        $this->approveCompletion($t, $this->user('admin'), ['task_scope' => 'simple', 'task_points' => 30])->assertStatus(422)->assertJsonPath('code', 'REVIEW_VALUES_LOCKED');
 
         $this->assertSame($state, $this->ledgerState());
         $this->assertSame('medium', $t->fresh()->task_scope, 'the refused attempt changed nothing');
     }
 
-    public function test_a_leader_cannot_upgrade_to_a_larger_size_without_hr_either(): void
+    public function test_a_leader_cannot_upgrade_to_a_larger_size_in_the_request_either(): void
     {
         $t = $this->submitted();
 
-        $this->approveCompletion($t, null, ['task_scope' => 'large', 'task_points' => 250])->assertForbidden();
+        $this->approveCompletion($t, null, ['task_scope' => 'large', 'task_points' => 250])->assertStatus(422)->assertJsonPath('code', 'REVIEW_VALUES_LOCKED');
 
         $this->assertSame(0, $this->awards()->count());
+        $this->assertSame('simple', $t->fresh()->task_scope);
     }
 
     public function test_outsiders_other_leaders_members_and_reporters_are_refused_without_leaking(): void
@@ -541,49 +556,59 @@ class TicketCreditTest extends TestCase
 
     // ═══ Legacy and incomplete tickets ═══════════════════════════════════════
 
-    public function test_a_legacy_ticket_without_size_and_points_needs_them_in_the_request(): void
+    /**
+     * CHANGED (was: the approval request supplied the missing size and points). Nothing can be sent with a confirmation now: the
+     * ticket is refused with the list of what is missing, returned for rework, completed by the manager, resubmitted and confirmed.
+     */
+    public function test_a_legacy_ticket_without_size_and_points_is_refused_then_completed_through_rework(): void
     {
         $t = $this->submitted(['task_scope' => null, 'task_points' => null, 'estimated_hours' => null]);
         $state = $this->ledgerState();
 
         $this->approveCompletion($t)->assertStatus(422)
-            ->assertJsonPath('message', 'حدّد حجم المهمة ونقاطها قبل اعتماد الإنجاز')
-            ->assertJsonPath('errors.task_scope.0', 'حدّد حجم المهمة ونقاطها قبل اعتماد الإنجاز')
-            ->assertJsonPath('errors.task_points.0', 'حدّد حجم المهمة ونقاطها قبل اعتماد الإنجاز');
+            ->assertJsonPath('code', 'REVIEW_DATA_INCOMPLETE')
+            ->assertJsonStructure(['errors' => ['task_scope', 'task_points', 'estimated_hours']]);
 
         // The assignment path keeps its own wording.
         Sanctum::actingAs($this->leader);
         $this->postJson("/api/v1/tickets/{$this->ticket()->id}/approve", ['sla_hours' => 24, 'assigned_to_id' => $this->assignee->id])
             ->assertStatus(422)->assertJsonPath('message', 'حدّد نقاط المهمة وحجمها قبل الإسناد');
-        $this->approveCompletion($t, null, ['task_scope' => 'simple'])->assertStatus(422)->assertJsonStructure(['errors' => ['task_points']]);
-        $this->approveCompletion($t, null, ['task_scope' => 'simple', 'task_points' => 500])->assertStatus(422)->assertJsonStructure(['errors' => ['task_points']]);
         $this->assertSame($state, $this->ledgerState());
         $this->assertSame('PENDING_REVIEW', $t->fresh()->status);
 
-        $this->approveCompletion($t, null, ['task_scope' => 'simple', 'task_points' => 35, 'estimated_hours' => 1.5, 'actual_minutes' => 90])->assertOk();
+        // Return it, complete the data (a manager, in progress), the assignee resubmits and the leader confirms.
+        $this->returnForRework($t)->assertOk();
+        Sanctum::actingAs($this->leader);
+        $this->patchJson("/api/v1/tickets/{$t->id}/work-estimate", ['task_scope' => 'simple', 'task_points' => 35, 'estimated_hours' => 1.5])->assertOk();
+        Sanctum::actingAs($this->assignee);
+        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'استكملت العمل', 'actual_minutes' => 90])->assertOk();
+        $this->approveCompletion($t)->assertOk();
 
         $this->assertSame(35, $this->awards($t)->sole()->points);
-        // CHANGED: the 1.5 h is now the ACTUAL duration the approver entered (90 min); the estimate is planning only.
         $this->assertEqualsWithDelta(1.5, $this->hours($this->assignee), 0.001);
         $this->assertSame(1, TicketActivityLog::where('ticket_id', $t->id)->where('action', 'ESTIMATE_UPDATED')->count());
-        $this->approveCompletion($t, null, ['task_scope' => 'simple', 'task_points' => 35])->assertStatus(409);
+        $this->approveCompletion($t)->assertStatus(409);
         $this->assertSame(1, $this->awards($t)->count());
     }
 
-    public function test_a_corrected_estimate_in_the_request_is_validated_logged_and_is_what_gets_credited(): void
+    /** CHANGED (was: a corrected estimate inside the approval request). The values are read-only; only a `note` is accepted and logged. */
+    public function test_values_in_the_confirmation_are_refused_and_only_the_note_is_logged(): void
     {
         $t = $this->submitted();
+        $state = $this->ledgerState();
 
-        $this->approveCompletion($t, null, ['task_points' => 45, 'estimated_hours' => 3, 'actual_minutes' => 120, 'note' => 'استغرقت أطول'])->assertOk();
+        $this->approveCompletion($t, null, ['task_points' => 45, 'estimated_hours' => 3, 'actual_minutes' => 120])->assertStatus(422)->assertJsonPath('code', 'REVIEW_VALUES_LOCKED');
+        $this->assertSame($state, $this->ledgerState());
+        $this->assertSame(30, $t->fresh()->task_points);
+
+        $this->approveCompletion($t, null, ['note' => 'استغرقت أطول'])->assertOk();
 
         $fresh = $t->fresh();
-        $this->assertSame(45, $fresh->task_points);
-        $this->assertSame(45, $fresh->credited_points);
-        $this->assertSame(45, $this->awards($t)->sole()->points);
-        // CHANGED: the corrected ESTIMATE (3 h) is a planning edit only; what is credited is the actual 120 min = 2 h.
-        $this->assertEqualsWithDelta(3.0, (float) $fresh->estimated_hours, 0.001);
-        $this->assertEqualsWithDelta(2.0, $this->hours($this->assignee), 0.001);
-        $this->assertSame(1, TicketActivityLog::where('ticket_id', $t->id)->where('action', 'ESTIMATE_UPDATED')->count());
+        $this->assertSame(30, $fresh->task_points);
+        $this->assertSame(30, $fresh->credited_points);
+        $this->assertSame(150, $fresh->credited_minutes);
+        $this->assertEqualsWithDelta(2.5, $this->hours($this->assignee), 0.001);
+        $this->assertSame(0, TicketActivityLog::where('ticket_id', $t->id)->where('action', 'ESTIMATE_UPDATED')->count());
         $this->assertStringContainsString('استغرقت أطول', (string) TicketActivityLog::where('action', 'CREDIT_ADDED')->value('details'));
     }
 
@@ -642,7 +667,7 @@ class TicketCreditTest extends TestCase
 
         // Resubmit and approve: credited exactly once, after the round trip.
         Sanctum::actingAs($this->assignee);
-        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'استكملت الاختبار'])->assertOk();
+        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'استكملت الاختبار', 'actual_minutes' => 150])->assertOk();
         $this->approveCompletion($t)->assertOk();
         $this->assertSame(1, $this->awards($t)->count());
     }
@@ -881,11 +906,11 @@ class TicketCreditTest extends TestCase
 
         Sanctum::actingAs($this->leader);
         $this->patchJson("/api/v1/tickets/{$t->id}/work-estimate", ['task_scope' => 'simple', 'task_points' => 30])
-            ->assertStatus(409)->assertJsonPath('code', 'ESTIMATE_FROZEN')->assertJsonPath('success', false);
+            ->assertStatus(409)->assertJsonPath('code', 'REVIEW_VALUES_LOCKED')->assertJsonPath('success', false);
         $this->assertSame('medium', $t->fresh()->task_scope);
         $this->assertFalse($this->getJson("/api/v1/tickets/{$t->id}")->json('data.capabilities.can_edit_estimate'));
 
-        // The only place to correct it is the approval request, which still applies the HR gate.
+        // Nothing can be corrected in the confirmation request either; the HR gate still applies.
         $this->approveCompletion($t)->assertForbidden()->assertJsonPath('code', 'HR_APPROVAL_REQUIRED');
         $this->assertSame(0, $this->awards()->count());
 
@@ -921,11 +946,11 @@ class TicketCreditTest extends TestCase
     {
         $x = $this->user('admin');
         $y = $this->user('super_admin');
-        $t = $this->ticket(['status' => 'IN_PROGRESS', 'assigned_to_id' => $this->assignee->id, 'task_scope' => 'simple', 'task_points' => 30]);
+        $t = $this->ticket(['status' => 'IN_PROGRESS', 'assigned_to_id' => $this->assignee->id, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2]);
 
         // Global X completes it on the assignee's behalf.
         Sanctum::actingAs($x);
-        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'أنجزتها نيابة عنه'])
+        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'أنجزتها نيابة عنه', 'actual_minutes' => 150])
             ->assertOk()->assertJsonPath('data.status', 'PENDING_REVIEW');
         $this->assertSame($x->id, (int) $t->fresh()->submitted_by_id);
 
@@ -947,7 +972,7 @@ class TicketCreditTest extends TestCase
         // A returned ticket resubmitted by the assignee is a NEW round: X may now review it.
         $this->returnForRework($t, $y)->assertOk();
         Sanctum::actingAs($this->assignee);
-        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'استكملتها بنفسي'])->assertOk();
+        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'استكملتها بنفسي', 'actual_minutes' => 150])->assertOk();
         $this->assertSame($this->assignee->id, (int) $t->fresh()->submitted_by_id);
         $this->approveCompletion($t, $x)->assertOk();
         $this->assertSame($this->assignee->id, (int) $this->awards($t)->sole()->user_id);
@@ -957,7 +982,7 @@ class TicketCreditTest extends TestCase
     {
         $t = $this->submitted(['status' => 'IN_PROGRESS']);
         Sanctum::actingAs($this->assignee);
-        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'تم الحل بالكامل'])->assertOk();
+        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'تم الحل بالكامل', 'actual_minutes' => 150])->assertOk();
 
         foreach ([$this->leader, $this->assignee, $this->member, $this->reporter] as $viewer) {
             Sanctum::actingAs($viewer);
@@ -1045,7 +1070,7 @@ class TicketCreditTest extends TestCase
         $this->assertSame($this->assignee->id, (int) $rows->first()->user_id, 'not the reporter, not the reviewer');
 
         Sanctum::actingAs($this->assignee);
-        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'تم الحل بالكامل'])->assertOk();
+        $this->postJson("/api/v1/tickets/{$t->id}/complete-task", ['resolution_type' => 'RESOLVED', 'resolution_summary' => 'تم الحل بالكامل', 'actual_minutes' => 150])->assertOk();
         $this->approveCompletion($t)->assertOk();
 
         $rows = DB::table('platform_notifications')->where('type', 'ticket_completion_approved')->get();
@@ -1074,12 +1099,12 @@ class TicketCreditTest extends TestCase
         $this->approveCompletion($medium)->assertForbidden()->assertJsonPath('code', 'HR_APPROVAL_REQUIRED');
 
         Sanctum::actingAs($this->leader);
-        $this->patchJson("/api/v1/tickets/{$medium->id}/work-estimate", ['task_scope' => 'simple', 'task_points' => 31])->assertStatus(409)->assertJsonPath('code', 'ESTIMATE_FROZEN');
+        $this->patchJson("/api/v1/tickets/{$medium->id}/work-estimate", ['task_scope' => 'simple', 'task_points' => 31])->assertStatus(409)->assertJsonPath('code', 'REVIEW_VALUES_LOCKED');
 
-        // credit.hours is never null once credited (it is the actual duration, whatever the estimate said).
-        $noHours = $this->submitted(['estimated_hours' => null]);
-        $this->approveCompletion($noHours)->assertOk()->assertJsonPath('data.credit.hours', 2.5);
-        $this->assertNotNull($noHours->fresh()->credited_hours);
+        // credit.hours is never null once credited (it is the actual duration the assignee recorded).
+        $ok = $this->submitted();
+        $this->approveCompletion($ok)->assertOk()->assertJsonPath('data.credit.hours', 2.5);
+        $this->assertNotNull($ok->fresh()->credited_hours);
     }
 
     public function test_missing_permissions_are_answered_plainly_before_the_leaders_only_refusal(): void

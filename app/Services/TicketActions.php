@@ -83,6 +83,10 @@ class TicketActions
             if (! $this->access->canManage($actor, (int) $ticket->department_id)) {
                 throw new TicketActionException('إعادة التوجيه متاحة فقط لقائد الإدارة المعنية.', 403);
             }
+            // Under review the size, points and durations are read-only: any attempt to change them is refused with the stable code.
+            if (in_array($ticket->status, TicketAccess::REVIEW_STAGES, true) && TicketWorkEstimate::lockedKeysIn($estimate) !== []) {
+                throw new TicketActionException(TicketCreditService::REVIEW_VALUES_LOCKED_MESSAGE, 409, [], TicketCreditService::CODE_REVIEW_VALUES_LOCKED);
+            }
             if (! in_array($ticket->status, TicketAccess::REASSIGNABLE_STATUSES, true)) {
                 throw new TicketActionException('لا يمكن إعادة توجيه تذكرة بحالتها الراهنة.', 409);
             }
@@ -118,7 +122,7 @@ class TicketActions
 
             // The ticket becomes work for a person: it must carry its size and points, from the request or
             // already stored. A legacy ticket with neither is refused here, on every path (single + bulk).
-            $work = TicketWorkEstimate::resolve($ticket, $estimate);
+            $work = TicketWorkEstimate::resolve($ticket, $estimate, requireHours: true);
             $estimateChanged = TicketWorkEstimate::differs($ticket, $work);
             $estimateBefore = TicketWorkEstimate::snapshot($ticket);
 
@@ -271,6 +275,9 @@ class TicketActions
             // deployment flag are frozen: the estimate is corrected only inside the approval request, where the larger-of
             // HR gate applies and the change is logged, and the flag moves a ticket to another flow, which is done by
             // returning it for rework first. Otherwise either could be used to dodge the gates beforehand.
+            if (in_array($ticket->status, TicketAccess::REVIEW_STAGES, true)) {
+                throw new TicketActionException(TicketCreditService::REVIEW_VALUES_LOCKED_MESSAGE, 409, [], TicketCreditService::CODE_REVIEW_VALUES_LOCKED);
+            }
             if (! in_array($ticket->status, TicketAccess::ESTIMATE_EDITABLE_STATUSES, true)) {
                 throw new TicketActionException('لا يمكن تعديل تقدير العمل أو اشتراط النشر بعد إرسال العمل للمراجعة؛ أعد التذكرة للتنفيذ أولًا.', 409, [], TicketCreditService::CODE_ESTIMATE_FROZEN);
             }

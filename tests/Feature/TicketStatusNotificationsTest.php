@@ -85,12 +85,13 @@ class TicketStatusNotificationsTest extends TestCase
 
     private function suggestion(array $over = []): Ticket
     {
-        return $this->ticket(array_merge(['ticket_category' => 'NEW_SUGGESTION', 'title' => 'إضافة وضع ليلي للمنصة'], $over));
+        return $this->ticket(array_merge(['ticket_category' => 'NEW_SUGGESTION', 'title' => 'إضافة وضع ليلي للمنصة', 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2], $over));
     }
 
     private function inProgress(array $over = []): Ticket
     {
-        return $this->ticket(array_merge(['status' => 'IN_PROGRESS', 'assigned_to_id' => $this->assignee->id], $over));
+        // Carries the planning data a review needs (set at assignment): size, points and the approximate duration.
+        return $this->ticket(array_merge(['status' => 'IN_PROGRESS', 'assigned_to_id' => $this->assignee->id, 'task_scope' => 'simple', 'task_points' => 30, 'estimated_hours' => 2], $over));
     }
 
     private function approve(Ticket $t, ?User $as = null)
@@ -116,7 +117,7 @@ class TicketStatusNotificationsTest extends TestCase
         $this->assertSame('PENDING_REVIEW', $t->fresh()->status);
 
         Sanctum::actingAs($this->leader);
-        $this->postJson("/api/v1/tickets/{$t->id}/approve-completion", ['task_scope' => 'simple', 'task_points' => 30, 'actual_minutes' => 60])->assertOk();
+        $this->postJson("/api/v1/tickets/{$t->id}/approve-completion", [])->assertOk();
 
         return $res;
     }
@@ -126,7 +127,7 @@ class TicketStatusNotificationsTest extends TestCase
         Sanctum::actingAs($as ?? $this->assignee);
 
         return $this->postJson("/api/v1/tickets/{$t->id}/complete-task", [
-            'resolution_type' => 'RESOLVED', 'resolution_summary' => self::SECRET_SUMMARY,
+            'resolution_type' => 'RESOLVED', 'resolution_summary' => self::SECRET_SUMMARY, 'actual_minutes' => 60,
         ]);
     }
 
@@ -424,7 +425,7 @@ class TicketStatusNotificationsTest extends TestCase
 
         // The ticket is resolved only by someone else's final approval, and THAT is news to them.
         Sanctum::actingAs($this->leader);
-        $this->postJson("/api/v1/tickets/{$ticket->id}/approve-completion", ['task_scope' => 'simple', 'task_points' => 30, 'actual_minutes' => 60])->assertOk();
+        $this->postJson("/api/v1/tickets/{$ticket->id}/approve-completion", [])->assertOk();
         $this->assertCount(1, $this->notificationsFor($this->submitter, 'ticket_resolved'));
     }
 
