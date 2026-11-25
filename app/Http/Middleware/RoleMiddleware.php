@@ -31,9 +31,19 @@ class RoleMiddleware
             return $this->deny();
         }
 
-        // super_admin and tech_admin pass every role check
+        return self::passes($user, $roles) ? $next($request) : $this->deny();
+    }
+
+    /**
+     * The very rule `role:<roles>` enforces, as a boolean (so a controller can tell the UI what the route would answer):
+     * super_admin / tech_admin pass every role check; otherwise the user's role (or specialised department role) must be listed.
+     *
+     * @param  array<int, string>  $roles
+     */
+    public static function passes(object $user, array $roles): bool
+    {
         if ($user->isSuperAdmin() || $user->isTechAdmin()) {
-            return $next($request);
+            return true;
         }
 
         $specializedRole = method_exists($user, 'getDepartmentSpecializedRole') ? $user->getDepartmentSpecializedRole() : null;
@@ -41,11 +51,11 @@ class RoleMiddleware
         foreach ($roles as $role) {
             $accepted = self::ALIASES[$role] ?? [$role];
             if (in_array($user->role, $accepted, true) || ($specializedRole && in_array($specializedRole, $accepted, true))) {
-                return $next($request);
+                return true;
             }
         }
 
-        return $this->deny();
+        return false;
     }
 
     private function deny(): \Illuminate\Http\JsonResponse

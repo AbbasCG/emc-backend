@@ -104,6 +104,13 @@ final class Permissions
      * Part of all(): super_admin / tech_admin hold it; nobody else by default (no role, no migration grant).
      */
     const CONSULTANT_APPLICATIONS_VIEW = 'consultant_applications.view';
+    /**
+     * READ the HR tasks & approvals page data: GET /api/admin/tasks/pending-hr-approval (the tasks awaiting HR approval) and
+     * GET /api/operations/tasks (the «سجل المهام العام» tab). Approving (hr-approve), evaluating, rejecting, reassigning etc. stay
+     * role-gated and are NOT implied by this key. Page access (hr.tasks) only opens the page; this permission opens the data.
+     * Part of all(): super_admin / tech_admin hold it; nobody else by default (no role, no migration grant).
+     */
+    const HR_TASKS_VIEW = 'hr_tasks.view';
 
     // ── Partnerships ─────────────────────────────────────────────────────────
     const VIEW_PARTNERS        = 'view_partners';
@@ -260,7 +267,7 @@ final class Permissions
             self::VIEW_DEPARTMENTS, self::MANAGE_DEPARTMENTS, self::VIEW_TASKS, self::MANAGE_TASKS,
             self::VIEW_MEETINGS, self::MANAGE_MEETINGS, self::VIEW_FORMS, self::MANAGE_FORMS,
             // HR
-            self::VIEW_VOLUNTEERS, self::MANAGE_VOLUNTEERS, self::VIEW_TEAM, self::MANAGE_TEAM, self::CONSULTANT_APPLICATIONS_VIEW,
+            self::VIEW_VOLUNTEERS, self::MANAGE_VOLUNTEERS, self::VIEW_TEAM, self::MANAGE_TEAM, self::CONSULTANT_APPLICATIONS_VIEW, self::HR_TASKS_VIEW,
             // Partnerships
             self::VIEW_PARTNERS, self::MANAGE_PARTNERS, self::VIEW_PARTNER_REPORTS,
             // Marketing
@@ -524,7 +531,7 @@ final class Permissions
             'finance'      => [self::VIEW_PAYMENTS, self::MANAGE_PAYMENTS, self::VIEW_REVENUE, self::MANAGE_COUPONS, self::MANAGE_SCHOLARSHIPS, self::VIEW_FINANCIAL_REPORTS],
             'certificates' => [self::VIEW_CERTIFICATES, self::MANAGE_CERTIFICATES, self::ISSUE_CERTIFICATES, self::REVOKE_CERTIFICATES],
             'operations'   => [self::VIEW_DEPARTMENTS, self::MANAGE_DEPARTMENTS, self::VIEW_TASKS, self::MANAGE_TASKS, self::VIEW_MEETINGS, self::MANAGE_MEETINGS, self::VIEW_FORMS, self::MANAGE_FORMS],
-            'hr'           => [self::VIEW_VOLUNTEERS, self::MANAGE_VOLUNTEERS, self::VIEW_TEAM, self::MANAGE_TEAM, self::CONSULTANT_APPLICATIONS_VIEW],
+            'hr'           => [self::VIEW_VOLUNTEERS, self::MANAGE_VOLUNTEERS, self::VIEW_TEAM, self::MANAGE_TEAM, self::CONSULTANT_APPLICATIONS_VIEW, self::HR_TASKS_VIEW],
             'partnerships' => [self::VIEW_PARTNERS, self::MANAGE_PARTNERS, self::VIEW_PARTNER_REPORTS],
             'marketing'    => [self::VIEW_MARKETING, self::MANAGE_MARKETING],
             'quality'      => [self::VIEW_QUALITY, self::MANAGE_QUALITY, self::APPROVE_QUALITY_REVIEWS],

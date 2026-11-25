@@ -949,6 +949,24 @@ Route::middleware(['auth:sanctum', 'role.or.permission:consultant_applications.v
     Route::get('consultant-applications',                         [AdminConsultantApplicationController::class, 'index']);
     Route::get('consultant-applications/{consultantApplication}', [AdminConsultantApplicationController::class, 'show']);
 });
+// صفحة مهام واعتمادات الموارد البشرية (/dashboard/hr/tasks) — القراءة فقط: قائمة المهام بانتظار اعتماد HR وسجل المهام العام.
+// دور الفئة الإدارية أو الصلاحية الصريحة hr_tasks.view («عرض مهام واعتمادات الموارد البشرية»). فتح الصفحة (hr.tasks) لا يكفي وحده.
+// هاتان الطريقان فقط؛ التفاصيل (tasks/{task}) والاعتماد/التقييم/الرفض/إعادة الإسناد تبقى في مجموعات role: الأصلية فلا تبلغها صلاحية القراءة.
+// يجب تسجيلهما قبل مجموعتي admin/operations المقيَّدتين بالدور (أول مسار مطابق يربح).
+Route::middleware(['auth:sanctum', 'role.or.permission:hr_tasks.view,admin,super_admin,tech_admin,operations_manager'])->group(function () {
+    Route::get('admin/tasks/pending-hr-approval', [TaskController::class, 'pendingHrApproval']);
+    Route::get('operations/tasks',                [TaskController::class, 'index']);
+});
+// اعتماد الموارد البشرية النهائي (الزر الرئيسي في صفحة مهام واعتمادات HR): قائمة أدوار خاصة بهذا المسار وحده = الأدوار الأربعة + hr_manager.
+// من يُسمح له فعليًا يقرره TaskController::hrApprove (الأدوار + قواعد TaskWorkflowService) وهو المرجع. لا تمنحه hr_tasks.view ولا يتطلبها.
+// نسخة operations/tasks/{task}/hr-approve لا تتغير (الصفحة لا تستخدمها).
+Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations_manager,hr_manager'])->prefix('admin')->group(function () {
+    Route::post('tasks/{task}/hr-approve', [TaskController::class, 'hrApprove']);
+});
+// طلبات المستشارين — الكتابة (القائمة = AdminConsultantApplicationController::UPDATE_STATUS_ROLES، وهي ما يعلنه can_update_status).
+Route::middleware(['auth:sanctum', 'role:'.implode(',', AdminConsultantApplicationController::UPDATE_STATUS_ROLES)])->prefix('admin')->group(function () {
+    Route::put('consultant-applications/{consultantApplication}/status', [AdminConsultantApplicationController::class, 'updateStatus']);
+});
 // ─── Phase 3: Operations — auth:sanctum + role:admin ─────────────────────────
 Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations_manager'])->prefix('admin')->group(function () {
 
@@ -975,15 +993,15 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     Route::get('visitor-analytics/top',      [\App\Http\Controllers\Admin\VisitorAnalyticsController::class, 'top']);
     Route::get('visitor-analytics/errors',   [\App\Http\Controllers\Admin\VisitorAnalyticsController::class, 'errors']);
 
-    // طلبات المستشارين — اعتماد/رفض/تعديل الحالة: الفئة الإدارية فقط. القراءة (القائمة والتفاصيل) في مجموعتها الخاصة قبل هذه المجموعة
+    // طلبات المستشارين — اعتماد/رفض/تعديل الحالة: الفئة الإدارية فقط (PUT .../status في مجموعته الخاصة قبل هذه المجموعة بنفس قائمة
+    // AdminConsultantApplicationController::UPDATE_STATUS_ROLES التي يُبنى عليها can_update_status). القراءة في مجموعتها الخاصة
     // (role.or.permission:consultant_applications.view)، فلا تمنح صلاحية القراءة أي كتابة.
-    Route::put('consultant-applications/{consultantApplication}/status', [AdminConsultantApplicationController::class, 'updateStatus']);
 
     // Tasks
     Route::get('tasks/my',                               [TaskController::class, 'myTasks']);
     Route::get('tasks/pending-acceptance',               [TaskController::class, 'myPendingAcceptance']);
     Route::get('tasks/pending-evaluation',               [TaskController::class, 'pendingEvaluation']);
-    Route::get('tasks/pending-hr-approval',              [TaskController::class, 'pendingHrApproval']);
+    // tasks/pending-hr-approval: registered above with role.or.permission:hr_tasks.view (read-only HR page).
     Route::get('tasks/unassigned-department',            [TaskController::class, 'unassignedDepartment']);
     Route::get('tasks/overdue',                          [TaskController::class, 'overdue']);
     Route::get('tasks/kanban',                           [TaskController::class, 'kanban']);
@@ -993,7 +1011,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     Route::post('tasks/{task}/reassign',                 [TaskController::class, 'reassign']);
     Route::post('tasks/{task}/claim',                    [TaskController::class, 'claim']);
     Route::post('tasks/{task}/evaluate',                 [TaskController::class, 'evaluate']);
-    Route::post('tasks/{task}/hr-approve',               [TaskController::class, 'hrApprove']);
+    // tasks/{task}/hr-approve: registered above with its own role list (+ hr_manager).
     Route::post('tasks/{task}/comments',                 [TaskController::class, 'storeComment']);
     Route::post('tasks/{task}/checklist',                [TaskController::class, 'storeChecklist']);
     Route::put('tasks/{task}/checklist/{item}',          [TaskController::class, 'updateChecklist']);
@@ -1422,7 +1440,7 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     Route::get('dashboard',                                            [AdminController::class,                   'operationsDashboard']);
     // NOTE: GET departments + departments/{id} are registered ABOVE this group with role:admin,department_manager
     // so that Dept. Managers can access their own department data.
-    Route::get('tasks',                                                [TaskController::class,                    'index']);
+    // GET tasks (index): registered above with role.or.permission:hr_tasks.view (the HR page's general log tab).
     Route::get('tasks/{task}',                                         [TaskController::class,                    'show']);
     Route::patch('tasks/{task}',                                       [TaskController::class,                    'update']);
     Route::post('tasks',                                               [TaskController::class,                    'store']);
