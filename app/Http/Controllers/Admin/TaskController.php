@@ -536,12 +536,28 @@ class TaskController extends Controller
         }
 
         $replayed = false;
-        DB::transaction(function () use ($task, $user, &$replayed) {
+        $refusal = null;
+        DB::transaction(function () use ($task, $user, &$replayed, &$refusal) {
             // Idempotent: an already completed task was already credited (points are deduplicated by the ledger, hours are
             // not), so a replay answers success without crediting again.
             $locked = Task::lockForUpdate()->find($task->id);
             if ($locked && $locked->status === 'completed') {
                 $replayed = true;
+
+                return;
+            }
+
+            // The task must really be awaiting HR approval (the exact set pendingHrApproval lists): evaluated and approved by the
+            // manager, not yet approved by HR. Anything else (in progress, pending, cancelled, never evaluated) is refused.
+            if (! $locked || $locked->status !== 'waiting_approval' || $locked->manager_approved_at === null || $locked->hr_approved_at !== null) {
+                $refusal = response()->json(['success' => false, 'message' => 'هذه المهمة ليست بانتظار اعتماد الموارد البشرية (يجب أن تكون مقيَّمة ومعتمدة من مدير الإدارة ولم تُعتمد نهائياً بعد).'], 422);
+
+                return;
+            }
+
+            // No self-approval: nobody credits points and hours to themselves, whatever their role.
+            if ($locked->assigned_to !== null && (int) $locked->assigned_to === (int) $user->id) {
+                $refusal = response()->json(['success' => false, 'message' => 'لا يمكنك اعتماد مهمة مسندة إليك. يعتمدها مسؤول موارد بشرية آخر.'], 403);
 
                 return;
             }
@@ -554,6 +570,10 @@ class TaskController extends Controller
             // إضافة النقاط وساعات التطوع التراكمية
             TaskWorkflowService::creditVolunteerHoursAndPoints($task, $user);
         });
+
+        if ($refusal) {
+            return $refusal;
+        }
 
         if (! $replayed) {
             ActivityLogger::log('task.hr_approved', $task, [], $request);

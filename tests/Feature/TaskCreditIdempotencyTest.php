@@ -65,7 +65,8 @@ class TaskCreditIdempotencyTest extends TestCase
 
     public function test_the_first_hr_approval_credits_as_before_and_a_replay_changes_nothing(): void
     {
-        $t = $this->task(Task::SCOPE_MEDIUM, 'waiting_approval');
+        // awaiting HR means evaluated + manager-approved (hr-approve now requires it; previously this fixture skipped manager_approved_at)
+        $t = $this->task(Task::SCOPE_MEDIUM, 'waiting_approval', ['manager_approved_at' => now()]);
 
         $first = $this->hrApprove($t)->assertOk()->assertJsonPath('success', true)
             ->assertJsonPath('message', 'تم اعتماد المهمة نهائياً من الموارد البشرية وإضافة النقاط وساعات التطوع التراكمية.');

@@ -13,6 +13,17 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 /** إدارة طلبات المستشارين: قائمة، تفاصيل، تحديث الحالة، ومعاينة السيرة الذاتية. */
 class ConsultantApplicationController extends Controller
 {
+    /** Roles of the PUT .../status route (routes/api.php uses this list too) — also what `can_update_status` reports. */
+    public const UPDATE_STATUS_ROLES = ['admin', 'super_admin', 'tech_admin', 'operations_manager'];
+
+    /** Would PUT .../status be allowed for this viewer? The same rule the route's `role:` middleware enforces. */
+    private function canUpdateStatus(Request $request): bool
+    {
+        $user = $request->user();
+
+        return $user !== null && \App\Http\Middleware\RoleMiddleware::passes($user, self::UPDATE_STATUS_ROLES);
+    }
+
     /** رابط معاينة موقَّع مؤقت (ساعتان) — معاينة داخل التطبيق فقط، لا تنزيل خام. */
     private function withCvUrl(ConsultantApplication $application): array
     {
@@ -43,8 +54,9 @@ class ConsultantApplicationController extends Controller
             ->latest()
             ->paginate((int) ($request->per_page ?? 20));
 
+        $can = $this->canUpdateStatus($request);
         $page->setCollection(
-            $page->getCollection()->map(fn (ConsultantApplication $row) => $this->withCvUrl($row)),
+            $page->getCollection()->map(fn (ConsultantApplication $row) => $this->withCvUrl($row) + ['can_update_status' => $can]),
         );
 
         $counts = ConsultantApplication::query()
@@ -55,17 +67,17 @@ class ConsultantApplicationController extends Controller
         return response()->json([
             'success' => true,
             'data'    => $page,
-            'meta'    => ['counts' => $counts],
+            'meta'    => ['counts' => $counts, 'can_update_status' => $can],
         ]);
     }
 
-    public function show(ConsultantApplication $consultantApplication): JsonResponse
+    public function show(Request $request, ConsultantApplication $consultantApplication): JsonResponse
     {
         $consultantApplication->load('reviewer:id,name');
 
         return response()->json([
             'success' => true,
-            'data'    => $this->withCvUrl($consultantApplication),
+            'data'    => $this->withCvUrl($consultantApplication) + ['can_update_status' => $this->canUpdateStatus($request)],
         ]);
     }
 

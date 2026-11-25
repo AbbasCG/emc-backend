@@ -188,6 +188,35 @@ class ConsultantApplicationsReadPermissionTest extends TestCase
         $this->assertSame('accepted', $app->fresh()->status);
     }
 
+    public function test_can_update_status_flag_tells_the_ui_what_the_put_route_answers(): void
+    {
+        $app = $this->application();
+        $this->grantToRole('hr_manager', self::KEY);
+
+        // view-only holder: false on list rows, list meta and details; the PUT stays refused
+        $hr = $this->user('hr_manager');
+        Sanctum::actingAs($hr);
+        $list = $this->getJson('/api/admin/consultant-applications')->assertOk();
+        $list->assertJsonPath('meta.can_update_status', false)->assertJsonPath('data.data.0.can_update_status', false);
+        $this->getJson("/api/admin/consultant-applications/{$app->id}")->assertOk()->assertJsonPath('data.can_update_status', false);
+        $this->putJson("/api/admin/consultant-applications/{$app->id}/status", ['status' => 'accepted'])->assertForbidden();
+
+        // a plain member holding the permission: false as well
+        $member = $this->user('volunteer');
+        $this->assignPermission($member, self::KEY, 'allow');
+        Sanctum::actingAs($member->fresh());
+        $this->getJson('/api/admin/consultant-applications')->assertOk()->assertJsonPath('meta.can_update_status', false);
+
+        // the admin tier: true everywhere, and the flag matches the PUT
+        foreach (['admin', 'super_admin', 'tech_admin', 'operations_manager'] as $role) {
+            Sanctum::actingAs($this->user($role));
+            $this->getJson('/api/admin/consultant-applications')->assertOk()
+                ->assertJsonPath('meta.can_update_status', true)->assertJsonPath('data.data.0.can_update_status', true);
+            $this->getJson("/api/admin/consultant-applications/{$app->id}")->assertOk()->assertJsonPath('data.can_update_status', true);
+            $this->putJson("/api/admin/consultant-applications/{$app->id}/status", ['status' => 'under_review'])->assertOk();
+        }
+    }
+
     public function test_the_admin_tier_is_unchanged(): void
     {
         $app = $this->application();
