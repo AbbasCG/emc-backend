@@ -70,6 +70,30 @@ class TaskController extends Controller
         return null;
     }
 
+    /**
+     * Moving a task's status as someone who is NOT its assignee (see updateStatus). Global actors keep moving any task; everybody else
+     * needs tasks.update, the task's department among the ones they lead, and a task that is not awaiting approval / approved /
+     * completed (that credit belongs to the evaluators, exactly as in update()). Returns the refusal, or null when allowed.
+     */
+    private function refuseStatusMove(Request $request, Task $task): ?JsonResponse
+    {
+        $user = $request->user();
+        if ($this->writeAccess->isGlobal($user)) {
+            return null;
+        }
+        if ($refusal = $this->refuseWithout($request, TaskWriteAccess::UPDATE, 'ليست لديك صلاحية تعديل المهام.')) {
+            return $refusal;
+        }
+        if (! $this->writeAccess->inScope($user, $this->writeAccess->departmentOf($task))) {
+            return response()->json(['success' => false, 'message' => 'هذه المهمة خارج نطاق الإدارات التي تقودها، فلا يمكنك تحريكها.'], 403);
+        }
+        if ($this->writeAccess->isCreditLocked($task)) {
+            return response()->json(['success' => false, 'message' => 'لا يمكنك تغيير حالة المهمة بعد أن أصبحت بانتظار الاعتماد أو معتمدة أو مكتملة.'], 403);
+        }
+
+        return null;
+    }
+
     /** Did the sent value change the stored one (numbers compared as numbers, so "10" == 10)? */
     private function differs(mixed $sent, mixed $stored, string $cast): bool
     {
@@ -846,6 +870,21 @@ class TaskController extends Controller
 
     public function updateStatus(Request $request, Task $task): JsonResponse
     {
+        // WHO may move a task is decided BEFORE anything about the task is revealed (a locked task would otherwise answer 423 to anyone).
+        // Two kinds of mover. A MANAGER of the task: a GLOBAL actor (the roles TaskWriteAccess treats as global, unchanged) or a
+        // department leader who holds tasks.update AND leads this task's department AND is not moving credit-bearing work. A bare
+        // role name (hr_manager / department_manager) is no longer enough: the same rule as PATCH operations/tasks/{task}
+        // (TaskController::update), so the board route cannot do what the edit route refuses. Anybody else must be the ASSIGNEE,
+        // and an assignee who is not a manager of the task moves it under the member rules of /my-work/tasks/{task}/status.
+        $this->writeAccess = app(TaskWriteAccess::class);
+        $user = $request->user();
+        $isAssignee = $task->assigned_to !== null && (int) $task->assigned_to === (int) $user->id;
+        $managerRefusal = $this->refuseStatusMove($request, $task);
+        if ($managerRefusal !== null && ! $isAssignee) {
+            return $managerRefusal;
+        }
+        $asMember = $managerRefusal !== null;
+
         if ($task->locked_at !== null) {
             return response()->json([
                 'success' => false,
@@ -853,18 +892,23 @@ class TaskController extends Controller
             ], 423);
         }
 
-        $managerRoles = ['admin', 'super_admin', 'tech_admin', 'executive_admin', 'hr_manager', 'operations_manager', 'department_manager'];
-        $user = $request->user();
-        if (! in_array($user->role, $managerRoles, true) && $task->assigned_to !== $user->id) {
-            return response()->json([
-                'success' => false,
-                'message' => 'يمكنك تحريك المهام المعينة لك فقط.',
-            ], 403);
-        }
-
         $data = $request->validate([
             'status' => 'required|in:idea,under_review,planning,waiting_approval,in_progress,completed,postponed,cancelled,needs_evaluation',
         ]);
+
+        // The member limits, identical to MyWorkTaskController::status: an accepted task only; `completed` is reserved for the
+        // evaluation -> HR-approval flow (a member finishes by moving to needs_evaluation); and a completed task stays completed.
+        if ($asMember) {
+            if ($task->acceptance_status !== Task::ACCEPTANCE_ACCEPTED) {
+                return response()->json(['success' => false, 'message' => 'اقبل المهمة أولًا قبل تحريك حالتها.'], 409);
+            }
+            if ($task->status === 'completed') {
+                return response()->json(['success' => false, 'message' => 'المهمة المنجزة معتمدة ولا يمكن تغيير حالتها؛ للتعديل راجع المدير.'], 403);
+            }
+            if ($data['status'] === 'completed') {
+                return response()->json(['success' => false, 'message' => 'اعتماد الإنجاز يتم بعد تقييم المدير؛ حرّك المهمة إلى «بانتظار التقييم».'], 403);
+            }
+        }
 
         TaskStatusService::move($task, $data['status'], $request);
 

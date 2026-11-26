@@ -491,7 +491,7 @@ class TaskWritePermissionsTest extends TestCase
         $this->as($granted);
         $this->postJson("/api/operations/tasks/{$task->id}/lock")->assertOk();
         $this->postJson("/api/operations/tasks/{$task->id}/unlock")->assertOk();
-        $this->patchJson("/api/operations/board/tasks/{$task->id}/status", ['status' => 'completed'])->assertOk(); // status moves: unchanged (hr_manager always could)
+        $this->patchJson("/api/operations/board/tasks/{$task->id}/status", ['status' => 'completed'])->assertOk(); // a status move now follows tasks.update + department scope (test_board_status_move_*)
         $this->deleteJson("/api/admin/tasks/{$task->id}")->assertForbidden(); // deletion stays admin-tier
         $this->assertNotNull(Task::find($task->id));
         $this->getJson("/api/operations/tasks/{$task->id}")->assertForbidden(); // reading task details: unchanged, not implied
@@ -931,6 +931,140 @@ class TaskWritePermissionsTest extends TestCase
         $nodes = DB::table('permission_nodes')->where('parent_id', $section->id)->orderBy('key')->get();
         $this->assertSame(['tasks.assign', 'tasks.create', 'tasks.update'], $nodes->pluck('key')->all());
         $this->assertSame(['إسناد المهام وإعادة إسنادها', 'إنشاء مهمة تشغيلية', 'تعديل المهام القائمة'], $nodes->pluck('label_ar')->all());
+    }
+
+    // ═══ 10b. The board's status move follows the same rule as the edit ══════
+
+    private function move(Task $task, string $status = 'in_progress')
+    {
+        return $this->patchJson("/api/operations/board/tasks/{$task->id}/status", ['status' => $status]);
+    }
+
+    public function test_board_status_move_needs_tasks_update_and_the_tasks_department_for_a_role_that_is_not_global(): void
+    {
+        $mine = $this->task(['status' => 'planning']);
+        $foreign = $this->task(['department_id' => $this->deptOther->id, 'status' => 'planning']);
+        $noDept = $this->task(['department_id' => null, 'status' => 'planning']);
+
+        // the role name alone is no longer a pass: the leader WITHOUT tasks.update is refused
+        $this->as($this->hr);
+        $this->move($mine)->assertForbidden()->assertJsonPath('message', 'ليست لديك صلاحية تعديل المهام.');
+        $this->assertSame('planning', $mine->fresh()->status);
+
+        // with the permission: the department they lead only
+        $granted = $this->hrWith('tasks.update');
+        $this->as($granted);
+        $this->move($mine)->assertOk();
+        $this->assertSame('in_progress', $mine->fresh()->status);
+        $this->move($foreign)->assertForbidden();
+        $this->move($noDept)->assertForbidden();
+        $this->assertSame(['planning', 'planning'], [$foreign->fresh()->status, $noDept->fresh()->status]);
+
+        // a department_manager of ANOTHER department with the permission cannot move this one
+        $this->assignPermission($this->otherLeader, 'tasks.update', 'allow');
+        $this->as($this->otherLeader);
+        $this->move($mine)->assertForbidden();
+        $this->move($foreign)->assertOk();
+
+        // revoking it (per-user deny) closes the move at once
+        $this->assignPermission($granted, 'tasks.update', 'deny');
+        $this->as($granted);
+        $this->move($mine, 'planning')->assertForbidden();
+        $this->assertSame('in_progress', $mine->fresh()->status);
+    }
+
+    public function test_board_status_move_is_refused_to_an_hr_manager_who_does_not_lead_the_department_even_with_the_permission(): void
+    {
+        $task = $this->task(['status' => 'planning']);
+        $second = $this->user('hr_manager');
+        $this->deptHr->users()->attach($second->id); // a member of HR, not its leader
+        $this->grantToRole('hr_manager', 'tasks.update');
+
+        $this->as($second->fresh());
+        $this->move($task)->assertForbidden();
+        $this->assertSame('planning', $task->fresh()->status);
+    }
+
+    public function test_board_status_move_does_not_reopen_or_move_credit_bearing_work_for_a_delegated_leader(): void
+    {
+        $this->grantToRole('hr_manager', 'tasks.update');
+        $leader = $this->hr->fresh();
+
+        $waiting = $this->task(['status' => 'waiting_approval']);
+        $done = $this->task(['status' => 'completed']);
+        $approved = $this->task(['status' => 'in_progress', 'manager_approved_at' => now()]);
+        $hrApproved = $this->task(['status' => 'in_progress', 'hr_approved_at' => now()]);
+
+        $this->as($leader);
+        foreach ([$waiting, $done, $approved, $hrApproved] as $t) {
+            $before = $t->fresh()->status;
+            $this->move($t, 'in_progress')->assertForbidden();
+            $this->assertSame($before, $t->fresh()->status);
+        }
+
+        // global roles are unchanged: they still move (and reopen) any task, any department
+        foreach (['admin', 'executive_admin', 'tech_admin', 'super_admin', 'operations_manager'] as $role) {
+            $this->as($this->user($role));
+            $this->move($done, 'in_progress')->assertOk();
+            $this->assertSame('in_progress', $done->fresh()->status);
+            $this->move($done, 'completed')->assertOk();
+        }
+    }
+
+    public function test_board_status_move_keeps_the_assignee_path_and_hides_the_lock_from_an_unauthorised_caller(): void
+    {
+        $mine = $this->task(['assigned_to' => $this->member->id, 'status' => 'planning']);
+        $locked = $this->task(['status' => 'planning', 'locked_at' => now()]);
+
+        // the assignee moves their own task with no permission at all; somebody else's stays refused
+        $this->as($this->member);
+        $this->move($mine)->assertOk();
+        $this->move($this->task(['assigned_to' => $this->foreign->id]))->assertForbidden();
+
+        // a locked task answers 403 to who may not move it (no leak), 423 to who may
+        $this->as($this->outsider);
+        $this->move($locked)->assertForbidden();
+        $this->as($this->hrWith('tasks.update'));
+        $this->move($locked)->assertStatus(423);
+        $this->as($this->user('admin'));
+        $this->move($locked)->assertStatus(423);
+        $this->assertSame('planning', $locked->fresh()->status);
+    }
+
+    public function test_board_status_move_gives_a_plain_assignee_the_member_rules_of_my_work(): void
+    {
+        $this->as($this->member);
+
+        // a completed task stays completed, `completed` is reserved for the evaluation flow, and an unaccepted task is answered first
+        $done = $this->task(['assigned_to' => $this->member->id, 'status' => 'completed']);
+        $this->move($done, 'in_progress')->assertForbidden();
+        $this->assertSame('completed', $done->fresh()->status);
+
+        $own = $this->task(['assigned_to' => $this->member->id, 'status' => 'in_progress']);
+        $this->move($own, 'completed')->assertForbidden();
+        $this->assertSame('in_progress', $own->fresh()->status);
+        $this->move($own, 'needs_evaluation')->assertOk();
+
+        $pending = $this->task(['assigned_to' => $this->member->id, 'status' => 'idea', 'acceptance_status' => 'pending']);
+        $this->move($pending, 'in_progress')->assertStatus(409);
+        $this->assertSame('idea', $pending->fresh()->status);
+    }
+
+    public function test_board_status_move_keeps_a_managers_own_rules_when_the_manager_is_also_the_assignee(): void
+    {
+        // a global actor who happens to be the assignee still moves (and completes / reopens) as a manager
+        $admin = $this->user('admin');
+        $task = $this->task(['assigned_to' => $admin->id, 'status' => 'in_progress']);
+        $this->as($admin);
+        $this->move($task, 'completed')->assertOk();
+        $this->move($task, 'in_progress')->assertOk();
+
+        // a delegated leader who is the assignee of a credit-locked task gets the member rules, not the manager ones
+        $leader = $this->hrWith('tasks.update');
+        $done = $this->task(['assigned_to' => $leader->id, 'status' => 'completed']);
+        $this->as($leader);
+        $this->move($done, 'in_progress')->assertForbidden();
+        $this->assertSame('completed', $done->fresh()->status);
     }
 
     // ═══ 11. One rule, one place ═════════════════════════════════════════════
