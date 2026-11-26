@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Traits\Auditable;
+use Database\Seeders\RoleSeeder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -91,5 +92,34 @@ class Role extends Model
     public static function assignableSlugs(): array
     {
         return static::query()->pluck('name')->push('teacher')->unique()->values()->all();
+    }
+
+    /**
+     * Validation rule for a role-assignment field (AdminUserController::store()/update(), UserRoleController::assignRole()).
+     * Same acceptance as Rule::in(assignableSlugs()), but the 422 on `role` explains WHY, in Arabic, next to the field:
+     * a canonical system role (RoleSeeder::ROLES) that this environment's `roles` table does not have yet is an environment
+     * gap, not a bad choice by the admin, and must not read as the generic «القيمة المختارة غير مقبولة».
+     */
+    public static function assignableRule(): \Closure
+    {
+        return function (string $attribute, mixed $value, \Closure $fail): void {
+            if (is_string($value) && in_array($value, static::assignableSlugs(), true)) {
+                return;
+            }
+
+            $fail(static::unassignableRoleMessage($value));
+        };
+    }
+
+    public static function unassignableRoleMessage(mixed $value): string
+    {
+        $canonical = array_column(RoleSeeder::ROLES, 'name');
+
+        if (is_string($value) && in_array($value, $canonical, true)) {
+            return "الدور «{$value}» معرَّف في النظام لكنه غير مُفعَّل في قاعدة بيانات هذه البيئة بعد، لذلك لا يمكن إسناده الآن. "
+                . 'اطلب من فريق التقنية تشغيل الترحيلات (php artisan migrate) ثم أعد المحاولة.';
+        }
+
+        return 'الدور المختار غير موجود في النظام. اختر دورًا من القائمة.';
     }
 }
