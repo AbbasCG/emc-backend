@@ -846,8 +846,44 @@ class TaskController extends Controller
         ]);
     }
 
+    /**
+     * Locking / unlocking (the final-delivery freeze). A GLOBAL actor does both on any task, unchanged. Everybody else the route lets
+     * in (hr_manager / department_manager) needs tasks.update AND the task's department among the ones they lead, and may only lift
+     * a lock THEY placed (a lock set by a global actor is that actor's decision). Returns the refusal, or null when allowed.
+     */
+    private function refuseLockChange(Request $request, Task $task): ?JsonResponse
+    {
+        $this->writeAccess = app(TaskWriteAccess::class);
+        $user = $request->user();
+        if ($this->writeAccess->isGlobal($user)) {
+            return null;
+        }
+        if ($refusal = $this->refuseWithout($request, TaskWriteAccess::UPDATE, 'ليست لديك صلاحية تعديل المهام.')) {
+            return $refusal;
+        }
+        if (! $this->writeAccess->inScope($user, $this->writeAccess->departmentOf($task))) {
+            return response()->json(['success' => false, 'message' => 'هذه المهمة خارج نطاق الإدارات التي تقودها، فلا يمكنك قفلها أو فتحها.'], 403);
+        }
+        // Like every other delegated write, never on credit-bearing work (awaiting approval / approved / completed): freezing it
+        // would stall the evaluators' flow.
+        if ($task->locked_at === null && $this->writeAccess->isCreditLocked($task)) {
+            return response()->json(['success' => false, 'message' => 'لا يمكنك قفل مهمة بانتظار الاعتماد أو معتمدة أو مكتملة.'], 403);
+        }
+        // An existing lock that is not theirs is untouchable for them, in BOTH directions: re-locking would take over `locked_by` and
+        // let them lift it afterwards. A lock with no owner (its locker's account was deleted) is a global actor's to lift.
+        if ($task->locked_at !== null && ($task->locked_by === null || (int) $task->locked_by !== (int) $user->id)) {
+            return response()->json(['success' => false, 'message' => 'هذه المهمة مقفلة بقفل لا تملكه، فلا يغيّره إلا من وضعه أو مدير عام.'], 403);
+        }
+
+        return null;
+    }
+
     public function lock(Request $request, Task $task): JsonResponse
     {
+        if ($refusal = $this->refuseLockChange($request, $task)) {
+            return $refusal;
+        }
+
         $task->update(['locked_at' => now(), 'locked_by' => $request->user()->id]);
         ActivityLogger::log('task.locked', $task, [], $request);
 
@@ -859,6 +895,10 @@ class TaskController extends Controller
 
     public function unlock(Request $request, Task $task): JsonResponse
     {
+        if ($refusal = $this->refuseLockChange($request, $task)) {
+            return $refusal;
+        }
+
         $task->update(['locked_at' => null, 'locked_by' => null]);
         ActivityLogger::log('task.unlocked', $task, [], $request);
 

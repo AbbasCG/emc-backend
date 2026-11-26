@@ -1067,6 +1067,97 @@ class TaskWritePermissionsTest extends TestCase
         $this->assertSame('completed', $done->fresh()->status);
     }
 
+    // ═══ 10c. Lock / unlock follow the same permission + department scope ═══
+
+    public function test_lock_and_unlock_need_tasks_update_and_the_tasks_department_for_a_role_that_is_not_global(): void
+    {
+        $mine = $this->task();
+        $foreign = $this->task(['department_id' => $this->deptOther->id]);
+        $noDept = $this->task(['department_id' => null]);
+        $lock = fn (Task $t) => $this->postJson("/api/operations/tasks/{$t->id}/lock");
+        $unlock = fn (Task $t) => $this->postJson("/api/operations/tasks/{$t->id}/unlock");
+
+        // the role name alone is no longer a pass
+        $this->as($this->hr);
+        $lock($mine)->assertForbidden()->assertJsonPath('message', 'ليست لديك صلاحية تعديل المهام.');
+        $this->assertNull($mine->fresh()->locked_at);
+
+        // with the permission: the department they lead only
+        $granted = $this->hrWith('tasks.update');
+        $this->as($granted);
+        $lock($mine)->assertOk();
+        $this->assertNotNull($mine->fresh()->locked_at);
+        $lock($foreign)->assertForbidden();
+        $lock($noDept)->assertForbidden();
+        $this->assertNull($foreign->fresh()->locked_at);
+        $unlock($mine)->assertOk();
+        $this->assertNull($mine->fresh()->locked_at);
+
+        // credit-bearing work is never frozen by a delegated leader
+        foreach (['waiting_approval', 'completed'] as $status) {
+            $credited = $this->task(['status' => $status]);
+            $lock($credited)->assertForbidden();
+            $this->assertNull($credited->fresh()->locked_at);
+        }
+        $approved = $this->task(['status' => 'in_progress', 'manager_approved_at' => now()]);
+        $lock($approved)->assertForbidden();
+
+        // a member of HR who is not its leader gets nothing from the permission
+        $second = $this->user('hr_manager');
+        $this->deptHr->users()->attach($second->id);
+        $this->as($second->fresh());
+        $lock($mine)->assertForbidden();
+
+        // revoking it closes both at once
+        $this->as($granted);
+        $lock($mine)->assertOk();
+        $this->assignPermission($granted, 'tasks.update', 'deny');
+        $this->as($granted);
+        $unlock($mine)->assertForbidden();
+        $this->assertNotNull($mine->fresh()->locked_at);
+    }
+
+    public function test_a_delegated_leader_cannot_lift_a_lock_set_by_somebody_else_but_global_actors_still_do_everything(): void
+    {
+        $admin = $this->user('admin');
+        $task = $this->task();
+        $leader = $this->hrWith('tasks.update');
+
+        $this->as($admin);
+        $this->postJson("/api/operations/tasks/{$task->id}/lock")->assertOk();
+        $this->as($leader);
+        $this->postJson("/api/operations/tasks/{$task->id}/unlock")->assertForbidden();
+        $this->assertNotNull($task->fresh()->locked_at);
+        // re-locking it must not take the lock over (and then lift it): the owner stays the admin
+        $this->postJson("/api/operations/tasks/{$task->id}/lock")->assertForbidden();
+        $this->assertSame($admin->id, (int) $task->fresh()->locked_by);
+        $this->postJson("/api/operations/tasks/{$task->id}/unlock")->assertForbidden();
+        $this->assertNotNull($task->fresh()->locked_at);
+
+        // a lock with no owner (its locker's account was deleted) is a global actor's to lift, not the leader's
+        $task->forceFill(['locked_by' => null])->save();
+        $this->postJson("/api/operations/tasks/{$task->id}/unlock")->assertForbidden();
+        $this->as($admin);
+        $this->postJson("/api/operations/tasks/{$task->id}/unlock")->assertOk();
+        $this->postJson("/api/operations/tasks/{$task->id}/lock")->assertOk();
+        $this->as($leader);
+
+        // the lock is the admin's to lift, and any other global actor may too
+        foreach (['admin', 'executive_admin', 'tech_admin', 'super_admin', 'operations_manager'] as $role) {
+            $this->as($admin);
+            $this->postJson("/api/operations/tasks/{$task->id}/lock")->assertOk();
+            $this->as($this->user($role));
+            $this->postJson("/api/operations/tasks/{$task->id}/unlock")->assertOk();
+            $this->assertNull($task->fresh()->locked_at);
+        }
+
+        // a global actor locks a task of any department, with no department, and the log still records it
+        $other = $this->task(['department_id' => $this->deptOther->id]);
+        $this->as($admin);
+        $this->postJson("/api/operations/tasks/{$other->id}/lock")->assertOk();
+        $this->assertSame($admin->id, (int) $other->fresh()->locked_by);
+    }
+
     // ═══ 11. One rule, one place ═════════════════════════════════════════════
 
     public function test_the_service_is_the_single_source_of_the_rule(): void
