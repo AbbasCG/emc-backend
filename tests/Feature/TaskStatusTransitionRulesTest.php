@@ -35,7 +35,7 @@ class TaskStatusTransitionRulesTest extends TestCase
 
     private User $admin;
 
-    private User $leader;     // hr_manager leading deptHr, holds tasks.update
+    private User $leader;     // department_manager leading deptHr, holds tasks.update
 
     private User $hr;         // another HR manager: approves
     private User $member;
@@ -51,13 +51,13 @@ class TaskStatusTransitionRulesTest extends TestCase
         $this->seed([RoleSeeder::class, PermissionSeeder::class, RolePermissionSeeder::class, ImpersonatePermissionSeeder::class]);
 
         $this->admin = $this->user('admin');
-        $this->leader = $this->user('hr_manager');
+        $this->leader = $this->user('department_manager');
         $this->hr = $this->user('hr_manager');
         $this->member = $this->user('volunteer');
         $this->deptHr = $this->dept($this->leader);
         $this->deptOther = $this->dept($this->user('department_manager'));
         $this->deptHr->users()->attach($this->member->id);
-        $this->grantToRole('hr_manager', 'tasks.update');
+        $this->grantToRole('department_manager', 'tasks.update');
         $this->leader = $this->leader->fresh();
     }
 

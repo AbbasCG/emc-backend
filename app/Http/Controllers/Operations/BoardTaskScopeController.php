@@ -45,7 +45,7 @@ class BoardTaskScopeController extends Controller
         return response()->json([
             'success' => true,
             'data' => $this->access->departmentOptions($user),
-            'meta' => ['manageable_department_ids' => $this->access->manageableDepartmentIds($user)],
+            'meta' => ['manageable_department_ids' => $this->access->reportedDepartmentIds($user)],
         ]);
     }
 

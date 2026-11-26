@@ -20,7 +20,9 @@ use App\Support\Permissions;
  *
  *   2. SCOPE (department + assignee). A GLOBAL actor acts on every department: the roles DepartmentAccessService treats as global
  *      (super_admin, tech_admin, executive_admin, admin) plus operations_manager, who has always been able to edit any task
- *      (operations/tasks/{task} was role-gated to it). Everybody else acts only on the departments they LEAD
+ *      (operations/tasks/{task} was role-gated to it). Whoever holds the tasks.manage_all_departments scope permission acts on every
+ *      department's tasks and people too but is NOT global: it stays bound by the credit-bearing and lock guards, and a task that
+ *      belongs to NO department stays a global actor's alone (see actsOnEveryDepartment). Everybody else acts only on the departments they LEAD
  *      (departments.leader_id, the canonical leadership relationship: DepartmentAccessService::canManageDepartment), and may
  *      only put a task on someone who belongs to one of those departments' rosters (DepartmentRosterService: leadership seats,
  *      active team_members, user_departments pivot, active team profiles).
@@ -35,6 +37,9 @@ class TaskWriteAccess
 
     public const UPDATE = Permissions::TASKS_UPDATE;
 
+    /** SCOPE permission: tasks of every department (see actsOnEveryDepartment). It grants no write by itself. */
+    public const MANAGE_ALL_DEPARTMENTS = Permissions::TASKS_MANAGE_ALL_DEPARTMENTS;
+
     /** @var array<int, array<int, int>|null> viewer id => manageable department ids (null = all), per instance */
     private array $managed = [];
 
@@ -48,10 +53,25 @@ class TaskWriteAccess
 
     // ── Scope ────────────────────────────────────────────────────────────────
 
-    /** Acts on every department (see the class doc). */
+    /**
+     * A fully global actor (see the class doc): acts on every department AND is exempt from the credit-bearing guards (a delegated
+     * holder never edits, reassigns, moves or locks work that is awaiting approval / approved / completed).
+     */
     public function isGlobal(User $user): bool
     {
         return $this->departments->isGlobal($user) || $user->getDepartmentSpecializedRole() === 'operations_manager';
+    }
+
+    /**
+     * Acts on every department's tasks and people without being global: whoever holds the SCOPE permission
+     * (tasks.manage_all_departments, granted one account at a time through the role editor or the per-user action permissions).
+     * It widens the departments ONLY: each action still needs its own tasks.create / assign / update, a per-user deny of any of
+     * them still closes it, and the holder stays a DELEGATED actor (isGlobal() is false): the credit-bearing guards, the lock
+     * ownership and the transition rules still bind them, and it implies neither evaluation nor deletion.
+     */
+    public function actsOnEveryDepartment(User $user): bool
+    {
+        return $this->isGlobal($user) || $user->hasPermission(self::MANAGE_ALL_DEPARTMENTS);
     }
 
     /** The departments this actor may write tasks in: null = every department, otherwise the list (possibly empty). @return array<int, int>|null */
@@ -61,16 +81,34 @@ class TaskWriteAccess
             return $this->managed[$user->id];
         }
 
-        return $this->managed[$user->id] = $this->isGlobal($user)
+        return $this->managed[$user->id] = $this->actsOnEveryDepartment($user)
             ? null
             : $this->departments->getLedDepartmentIds($user)->map(fn ($id) => (int) $id)->values()->all();
+    }
+
+    /**
+     * What the UI is told (`manageable_department_ids`): null ONLY for a global actor. A holder of the all-departments scope is not
+     * global (a department is still required, credit-bearing work stays frozen), so they get the explicit list of every active
+     * department instead of the null the frontend reads as "global".
+     *
+     * @return array<int, int>|null
+     */
+    public function reportedDepartmentIds(User $user): ?array
+    {
+        $ids = $this->manageableDepartmentIds($user);
+        if ($ids !== null || $this->isGlobal($user)) {
+            return $ids;
+        }
+
+        return Department::query()->active()->orderBy('id')->pluck('id')->map(fn ($id) => (int) $id)->values()->all();
     }
 
     public function inScope(User $user, ?int $departmentId): bool
     {
         $ids = $this->manageableDepartmentIds($user);
         if ($ids === null) {
-            return true;
+            // every department, but a task that belongs to NO department (a personal task) is a global actor's alone
+            return $departmentId !== null || $this->isGlobal($user);
         }
 
         return $departmentId !== null && in_array($departmentId, $ids, true);
@@ -124,7 +162,7 @@ class TaskWriteAccess
     /** May this actor reassign this task right now: tasks.assign, the task's department in scope, and not locked. */
     public function canReassign(User $user, Task $task): bool
     {
-        if ($this->manageableDepartmentIds($user) !== null && $this->isCreditLocked($task)) {
+        if (! $this->isGlobal($user) && $this->isCreditLocked($task)) {
             return false; // a delegated holder never moves the credit of a task that is awaiting approval / approved / completed
         }
 
@@ -156,7 +194,7 @@ class TaskWriteAccess
             'can_create' => $this->canAnywhere($user, self::CREATE),
             'can_assign' => $this->canAnywhere($user, self::ASSIGN),
             'can_update' => $this->canAnywhere($user, self::UPDATE),
-            'manageable_department_ids' => $this->manageableDepartmentIds($user),
+            'manageable_department_ids' => $this->reportedDepartmentIds($user),
         ];
     }
 
@@ -180,9 +218,12 @@ class TaskWriteAccess
     public function departmentOptions(User $user): array
     {
         $ids = $this->manageableDepartmentIds($user);
+        // a global actor gets the top-level departments (the old listing); a scope holder every active department, a child included
+        // (inScope accepts it), because they are not global and must pick one
+        $topLevelOnly = $ids === null && $this->isGlobal($user);
 
         return Department::query()
-            ->when($ids !== null, fn ($q) => $q->whereIn('id', $ids), fn ($q) => $q->whereNull('parent_id'))
+            ->when($ids !== null, fn ($q) => $q->whereIn('id', $ids), fn ($q) => $topLevelOnly ? $q->whereNull('parent_id') : $q)
             ->active()
             ->orderBy('sort_order')
             ->get(['id', 'name', 'name_ar'])
