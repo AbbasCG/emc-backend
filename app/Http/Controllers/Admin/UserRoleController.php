@@ -37,7 +37,7 @@ class UserRoleController extends Controller
         }
 
         $data = $request->validate([
-            'role' => ['required', 'string', \Illuminate\Validation\Rule::in(Role::assignableSlugs())],
+            'role' => ['required', 'string', Role::assignableRule()],
         ]);
 
         $newRole = $data['role'];
