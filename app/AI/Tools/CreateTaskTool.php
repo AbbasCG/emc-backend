@@ -63,7 +63,7 @@ class CreateTaskTool implements AiToolInterface
                 return ['error' => $check['message']];
             }
         }
-        if ($access->manageableDepartmentIds($user) !== null) {
+        if (! $access->isGlobal($user)) {
             if ($departmentId === null || ! $access->inScope($user, $departmentId)) {
                 return ['error' => 'You may only create tasks in a department you lead (pass department_id).'];
             }

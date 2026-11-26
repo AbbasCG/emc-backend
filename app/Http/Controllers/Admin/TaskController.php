@@ -52,7 +52,7 @@ class TaskController extends Controller
     private function refuseOutOfScope(Request $request, ?int $departmentId, array $assigneeIds = []): ?JsonResponse
     {
         $user = $request->user();
-        if ($this->writeAccess->manageableDepartmentIds($user) === null) {
+        if ($this->writeAccess->isGlobal($user)) {
             return null; // acts on every department and everybody
         }
 
@@ -110,7 +110,7 @@ class TaskController extends Controller
     /** A section must belong to the department the task is in (only enforced for a department-scoped actor). */
     private function refuseForeignSection(Request $request, ?int $sectionId, ?int $departmentId): ?JsonResponse
     {
-        if ($sectionId === null || $this->writeAccess->manageableDepartmentIds($request->user()) === null) {
+        if ($sectionId === null || $this->writeAccess->isGlobal($request->user())) {
             return null;
         }
         $belongs = $departmentId !== null
@@ -424,7 +424,7 @@ class TaskController extends Controller
             return $refusal;
         }
         // The task must be in the actor's scope (a task of another department, or with no department, stays read-only to a leader).
-        if ($this->writeAccess->manageableDepartmentIds($request->user()) !== null && ! $this->writeAccess->inScope($request->user(), $this->writeAccess->departmentOf($task))) {
+        if (! $this->writeAccess->isGlobal($request->user()) && ! $this->writeAccess->inScope($request->user(), $this->writeAccess->departmentOf($task))) {
             return response()->json(['success' => false, 'message' => 'هذه المهمة خارج نطاق الإدارات التي تقودها، فلا يمكنك تعديلها.'], 403);
         }
 
@@ -455,13 +455,6 @@ class TaskController extends Controller
             'tags'            => 'nullable|array',
         ]);
 
-        if (! empty($data['task_scope']) && isset($data['points'])) {
-            $validation = TaskWorkflowService::validatePointsForScope($data['task_scope'], (int) $data['points']);
-            if (! $validation['valid']) {
-                return response()->json(['success' => false, 'message' => $validation['message']], 422);
-            }
-        }
-
         // A department change must stay inside the scope; a leader cannot move a task out of the departments they lead.
         $departmentId = array_key_exists('department_id', $data) ? ($data['department_id'] === null ? null : (int) $data['department_id']) : $this->writeAccess->departmentOf($task);
         if (array_key_exists('department_id', $data) && ($refusal = $this->refuseOutOfScope($request, $departmentId))) {
@@ -483,9 +476,9 @@ class TaskController extends Controller
 
         // A delegated (non-global) holder never touches what is already credited or about to be: once a task is awaiting approval,
         // approved or completed, its size, points, hours, status and assignee are the evaluators' (global roles are unchanged).
-        if ($this->writeAccess->manageableDepartmentIds($request->user()) !== null && $this->writeAccess->isCreditLocked($task)) {
+        if (! $this->writeAccess->isGlobal($request->user()) && $this->writeAccess->isCreditLocked($task)) {
             $touched = [];
-            foreach (['points' => 'int', 'task_scope' => 'string', 'estimated_hours' => 'float', 'status' => 'string'] as $field => $cast) {
+            foreach (['points' => 'int', 'task_scope' => 'string', 'estimated_hours' => 'float', 'status' => 'string', 'department_id' => 'int'] as $field => $cast) {
                 if (array_key_exists($field, $data) && $this->differs($data[$field], $task->{$field}, $cast)) {
                     $touched[] = $field;
                 }
@@ -495,6 +488,18 @@ class TaskController extends Controller
             }
             if ($touched !== []) {
                 return response()->json(['success' => false, 'message' => 'لا يمكنك تغيير النقاط أو حجم المهمة أو الساعات أو الحالة أو المكلَّف بعد أن أصبحت المهمة بانتظار الاعتماد أو معتمدة أو مكتملة.', 'errors' => array_fill_keys($touched, ['لا يمكن تغييره في هذه المرحلة.'])], 403);
+            }
+        }
+
+        // The size / points range is judged on the EFFECTIVE values: sending `points` alone must not slip past the cap of the stored size.
+        if (array_key_exists('task_scope', $data) || array_key_exists('points', $data)) {
+            $effectiveScope = array_key_exists('task_scope', $data) ? $data['task_scope'] : $task->task_scope;
+            $effectivePoints = array_key_exists('points', $data) ? $data['points'] : $task->points;
+            if (! empty($effectiveScope) && $effectivePoints !== null) {
+                $validation = TaskWorkflowService::validatePointsForScope($effectiveScope, (int) $effectivePoints);
+                if (! $validation['valid']) {
+                    return response()->json(['success' => false, 'message' => $validation['message'], 'errors' => ['points' => [$validation['message']]]], 422);
+                }
             }
         }
 
@@ -596,14 +601,14 @@ class TaskController extends Controller
         if ($refusal = $this->refuseWithout($request, TaskWriteAccess::ASSIGN, 'ليست لديك صلاحية إسناد المهام.')) {
             return $refusal;
         }
-        if ($this->writeAccess->manageableDepartmentIds($request->user()) !== null && ! $this->writeAccess->inScope($request->user(), $this->writeAccess->departmentOf($task))) {
+        if (! $this->writeAccess->isGlobal($request->user()) && ! $this->writeAccess->inScope($request->user(), $this->writeAccess->departmentOf($task))) {
             return response()->json(['success' => false, 'message' => 'هذه المهمة خارج نطاق الإدارات التي تقودها، فلا يمكنك إعادة إسنادها.'], 403);
         }
         if ($task->locked_at !== null) {
             return response()->json(['success' => false, 'message' => 'هذه المهمة مقفلة ولا يمكن إعادة إسنادها.'], 423);
         }
         // A delegated holder cannot move the credit of a task that is awaiting approval, approved or completed.
-        if ($this->writeAccess->manageableDepartmentIds($request->user()) !== null && $this->writeAccess->isCreditLocked($task)) {
+        if (! $this->writeAccess->isGlobal($request->user()) && $this->writeAccess->isCreditLocked($task)) {
             return response()->json(['success' => false, 'message' => 'لا يمكنك إعادة إسناد مهمة بانتظار الاعتماد أو معتمدة أو مكتملة.'], 403);
         }
 
@@ -798,6 +803,14 @@ class TaskController extends Controller
             // manager, not yet approved by HR. Anything else (in progress, pending, cancelled, never evaluated) is refused.
             if (! $locked || $locked->status !== 'waiting_approval' || $locked->manager_approved_at === null || $locked->hr_approved_at !== null) {
                 $refusal = response()->json(['success' => false, 'message' => 'هذه المهمة ليست بانتظار اعتماد الموارد البشرية (يجب أن تكون مقيَّمة ومعتمدة من مدير الإدارة ولم تُعتمد نهائياً بعد).'], 422);
+
+                return;
+            }
+
+            // The creator of a task never approves it, even when another manager evaluated it: the person who set the task up (its
+            // size, points and assignee) is not the second pair of eyes that releases the credit.
+            if ($locked->created_by !== null && (int) $locked->created_by === (int) $user->id) {
+                $refusal = response()->json(['success' => false, 'message' => 'لا يمكنك اعتماد مهمة أنشأتَها. يعتمدها مسؤول موارد بشرية آخر.'], 403);
 
                 return;
             }

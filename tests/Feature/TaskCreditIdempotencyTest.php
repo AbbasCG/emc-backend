@@ -23,6 +23,8 @@ class TaskCreditIdempotencyTest extends TestCase
 
     private User $volunteer;
 
+    private ?User $approver = null;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -58,7 +60,8 @@ class TaskCreditIdempotencyTest extends TestCase
 
     private function hrApprove(Task $t)
     {
-        Sanctum::actingAs($this->admin);
+        // the creator (this->admin) never approves their own task: another admin does
+        Sanctum::actingAs($this->approver ??= User::factory()->create(['role' => 'admin', 'is_active' => true]));
 
         return $this->postJson("/api/admin/tasks/{$t->id}/hr-approve");
     }

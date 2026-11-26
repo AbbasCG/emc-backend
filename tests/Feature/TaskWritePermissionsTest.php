@@ -42,6 +42,9 @@ class TaskWritePermissionsTest extends TestCase
 
     private const BOARD = '/api/operations/work-board';
 
+    /** The role of the department-scoped leader fixtures. hr_manager is NOT one: it acts on every department (TaskWriteAccess::actsOnEveryDepartment). */
+    private const LEADER_ROLE = 'department_manager';
+
     private Department $deptHr;
 
     private Department $deptOther;
@@ -63,7 +66,7 @@ class TaskWritePermissionsTest extends TestCase
         // Like production: role rows WITH their grants (the migration's grants, mirrored by RolePermissionSeeder / forRole).
         $this->seed([RoleSeeder::class, PermissionSeeder::class, RolePermissionSeeder::class, ImpersonatePermissionSeeder::class]);
 
-        $this->hr = $this->user('hr_manager');
+        $this->hr = $this->user(self::LEADER_ROLE);
         $this->otherLeader = $this->user('department_manager');
         $this->deptHr = $this->dept('الموارد البشرية', $this->hr);
         $this->deptOther = $this->dept('التسويق', $this->otherLeader);
@@ -106,7 +109,7 @@ class TaskWritePermissionsTest extends TestCase
     private function hrWith(string ...$keys): User
     {
         foreach ($keys as $key) {
-            $this->grantToRole('hr_manager', $key);
+            $this->grantToRole(self::LEADER_ROLE, $key);
         }
 
         return $this->hr->fresh();
@@ -139,7 +142,7 @@ class TaskWritePermissionsTest extends TestCase
         $modules = $this->getJson('/api/admin/permissions')->assertOk()->json('data.modules');
         $group = collect($modules)->firstWhere('group', 'tasks');
         $this->assertSame('المهام والعمليات', $group['group_label']);
-        $this->assertEqualsCanonicalizing(array_keys($expected), array_column($group['permissions'], 'key'));
+        $this->assertEqualsCanonicalizing([...array_keys($expected), 'tasks.manage_all_departments'], array_column($group['permissions'], 'key'), 'the three write keys plus the SCOPE key');
 
         $role = Role::where('name', 'hr_manager')->firstOrFail();
         $roleModules = $this->getJson("/api/admin/roles/{$role->id}/permissions")->assertOk()->json('data.modules');
@@ -149,7 +152,7 @@ class TaskWritePermissionsTest extends TestCase
         $panel = $this->getJson("/api/admin/access/users/{$this->hr->id}/action-permissions")->assertOk()->json('data.groups');
         $tasks = collect($panel)->firstWhere('key', 'tasks');
         $this->assertSame('المهام والعمليات', $tasks['label_ar']);
-        $this->assertEqualsCanonicalizing(array_keys($expected), array_column($tasks['permissions'], 'key'));
+        $this->assertEqualsCanonicalizing([...array_keys($expected), 'tasks.manage_all_departments'], array_column($tasks['permissions'], 'key'));
     }
 
     public function test_default_grants_keep_the_admin_tier_and_give_hr_manager_nothing(): void
@@ -179,11 +182,13 @@ class TaskWritePermissionsTest extends TestCase
 
     public function test_hr_manager_without_a_grant_reads_the_board_but_every_task_write_is_refused(): void
     {
+        // department_manager ships with tasks.create by default; this test is about a leader with NO write key at all.
+        Role::where('name', self::LEADER_ROLE)->firstOrFail()->revokePermission('tasks.create');
         $task = $this->task();
         $before = Task::count();
         $snapshot = Task::find($task->id)->only(['title', 'assigned_to', 'department_id', 'priority']);
 
-        $this->as($this->hr);
+        $this->as($this->hr->fresh());
         $board = $this->getJson(self::BOARD)->assertOk();
         $this->assertSame(['can_create' => false, 'can_assign' => false, 'can_update' => false, 'manageable_department_ids' => [$this->deptHr->id]], $board->json('meta.task_actions'));
         $card = collect($board->json('data.columns'))->pluck('items')->flatten(1)->firstWhere('key', "task:{$task->id}");
@@ -371,12 +376,13 @@ class TaskWritePermissionsTest extends TestCase
         $this->assignPermission($this->hr, 'tasks.update', 'allow');
 
         $this->as($this->hr)->patchJson("/api/operations/tasks/{$task->id}", ['title' => 'بمنح شخصي'])->assertOk();
-        $this->as($this->user('hr_manager'))->patchJson("/api/operations/tasks/{$task->id}", ['title' => 'x'])->assertForbidden(); // same role, no grant
+        $this->as($this->user(self::LEADER_ROLE))->patchJson("/api/operations/tasks/{$task->id}", ['title' => 'x'])->assertForbidden(); // same role, no grant
         $this->assertSame('بمنح شخصي', Task::find($task->id)->title);
     }
 
     public function test_a_per_user_grant_through_the_access_control_endpoint_works(): void
     {
+        Role::where('name', self::LEADER_ROLE)->firstOrFail()->revokePermission('tasks.create'); // the leader role ships with it; these tests start from none
         $this->as($this->user('super_admin'))->postJson("/api/admin/access/users/{$this->hr->id}/action-permissions/tasks.create/grant")->assertOk();
 
         $this->as($this->hr)->postJson('/api/admin/tasks', $this->payload())->assertCreated();
@@ -387,8 +393,8 @@ class TaskWritePermissionsTest extends TestCase
     public function test_a_per_user_deny_beats_a_role_grant_and_revoking_refuses_again_immediately(): void
     {
         $task = $this->task();
-        $this->grantToRole('hr_manager', 'tasks.update');
-        $denied = $this->user('hr_manager');
+        $this->grantToRole(self::LEADER_ROLE, 'tasks.update');
+        $denied = $this->user(self::LEADER_ROLE);
         $this->deptHr->update(['leader_id' => $this->hr->id]);
 
         $this->as($this->hr)->patchJson("/api/operations/tasks/{$task->id}", ['title' => 'الدور يكفي'])->assertOk();
@@ -402,7 +408,7 @@ class TaskWritePermissionsTest extends TestCase
         $this->assertSame('a', Task::find($t2->id)->title);
 
         // revoke the ROLE grant: the other holder is refused at once
-        Role::where('name', 'hr_manager')->firstOrFail()->revokePermission('tasks.update');
+        Role::where('name', self::LEADER_ROLE)->firstOrFail()->revokePermission('tasks.update');
         $this->as($this->hr)->patchJson("/api/operations/tasks/{$task->id}", ['title' => 'بعد السحب'])->assertForbidden();
         $this->assertSame('الدور يكفي', Task::find($task->id)->title);
     }
@@ -412,13 +418,13 @@ class TaskWritePermissionsTest extends TestCase
         $this->as($this->hrWith('tasks.create', 'tasks.assign'))->postJson('/api/operations/board/tasks', $this->payload(['assigned_to' => $this->member->id]))->assertCreated();
 
         // revoke ONLY the assign half: creating without an assignee still works, with one it does not (and nothing is persisted)
-        Role::where('name', 'hr_manager')->firstOrFail()->revokePermission('tasks.assign');
+        Role::where('name', self::LEADER_ROLE)->firstOrFail()->revokePermission('tasks.assign');
         $count = Task::count();
         $this->as($this->hr)->postJson('/api/operations/board/tasks', $this->payload(['assigned_to' => $this->member->id]))->assertForbidden();
         $this->assertSame($count, Task::count());
         $this->postJson('/api/operations/board/tasks', $this->payload())->assertCreated();
 
-        Role::where('name', 'hr_manager')->firstOrFail()->revokePermission('tasks.create');
+        Role::where('name', self::LEADER_ROLE)->firstOrFail()->revokePermission('tasks.create');
         $this->as($this->hr)->postJson('/api/operations/board/tasks', $this->payload())->assertForbidden();
 
         // a personal allow, then revoked through the access-control endpoint
@@ -520,7 +526,7 @@ class TaskWritePermissionsTest extends TestCase
     private function actors(): array
     {
         $only = function (string ...$keys): User {
-            $u = $this->user('hr_manager');
+            $u = $this->user(self::LEADER_ROLE);
             $this->dept('إدارة '.Str::random(3), $u);
             foreach ($keys as $k) {
                 $this->assignPermission($u, $k, 'allow');
@@ -650,8 +656,9 @@ class TaskWritePermissionsTest extends TestCase
 
     public function test_an_impersonation_preview_acts_as_the_target_and_a_scoped_token_is_not_widened(): void
     {
+        Role::where('name', self::LEADER_ROLE)->firstOrFail()->revokePermission('tasks.create'); // the leader role ships with it; these tests start from none
         $super = $this->user('super_admin');
-        $withGrant = $this->user('hr_manager');
+        $withGrant = $this->user(self::LEADER_ROLE);
         $this->dept('إدارة المعاين', $withGrant);
         $this->assignPermission($withGrant, 'tasks.create', 'allow');
         $withoutGrant = $this->hr;
@@ -688,7 +695,7 @@ class TaskWritePermissionsTest extends TestCase
     public function test_a_cookie_session_preview_acts_as_the_target(): void
     {
         $super = $this->user('super_admin');
-        $withGrant = $this->user('hr_manager');
+        $withGrant = $this->user(self::LEADER_ROLE);
         $led = $this->dept('إدارة المعاين', $withGrant);
         $this->assignPermission($withGrant, 'tasks.create', 'allow');
 
@@ -892,7 +899,7 @@ class TaskWritePermissionsTest extends TestCase
     public function test_the_migration_is_idempotent_grants_only_the_previous_holders_and_never_touches_other_grants(): void
     {
         // Production state BEFORE the migration: role rows with their old grants, no tasks.* rows.
-        DB::table('permission_role')->whereIn('permission_id', Permission::whereIn('name', ['tasks.create', 'tasks.assign', 'tasks.update'])->pluck('id'))->delete();
+        DB::table('permission_role')->whereIn('permission_id', Permission::whereIn('name', ['tasks.create', 'tasks.assign', 'tasks.update', 'tasks.manage_all_departments'])->pluck('id'))->delete();
         $hrRole = Role::where('name', 'hr_manager')->firstOrFail();
         $hrBefore = $hrRole->permissions()->pluck('name')->sort()->values()->all();
         $totalBefore = DB::table('permission_role')->count();
@@ -976,12 +983,12 @@ class TaskWritePermissionsTest extends TestCase
         $this->assertSame('in_progress', $mine->fresh()->status);
     }
 
-    public function test_board_status_move_is_refused_to_an_hr_manager_who_does_not_lead_the_department_even_with_the_permission(): void
+    public function test_board_status_move_is_refused_to_a_department_manager_who_does_not_lead_the_department_even_with_the_permission(): void
     {
         $task = $this->task(['status' => 'planning']);
-        $second = $this->user('hr_manager');
+        $second = $this->user(self::LEADER_ROLE);
         $this->deptHr->users()->attach($second->id); // a member of HR, not its leader
-        $this->grantToRole('hr_manager', 'tasks.update');
+        $this->grantToRole(self::LEADER_ROLE, 'tasks.update');
 
         $this->as($second->fresh());
         $this->move($task)->assertForbidden();
@@ -990,7 +997,7 @@ class TaskWritePermissionsTest extends TestCase
 
     public function test_board_status_move_does_not_reopen_or_move_credit_bearing_work_for_a_delegated_leader(): void
     {
-        $this->grantToRole('hr_manager', 'tasks.update');
+        $this->grantToRole(self::LEADER_ROLE, 'tasks.update');
         $leader = $this->hr->fresh();
 
         $waiting = $this->task(['status' => 'waiting_approval']);
@@ -1109,8 +1116,8 @@ class TaskWritePermissionsTest extends TestCase
         $approved = $this->task(['status' => 'in_progress', 'manager_approved_at' => now()]);
         $lock($approved)->assertForbidden();
 
-        // a member of HR who is not its leader gets nothing from the permission
-        $second = $this->user('hr_manager');
+        // a member of the department who is not its leader gets nothing from the permission
+        $second = $this->user(self::LEADER_ROLE);
         $this->deptHr->users()->attach($second->id);
         $this->as($second->fresh());
         $lock($mine)->assertForbidden();

@@ -39,7 +39,9 @@ class PermissionDelegationService
     public function canDelegate(User $actor, User $target, string $permissionKey): bool
     {
         // System level restricted permissions (cannot be delegated by managers)
-        $systemPermissions = ['system.manage', 'roles.manage', 'users.impersonate', 'technology.manage', 'delegations.manage_all'];
+        // tasks.manage_all_departments (the all-departments task SCOPE) is one of them: a delegation row is department-scoped, but
+        // hasPermission() never reads scope_type, so handing it to a member of one department would grant every department.
+        $systemPermissions = ['system.manage', 'roles.manage', 'users.impersonate', 'technology.manage', 'delegations.manage_all', Permissions::TASKS_MANAGE_ALL_DEPARTMENTS];
 
         // tickets.review_participated (approving a ticket one created / is assigned / submitted) is a conflict-of-interest
         // permission: only an actual super_admin may grant or revoke it, for anyone. Refused BEFORE the root bypass below, so

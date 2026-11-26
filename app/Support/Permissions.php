@@ -130,6 +130,15 @@ final class Permissions
     const TASKS_ASSIGN = 'tasks.assign';
     const TASKS_UPDATE = 'tasks.update';
 
+    /**
+     * SCOPE only: act on the tasks of EVERY department instead of the departments one leads (App\Services\TaskWriteAccess::
+     * actsOnEveryDepartment). It writes nothing by itself: tasks.create / assign / update are still required for each action under
+     * its own rules, and it never implies evaluating, deleting, approving or any global-role exemption (the credit-bearing guards,
+     * the lock ownership and the transition rules keep binding the holder). Granted one account at a time; NO role and NO existing
+     * account receives it by default or by migration (super_admin / tech_admin hold it through all(), they are global anyway).
+     */
+    const TASKS_MANAGE_ALL_DEPARTMENTS = 'tasks.manage_all_departments';
+
     // ── Partnerships ─────────────────────────────────────────────────────────
     const VIEW_PARTNERS        = 'view_partners';
     const MANAGE_PARTNERS      = 'manage_partners';
@@ -287,7 +296,7 @@ final class Permissions
             // HR
             self::VIEW_VOLUNTEERS, self::MANAGE_VOLUNTEERS, self::VIEW_TEAM, self::MANAGE_TEAM, self::CONSULTANT_APPLICATIONS_VIEW, self::HR_TASKS_VIEW,
             // Task writes (the board): create / assign / update, independently grantable
-            self::TASKS_CREATE, self::TASKS_ASSIGN, self::TASKS_UPDATE,
+            self::TASKS_CREATE, self::TASKS_ASSIGN, self::TASKS_UPDATE, self::TASKS_MANAGE_ALL_DEPARTMENTS,
             // Partnerships
             self::VIEW_PARTNERS, self::MANAGE_PARTNERS, self::VIEW_PARTNER_REPORTS,
             // Marketing
@@ -558,7 +567,7 @@ final class Permissions
             'certificates' => [self::VIEW_CERTIFICATES, self::MANAGE_CERTIFICATES, self::ISSUE_CERTIFICATES, self::REVOKE_CERTIFICATES],
             'operations'   => [self::VIEW_DEPARTMENTS, self::MANAGE_DEPARTMENTS, self::VIEW_TASKS, self::MANAGE_TASKS, self::VIEW_MEETINGS, self::MANAGE_MEETINGS, self::VIEW_FORMS, self::MANAGE_FORMS],
             'hr'           => [self::VIEW_VOLUNTEERS, self::MANAGE_VOLUNTEERS, self::VIEW_TEAM, self::MANAGE_TEAM, self::CONSULTANT_APPLICATIONS_VIEW, self::HR_TASKS_VIEW],
-            'tasks'        => [self::TASKS_CREATE, self::TASKS_ASSIGN, self::TASKS_UPDATE],
+            'tasks'        => [self::TASKS_CREATE, self::TASKS_ASSIGN, self::TASKS_UPDATE, self::TASKS_MANAGE_ALL_DEPARTMENTS],
             'partnerships' => [self::VIEW_PARTNERS, self::MANAGE_PARTNERS, self::VIEW_PARTNER_REPORTS],
             'marketing'    => [self::VIEW_MARKETING, self::MANAGE_MARKETING],
             'quality'      => [self::VIEW_QUALITY, self::MANAGE_QUALITY, self::APPROVE_QUALITY_REVIEWS],
