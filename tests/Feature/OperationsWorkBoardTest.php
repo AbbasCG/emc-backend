@@ -460,7 +460,11 @@ class OperationsWorkBoardTest extends TestCase
 
         foreach ([$this->viewer, $this->leaderA, $this->admin] as $viewer) {
             foreach (collect($this->columns($viewer))->pluck('items')->flatten(1) as $card) {
-                $this->assertSame(['can_open', 'can_accept', 'can_reject', 'can_complete'], array_keys($card['capabilities']), 'no approve / reassign / review / lock / evaluate flag exists on a card');
+                // A TASK card also carries the two write flags of TaskWriteAccess (can_edit / can_reassign); a ticket card never does.
+                $this->assertSame($card['kind'] === 'task' ? ['can_open', 'can_accept', 'can_reject', 'can_complete', 'can_edit', 'can_reassign'] : ['can_open', 'can_accept', 'can_reject', 'can_complete'], array_keys($card['capabilities']), 'no approve / review / lock / evaluate flag exists on a card');
+                if ($card['kind'] === 'task') {
+                    $this->assertSame($viewer->role === 'admin', $card['capabilities']['can_edit'] && $card['capabilities']['can_reassign'], 'only the admin tier is offered the two task write flags here');
+                }
                 $this->assertFalse($card['capabilities']['can_accept'] || $card['capabilities']['can_reject'] || $card['capabilities']['can_complete'], "{$viewer->role} is nobody's assignee here: no personal action either");
                 $this->assertFalse($card['is_mine']);
             }
@@ -476,7 +480,7 @@ class OperationsWorkBoardTest extends TestCase
         $cards = collect($this->columns($this->alice))->pluck('items')->flatten(1)->keyBy('key');
         $this->assertSame(['can_open' => true, 'can_accept' => true, 'can_reject' => true, 'can_complete' => false], $cards["ticket:{$assigned->id}"]['capabilities']);
         $this->assertSame(['can_open' => true, 'can_accept' => false, 'can_reject' => false, 'can_complete' => true], $cards["ticket:{$running->id}"]['capabilities']);
-        $this->assertSame(['can_open' => true, 'can_accept' => true, 'can_reject' => true, 'can_complete' => false], $cards["task:{$pendingTask->id}"]['capabilities']);
+        $this->assertSame(['can_open' => true, 'can_accept' => true, 'can_reject' => true, 'can_complete' => false, 'can_edit' => false, 'can_reassign' => false], $cards["task:{$pendingTask->id}"]['capabilities']);
         $this->assertTrue($cards["ticket:{$running->id}"]['is_mine']);
 
         // A global role could act for the assignee elsewhere; the board never offers it.
@@ -563,7 +567,9 @@ class OperationsWorkBoardTest extends TestCase
             }
         };
         $count = function (): int {
-            Sanctum::actingAs($this->viewer);
+            // A fresh model each time: the permission lookup of the board's task_actions is one constant cost, never per card, and it
+            // must be paid in BOTH measurements (a model that already resolved its permissions would make the first one cheaper).
+            Sanctum::actingAs($this->viewer->fresh());
             DB::flushQueryLog();
             DB::enableQueryLog();
             $this->getJson(self::URL)->assertOk();
@@ -604,7 +610,7 @@ class OperationsWorkBoardTest extends TestCase
         $this->assertSame(['success', 'data', 'meta'], array_keys($json));
         $this->assertSame(['columns'], array_keys($json['data']));
         $this->assertSame(['key', 'label', 'count', 'counts', 'items', 'has_more'], array_keys($json['data']['columns'][0]));
-        $this->assertSame(['scope', 'kind', 'per_column', 'column', 'page', 'counts', 'generated_at'], array_keys($json['meta']));
+        $this->assertSame(['scope', 'kind', 'per_column', 'column', 'page', 'counts', 'task_actions', 'generated_at'], array_keys($json['meta']));
         $this->assertSame(OperationsWorkBoard::DEFAULT_PER_COLUMN, $json['meta']['per_column']);
         $this->assertSame('all', $json['meta']['scope']);
         $this->assertSame($task->id, collect($json['data']['columns'])->firstWhere('key', 'planning')['items'][0]['id']);

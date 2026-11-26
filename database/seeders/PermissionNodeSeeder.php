@@ -19,6 +19,7 @@ class PermissionNodeSeeder extends Seeder
             'assignments_g'     => ['إدارة الواجبات والتسليمات', 'Assignments & Submissions'],
             'finance'           => ['الشؤون المالية والاعتمادات', 'Finance & Approvals'],
             'tickets'           => ['الدعم الفني والتذاكر', 'Support & Tickets'],
+            'tasks'             => ['المهام والعمليات', 'Tasks & Operations'],
         ];
 
         $permissions = Permission::all();

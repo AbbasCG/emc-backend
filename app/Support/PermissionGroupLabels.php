@@ -13,6 +13,7 @@ final class PermissionGroupLabels
         'finance'           => 'المالية',
         'certificates'      => 'الشهادات',
         'operations'        => 'العمليات',
+        'tasks'             => 'المهام والعمليات',
         'hr'                => 'الموارد البشرية',
         'partnerships'      => 'الشراكات',
         'marketing'         => 'التسويق والإعلام',
