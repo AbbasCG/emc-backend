@@ -75,9 +75,10 @@ class TaskWorkflowService
 
         DB::transaction(function () use ($task, $approver) {
             // 1. إضافة نقاط الأثر إلى ليدجر النقاط
+            $firstCredit = true;
             if ($task->points && $task->points > 0) {
                 // (يمنع VolunteerCreditService الازدواجية إذا كان قد تم منحه مسبقاً لهذه المهمة)
-                VolunteerCreditService::awardPoints(
+                $award = VolunteerCreditService::awardPoints(
                     (int) $task->assigned_to,
                     (int) $task->points,
                     'task',
@@ -87,10 +88,12 @@ class TaskWorkflowService
                     Task::class,
                     (int) $task->id,
                 );
+                // A null award means this task's points are already in the ledger: it was credited before, so its hours must not be added again.
+                $firstCredit = $award !== null;
             }
 
-            // 2. إضافة الساعات التراكمية في ملف المتطوع
-            if ($task->estimated_hours && $task->estimated_hours > 0) {
+            // 2. إضافة الساعات التراكمية في ملف المتطوع (مرة واحدة لكل إنجاز)
+            if ($firstCredit && $task->estimated_hours && $task->estimated_hours > 0) {
                 VolunteerCreditService::addHours((int) $task->assigned_to, $task->estimated_hours);
             }
 

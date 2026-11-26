@@ -11,6 +11,7 @@ use App\Models\TaskChecklistItem;
 use App\Services\TaskAcceptanceService;
 use App\Services\TaskCollaborationService;
 use App\Services\TaskStatusService;
+use App\Services\TaskTransitionRules;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -178,6 +179,12 @@ class MyWorkTaskController extends Controller
             }
             if ($data['status'] === 'completed') {
                 return response()->json(['success' => false, 'message' => 'اعتماد الإنجاز يتم بعد تقييم المدير؛ حرّك المهمة إلى «بانتظار التقييم».'], 403);
+            }
+
+            // The shared workflow rules (also the board and the edit form): `waiting_approval` is the evaluation's result, and a task
+            // that is evaluated / approved is not taken back by its assignee (TaskTransitionRules).
+            if ($message = TaskTransitionRules::refusal($row, $data['status'])) {
+                return response()->json(['success' => false, 'message' => $message, 'errors' => ['status' => [$message]]], 422);
             }
 
             return TaskStatusService::move($row, $data['status'], $request);

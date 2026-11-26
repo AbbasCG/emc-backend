@@ -134,7 +134,7 @@ class TaskWriteAccess
     /** Awaiting approval, approved by the manager or HR, or completed: its points, size, hours, status and assignee are credit-bearing. */
     public function isCreditLocked(Task $task): bool
     {
-        return in_array($task->status, ['waiting_approval', 'completed'], true) || $task->manager_approved_at !== null || $task->hr_approved_at !== null;
+        return TaskTransitionRules::isCreditBearing($task);
     }
 
     public function departmentOf(Task $task): ?int
