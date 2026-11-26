@@ -455,7 +455,11 @@ class MyWorkTasksTest extends TestCase
         $this->assertSame('planning', $t->fresh()->status);
         $this->assertSame(0, ActivityLog::where('action', 'task.status_changed')->where('entity_id', $t->id)->count());
 
-        foreach (['idea', 'under_review', 'planning', 'waiting_approval', 'in_progress', 'postponed', 'cancelled', 'needs_evaluation'] as $status) {
+        // `waiting_approval` is the manager's evaluation result, not a member's move (TaskTransitionRules)
+        $this->patchJson("/api/my-work/tasks/{$t->id}/status", ['status' => 'waiting_approval'])->assertStatus(422)->assertJsonStructure(['errors' => ['status']]);
+        $this->assertSame('planning', $t->fresh()->status);
+
+        foreach (['idea', 'under_review', 'planning', 'in_progress', 'postponed', 'cancelled', 'needs_evaluation'] as $status) {
             $this->patchJson("/api/my-work/tasks/{$t->id}/status", ['status' => $status])->assertOk()->assertJsonPath('data.status', $status);
         }
     }
@@ -471,9 +475,10 @@ class MyWorkTasksTest extends TestCase
         $this->assertSame('completed', $t->fresh()->status);
         $this->assertSame(0, ActivityLog::where('action', 'task.status_changed')->where('entity_id', $t->id)->count());
 
-        // A manager still can, through the management route (unchanged).
+        // Nor does a manager re-open it through the management route: a completed (credited) task is final (TaskTransitionRules).
         $manager = User::factory()->create(['role' => 'operations_manager', 'is_active' => true]);
-        $this->as($manager)->patchJson("/api/operations/board/tasks/{$t->id}/status", ['status' => 'in_progress'])->assertOk();
+        $this->as($manager)->patchJson("/api/operations/board/tasks/{$t->id}/status", ['status' => 'in_progress'])->assertStatus(422);
+        $this->assertSame('completed', $t->fresh()->status);
     }
 
     public function test_the_status_must_be_a_known_one(): void
@@ -535,7 +540,9 @@ class MyWorkTasksTest extends TestCase
         $this->assertSame('idea', $theirs->fresh()->status);
 
         $manager = User::factory()->create(['role' => 'operations_manager', 'is_active' => true]);
-        $this->as($manager)->patchJson("/api/operations/board/tasks/{$theirs->id}/status", ['status' => 'completed'])->assertOk();
-        $this->assertSame('completed', $theirs->fresh()->status);
+        $this->as($manager)->patchJson("/api/operations/board/tasks/{$theirs->id}/status", ['status' => 'planning'])->assertOk();
+        $this->assertSame('planning', $theirs->fresh()->status);
+        $this->patchJson("/api/operations/board/tasks/{$theirs->id}/status", ['status' => 'completed'])->assertStatus(422); // only the evaluation completes
+        $this->assertSame('planning', $theirs->fresh()->status);
     }
 }

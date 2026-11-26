@@ -15,6 +15,7 @@ use App\Services\ActivityLogger;
 use App\Services\TaskAcceptanceService;
 use App\Services\TaskCollaborationService;
 use App\Services\TaskStatusService;
+use App\Services\TaskTransitionRules;
 use App\Services\TaskWriteAccess;
 use App\Services\TaskWorkflowService;
 use Illuminate\Http\JsonResponse;
@@ -288,6 +289,11 @@ class TaskController extends Controller
             }
         }
 
+        // A task is born in a working status: the outcomes (awaiting approval / completed) come from the evaluation and HR approval.
+        if ($message = TaskTransitionRules::creationRefusal($data['status'] ?? null)) {
+            return response()->json(['success' => false, 'message' => $message, 'errors' => ['status' => [$message]]], 422);
+        }
+
         // Who the task is put on: creating it WITH an assignee also needs tasks.assign.
         $assigneeIds = array_values(array_unique(array_map('intval', array_merge(
             empty($data['assigned_to']) ? [] : [$data['assigned_to']],
@@ -492,6 +498,13 @@ class TaskController extends Controller
             }
         }
 
+        // A status CHANGE written by hand follows the shared workflow rules for EVERYBODY (global actors included): the outcomes
+        // `waiting_approval` / `completed` are recorded by the evaluation and HR approval only, and an evaluated / approved /
+        // completed task is not re-opened here (TaskTransitionRules).
+        if (array_key_exists('status', $data) && ($message = TaskTransitionRules::refusal($task, $data['status']))) {
+            return response()->json(['success' => false, 'message' => $message, 'errors' => ['status' => [$message]]], 422);
+        }
+
         // Changing WHO the task is on (including un-assigning it) is an assignment: tasks.assign + the assignee's scope.
         if ($assigneeChanged) {
             if ($refusal = $this->refuseWithout($request, TaskWriteAccess::ASSIGN, 'ليست لديك صلاحية إسناد المهام.')) {
@@ -515,7 +528,20 @@ class TaskController extends Controller
             $data['rejected_at'] = null;
         }
 
-        $task->update($data);
+        // The status change is judged again on the row LOCKED for the write (see updateStatus), so an evaluation / approval that commits
+        // meanwhile is never overwritten.
+        $stale = DB::transaction(function () use ($task, $data) {
+            $row = Task::lockForUpdate()->find($task->id);
+            if ($row && array_key_exists('status', $data) && ($message = TaskTransitionRules::refusal($row, $data['status']))) {
+                return $message;
+            }
+            $task->update($data);
+
+            return null;
+        });
+        if ($stale !== null) {
+            return response()->json(['success' => false, 'message' => $stale, 'errors' => ['status' => [$stale]]], 422);
+        }
 
         ActivityLogger::log('task.updated', $task, $data, $request);
 
@@ -672,16 +698,33 @@ class TaskController extends Controller
 
         $finalScore = round(array_sum($scores) / count($scores), 2);
 
+        // Nobody evaluates their own task (hr-approve refuses the same): the credit would go to the evaluator.
+        if ($task->assigned_to !== null && (int) $task->assigned_to === (int) $user->id) {
+            return response()->json(['success' => false, 'message' => 'لا يمكنك تقييم مهمة مسندة إليك. يقيّمها مدير آخر.'], 403);
+        }
+
         $replayed = false;
-        DB::transaction(function () use ($task, $user, $data, $collabNa, $finalScore, &$replayed) {
-            // Idempotent: a task that is already completed was already credited. A repeated evaluation changes nothing
-            // (and never re-adds hours or moves a completed task back to waiting_approval).
+        $refusal = null;
+        DB::transaction(function () use ($task, $user, $data, $collabNa, $finalScore, &$replayed, &$refusal) {
+            // Idempotent: a task that is already completed AND evaluated was already credited. A repeated evaluation changes nothing
+            // (and never re-adds hours or moves a completed task back to waiting_approval). A task someone once set to `completed` by
+            // hand (no evaluation on record, never credited) is not a replay: the evaluation is how it is finally credited, once.
             $locked = Task::lockForUpdate()->find($task->id);
-            if ($locked && $locked->status === 'completed') {
+            if ($locked && $locked->status === 'completed' && $locked->manager_approved_at !== null) {
                 $replayed = true;
 
                 return;
             }
+
+            // The evaluation is the step AFTER delivery: only a task that is being worked on, delivered (needs_evaluation) or awaiting
+            // HR (to correct the evaluation) can be evaluated, and only once its assignee accepted it. A cancelled, postponed or
+            // not-yet-started task, or one nobody accepted, is never credited by it.
+            if (! $locked || ! in_array($locked->status, ['in_progress', 'needs_evaluation', 'waiting_approval', 'completed'], true) || $locked->acceptance_status !== Task::ACCEPTANCE_ACCEPTED) {
+                $refusal = response()->json(['success' => false, 'message' => 'لا يُقيَّم إلا عمل جارٍ أو مُسلَّم قبله المكلَّف؛ هذه المهمة ليست في مرحلة التقييم (ملغاة أو مؤجلة أو لم تبدأ أو لم يقبلها المكلَّف).'], 422);
+
+                return;
+            }
+            $task->refresh(); // credit from the row as it is NOW (assignee, points, hours), not the copy route binding read
 
             TaskEvaluation::updateOrCreate(
                 ['task_id' => $task->id],
@@ -712,6 +755,10 @@ class TaskController extends Controller
                 $task->save();
             }
         });
+
+        if ($refusal) {
+            return $refusal;
+        }
 
         if (! $replayed) {
             ActivityLogger::log('task.evaluated', $task, ['final_score' => $finalScore], $request);
@@ -762,6 +809,7 @@ class TaskController extends Controller
                 return;
             }
 
+            $task->refresh(); // credit from the row as it is NOW, not the copy route binding read
             $task->hr_approved_at = now();
             $task->hr_approved_by = $user->id;
             $task->status = 'completed';
@@ -925,36 +973,56 @@ class TaskController extends Controller
         }
         $asMember = $managerRefusal !== null;
 
-        if ($task->locked_at !== null) {
-            return response()->json([
-                'success' => false,
-                'message' => 'هذه المهمة مقفلة ولا يمكن تحريكها.',
-            ], 423);
-        }
-
         $data = $request->validate([
             'status' => 'required|in:idea,under_review,planning,waiting_approval,in_progress,completed,postponed,cancelled,needs_evaluation',
         ]);
 
-        // The member limits, identical to MyWorkTaskController::status: an accepted task only; `completed` is reserved for the
-        // evaluation -> HR-approval flow (a member finishes by moving to needs_evaluation); and a completed task stays completed.
-        if ($asMember) {
-            if ($task->acceptance_status !== Task::ACCEPTANCE_ACCEPTED) {
-                return response()->json(['success' => false, 'message' => 'اقبل المهمة أولًا قبل تحريك حالتها.'], 409);
+        // Everything below is decided on the row LOCKED for this write, not on the copy route binding read earlier: an evaluation or an
+        // HR approval that commits between the two must not be overwritten by a move that was judged against the old state.
+        $result = DB::transaction(function () use ($request, $task, $data, $asMember) {
+            $row = Task::lockForUpdate()->find($task->id);
+            if (! $row) {
+                return response()->json(['success' => false, 'message' => 'المهمة غير موجودة.'], 404);
             }
-            if ($task->status === 'completed') {
-                return response()->json(['success' => false, 'message' => 'المهمة المنجزة معتمدة ولا يمكن تغيير حالتها؛ للتعديل راجع المدير.'], 403);
+            if ($row->locked_at !== null) {
+                return response()->json(['success' => false, 'message' => 'هذه المهمة مقفلة ولا يمكن تحريكها.'], 423);
             }
-            if ($data['status'] === 'completed') {
-                return response()->json(['success' => false, 'message' => 'اعتماد الإنجاز يتم بعد تقييم المدير؛ حرّك المهمة إلى «بانتظار التقييم».'], 403);
-            }
-        }
 
-        TaskStatusService::move($task, $data['status'], $request);
+            // A department leader never moves credit-bearing work (re-checked on the locked row).
+            if (! $asMember && ! $this->writeAccess->isGlobal($request->user()) && $this->writeAccess->isCreditLocked($row)) {
+                return response()->json(['success' => false, 'message' => 'لا يمكنك تغيير حالة المهمة بعد أن أصبحت بانتظار الاعتماد أو معتمدة أو مكتملة.'], 403);
+            }
+
+            // The member limits, identical to MyWorkTaskController::status: an accepted task only; `completed` is reserved for the
+            // evaluation -> HR-approval flow (a member finishes by moving to needs_evaluation); and a completed task stays completed.
+            if ($asMember) {
+                if ($row->acceptance_status !== Task::ACCEPTANCE_ACCEPTED) {
+                    return response()->json(['success' => false, 'message' => 'اقبل المهمة أولًا قبل تحريك حالتها.'], 409);
+                }
+                if ($row->status === 'completed') {
+                    return response()->json(['success' => false, 'message' => 'المهمة المنجزة معتمدة ولا يمكن تغيير حالتها؛ للتعديل راجع المدير.'], 403);
+                }
+                if ($data['status'] === 'completed') {
+                    return response()->json(['success' => false, 'message' => 'اعتماد الإنجاز يتم بعد تقييم المدير؛ حرّك المهمة إلى «بانتظار التقييم».'], 403);
+                }
+            }
+
+            // The shared workflow rules, for the manager and the member alike (global actors included): an outcome status is recorded
+            // by the evaluation / HR approval only, and an evaluated / approved / completed task is never re-opened by a status move.
+            if ($message = TaskTransitionRules::refusal($row, $data['status'])) {
+                return response()->json(['success' => false, 'message' => $message, 'errors' => ['status' => [$message]]], 422);
+            }
+
+            return TaskStatusService::move($row, $data['status'], $request);
+        });
+
+        if ($result instanceof JsonResponse) {
+            return $result;
+        }
 
         return response()->json([
             'success' => true,
-            'data'    => new TaskResource($task->load(['department', 'section', 'assignedTo', 'createdBy'])),
+            'data'    => new TaskResource($result->load(['department', 'section', 'assignedTo', 'createdBy'])),
         ]);
     }
 }

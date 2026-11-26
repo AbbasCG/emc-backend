@@ -491,7 +491,7 @@ class TaskWritePermissionsTest extends TestCase
         $this->as($granted);
         $this->postJson("/api/operations/tasks/{$task->id}/lock")->assertOk();
         $this->postJson("/api/operations/tasks/{$task->id}/unlock")->assertOk();
-        $this->patchJson("/api/operations/board/tasks/{$task->id}/status", ['status' => 'completed'])->assertOk(); // a status move now follows tasks.update + department scope (test_board_status_move_*)
+        $this->patchJson("/api/operations/board/tasks/{$task->id}/status", ['status' => 'planning'])->assertOk(); // a status move follows tasks.update + department scope (test_board_status_move_*); `completed` is the evaluation's result (TaskTransitionRules)
         $this->deleteJson("/api/admin/tasks/{$task->id}")->assertForbidden(); // deletion stays admin-tier
         $this->assertNotNull(Task::find($task->id));
         $this->getJson("/api/operations/tasks/{$task->id}")->assertForbidden(); // reading task details: unchanged, not implied
@@ -816,7 +816,10 @@ class TaskWritePermissionsTest extends TestCase
 
         // the global tier is exactly as before
         $this->as($this->user('admin'));
-        $this->patchJson("/api/operations/tasks/{$waiting->id}", ['points' => 150, 'estimated_hours' => 3, 'status' => 'planning'])->assertOk();
+        $this->patchJson("/api/operations/tasks/{$waiting->id}", ['points' => 150, 'estimated_hours' => 3])->assertOk();
+        // ... except the workflow itself: not even a global actor re-opens an evaluated task by hand (TaskTransitionRules)
+        $this->patchJson("/api/operations/tasks/{$waiting->id}", ['status' => 'planning'])->assertStatus(422)->assertJsonStructure(['errors' => ['status']]);
+        $this->assertSame('waiting_approval', $waiting->fresh()->status);
         $this->postJson("/api/admin/tasks/{$done->id}/reassign", ['assigned_to' => $second->id])->assertOk();
         $this->assertSame([150, $second->id], [Task::find($waiting->id)->points, Task::find($done->id)->assigned_to]);
     }
@@ -1002,12 +1005,16 @@ class TaskWritePermissionsTest extends TestCase
             $this->assertSame($before, $t->fresh()->status);
         }
 
-        // global roles are unchanged: they still move (and reopen) any task, any department
+        // global roles still move any working task of any department, but the workflow rules bind them too: no re-opening a
+        // completed / evaluated task and no hand-written outcome (TaskTransitionRules)
         foreach (['admin', 'executive_admin', 'tech_admin', 'super_admin', 'operations_manager'] as $role) {
             $this->as($this->user($role));
-            $this->move($done, 'in_progress')->assertOk();
-            $this->assertSame('in_progress', $done->fresh()->status);
-            $this->move($done, 'completed')->assertOk();
+            $this->move($done, 'in_progress')->assertStatus(422);
+            $this->assertSame('completed', $done->fresh()->status);
+            $free = $this->task(['department_id' => $this->deptOther->id, 'status' => 'planning']);
+            $this->move($free, 'in_progress')->assertOk();
+            $this->move($free, 'completed')->assertStatus(422);
+            $this->assertSame('in_progress', $free->fresh()->status);
         }
     }
 
@@ -1052,12 +1059,12 @@ class TaskWritePermissionsTest extends TestCase
 
     public function test_board_status_move_keeps_a_managers_own_rules_when_the_manager_is_also_the_assignee(): void
     {
-        // a global actor who happens to be the assignee still moves (and completes / reopens) as a manager
+        // a global actor who happens to be the assignee still moves as a manager (no acceptance gate), under the workflow rules
         $admin = $this->user('admin');
-        $task = $this->task(['assigned_to' => $admin->id, 'status' => 'in_progress']);
+        $task = $this->task(['assigned_to' => $admin->id, 'status' => 'in_progress', 'acceptance_status' => 'pending']);
         $this->as($admin);
-        $this->move($task, 'completed')->assertOk();
-        $this->move($task, 'in_progress')->assertOk();
+        $this->move($task, 'planning')->assertOk();
+        $this->move($task, 'completed')->assertStatus(422);
 
         // a delegated leader who is the assignee of a credit-locked task gets the member rules, not the manager ones
         $leader = $this->hrWith('tasks.update');
