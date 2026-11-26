@@ -64,6 +64,7 @@ use App\Http\Controllers\Admin\PartnerController;
 use App\Http\Controllers\Admin\PartnershipRequestAdminController;
 use App\Http\Controllers\Admin\SupportTicketController as AdminSupportTicketController;
 use App\Http\Controllers\Admin\TaskController;
+use App\Http\Controllers\Operations\BoardTaskScopeController;
 use App\Http\Controllers\Admin\VolunteerController;
 use App\Http\Controllers\Admin\VolunteerHubController;
 use App\Http\Controllers\Admin\AdminVolunteerRequestController;
@@ -921,9 +922,8 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
     // لوحة التشغيل: تحريك الحالة — العضو لمهامه والمدير للجميع (منطق المتحكم)
     Route::patch('board/tasks/{task}/status',        [\App\Http\Controllers\Admin\TaskController::class, 'updateStatus']);
 
-    // كتابة مهام اللوحة: مدراء مخوَّلون (بلا تغيير عن السابق)
+    // إنشاء المهام (board/tasks) صار بصلاحية tasks.create في مجموعة «كتابة المهام» أدناه لا بقائمة أدوار؛ القفل وفتح القفل يبقيان لهؤلاء المدراء.
     Route::middleware('role:admin,super_admin,tech_admin,executive_admin,hr_manager,operations_manager,department_manager')->group(function () {
-        Route::post('board/tasks',                   [\App\Http\Controllers\Admin\TaskController::class, 'store']);
         Route::post('tasks/{task}/lock',             [\App\Http\Controllers\Admin\TaskController::class, 'lock']);
         Route::post('tasks/{task}/unlock',           [\App\Http\Controllers\Admin\TaskController::class, 'unlock']);
     });
@@ -942,6 +942,25 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,executive_
 // role list is the page's (OperationsBoardController::WORK_BOARD_ROLES), which is wider than the shared group above by four roles.
 Route::middleware(['auth:sanctum', 'role:'.implode(',', OperationsBoardController::WORK_BOARD_ROLES), 'throttle:60,1'])->prefix('operations')->group(function () {
     Route::get('work-board', [OperationsBoardController::class, 'workBoard']);
+});
+// ─── كتابة المهام التشغيلية (إنشاء / إسناد وإعادة إسناد / تعديل) — بصلاحية لا بقائمة أدوار ─────────────────────────────────────────
+// tasks.create / tasks.assign / tasks.update: ثلاث صلاحيات مستقلة (الإنشاء + الإسناد لا يعنيان التعديل). تُفحص هنا وتُفحص ثانيةً داخل
+// TaskController مع النطاق (الإدارات التي يقودها غير الشامل وأعضاؤها) عبر App\Services\TaskWriteAccess وهو المرجع الوحيد للقاعدة وللقدرات
+// التي تعرضها لوحة العمل (meta.task_actions + capabilities.can_edit/can_reassign). الصلاحية تفتح هذه المسارات وحدها؛ التفاصيل والتقييم
+// والاعتماد والحذف والقفل وإجراءات المكلَّف (قبول/رفض/حالة) تبقى في مجموعاتها بقواعدها. يجب تسجيل هذه المسارات قبل مجموعات role: (أول مطابق يربح).
+Route::middleware(['auth:sanctum'])->group(function () {
+    Route::post('operations/board/tasks',                [TaskController::class, 'store'])->middleware('permission:tasks.create');
+    Route::post('operations/tasks',                      [TaskController::class, 'store'])->middleware('permission:tasks.create');
+    Route::post('admin/tasks',                           [TaskController::class, 'store'])->middleware('permission:tasks.create');
+    Route::patch('operations/tasks/{task}',              [TaskController::class, 'update'])->middleware('permission:tasks.update');
+    Route::match(['put', 'patch'], 'admin/tasks/{task}', [TaskController::class, 'update'])->middleware('permission:tasks.update');
+    Route::post('operations/tasks/{task}/reassign',      [TaskController::class, 'reassign'])->middleware('permission:tasks.assign');
+    Route::post('admin/tasks/{task}/reassign',           [TaskController::class, 'reassign'])->middleware('permission:tasks.assign');
+
+    // ما تحتاجه واجهة المهام لمن يحمل أيًّا من الصلاحيات الثلاث: الإدارات والأعضاء ضمن نطاقه فقط، وقيم المهمة القابلة للتعديل (للتعبئة المسبقة).
+    Route::get('operations/board/task-scope/departments',                        [BoardTaskScopeController::class, 'departments']);
+    Route::get('operations/board/task-scope/departments/{department}/members',  [BoardTaskScopeController::class, 'members']);
+    Route::get('operations/board/tasks/{task}/editable',                         [BoardTaskScopeController::class, 'editable']);
 });
 // طلبات المستشارين — القراءة فقط (القائمة + التفاصيل): دور الفئة الإدارية أو الصلاحية الصريحة consultant_applications.view («عرض طلبات الاستشاريين»).
 // فتح الصفحة (organizational_departments.consultant_applications) لا يكفي وحده؛ الصلاحية هي ما يفتح البيانات. اعتماد/رفض الطلب (PUT .../status) يبقى في مجموعة role: أدناه.
@@ -1005,10 +1024,10 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     Route::get('tasks/unassigned-department',            [TaskController::class, 'unassignedDepartment']);
     Route::get('tasks/overdue',                          [TaskController::class, 'overdue']);
     Route::get('tasks/kanban',                           [TaskController::class, 'kanban']);
-    Route::apiResource('tasks', TaskController::class);
+    // store / update / reassign: registered above with permission:tasks.create|update|assign (TaskWriteAccess).
+    Route::apiResource('tasks', TaskController::class)->except(['store', 'update']);
     Route::post('tasks/{task}/accept',                   [TaskController::class, 'accept']);
     Route::post('tasks/{task}/reject',                   [TaskController::class, 'reject']);
-    Route::post('tasks/{task}/reassign',                 [TaskController::class, 'reassign']);
     Route::post('tasks/{task}/claim',                    [TaskController::class, 'claim']);
     Route::post('tasks/{task}/evaluate',                 [TaskController::class, 'evaluate']);
     // tasks/{task}/hr-approve: registered above with its own role list (+ hr_manager).
@@ -1442,11 +1461,9 @@ Route::middleware(['auth:sanctum', 'role:admin,super_admin,tech_admin,operations
     // so that Dept. Managers can access their own department data.
     // GET tasks (index): registered above with role.or.permission:hr_tasks.view (the HR page's general log tab).
     Route::get('tasks/{task}',                                         [TaskController::class,                    'show']);
-    Route::patch('tasks/{task}',                                       [TaskController::class,                    'update']);
-    Route::post('tasks',                                               [TaskController::class,                    'store']);
+    // POST tasks / PATCH tasks/{task} / POST tasks/{task}/reassign: registered above with permission:tasks.create|update|assign.
     Route::post('tasks/{task}/accept',                                 [TaskController::class,                    'accept']);
     Route::post('tasks/{task}/reject',                                 [TaskController::class,                    'reject']);
-    Route::post('tasks/{task}/reassign',                               [TaskController::class,                    'reassign']);
     Route::post('tasks/{task}/claim',                                  [TaskController::class,                    'claim']);
     Route::post('tasks/{task}/evaluate',                               [TaskController::class,                    'evaluate']);
     Route::post('tasks/{task}/hr-approve',                             [TaskController::class,                    'hrApprove']);
