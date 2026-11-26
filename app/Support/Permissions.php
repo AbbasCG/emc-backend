@@ -112,6 +112,24 @@ final class Permissions
      */
     const HR_TASKS_VIEW = 'hr_tasks.view';
 
+    /**
+     * Operational TASK writes on the global board (/dashboard/operations/board) and the task screens. Three independent keys:
+     * holding one never implies another (create + assign does NOT allow editing an existing task, and editing does not allow
+     * assigning). Reading the board stays with its own role list / page access; hr_tasks.view stays read-only.
+     *
+     *   tasks.create  create a task (POST admin/tasks, operations/tasks, operations/board/tasks)
+     *   tasks.assign  put a task on someone: the assignee of a NEW task and POST .../reassign
+     *   tasks.update  edit an existing task (PUT/PATCH admin/tasks/{task}, PATCH operations/tasks/{task})
+     *
+     * Scope (App\Services\TaskWriteAccess): global roles act on every department; anyone else only on departments they LEAD
+     * (departments.leader_id) and only with assignees from those departments' rosters. Evaluation, HR approval, deletion, locking
+     * and the assignee's own accept / reject / status actions keep their existing rules and are NOT implied by these keys.
+     * All three are part of all(): super_admin / tech_admin hold them; the other defaults are in forRole().
+     */
+    const TASKS_CREATE = 'tasks.create';
+    const TASKS_ASSIGN = 'tasks.assign';
+    const TASKS_UPDATE = 'tasks.update';
+
     // ── Partnerships ─────────────────────────────────────────────────────────
     const VIEW_PARTNERS        = 'view_partners';
     const MANAGE_PARTNERS      = 'manage_partners';
@@ -268,6 +286,8 @@ final class Permissions
             self::VIEW_MEETINGS, self::MANAGE_MEETINGS, self::VIEW_FORMS, self::MANAGE_FORMS,
             // HR
             self::VIEW_VOLUNTEERS, self::MANAGE_VOLUNTEERS, self::VIEW_TEAM, self::MANAGE_TEAM, self::CONSULTANT_APPLICATIONS_VIEW, self::HR_TASKS_VIEW,
+            // Task writes (the board): create / assign / update, independently grantable
+            self::TASKS_CREATE, self::TASKS_ASSIGN, self::TASKS_UPDATE,
             // Partnerships
             self::VIEW_PARTNERS, self::MANAGE_PARTNERS, self::VIEW_PARTNER_REPORTS,
             // Marketing
@@ -327,6 +347,8 @@ final class Permissions
                 self::APPROVE_QUALITY_REVIEWS, self::VIEW_KPI, self::VIEW_REPORTS, self::EXPORT_REPORTS,
                 self::VIEW_KNOWLEDGE, self::VIEW_AUDIT_LOGS, self::VIEW_AI_USAGE,
                 self::TECH_DEPARTMENT_DASHBOARDS_VIEW,
+                // Tasks: only what POST operations/board/tasks always allowed it (create); no assign, no edit.
+                self::TASKS_CREATE,
                 // Granular
                 self::WR_VIEW_ALL, self::WR_APPROVE, self::WR_ASSIGN,
                 self::MEMBERS_VIEW, self::DEPTS_VIEW, self::COURSES_VIEW,
@@ -344,6 +366,7 @@ final class Permissions
                 self::MANAGE_SCHOLARSHIPS,
                 self::VIEW_CERTIFICATES, self::MANAGE_CERTIFICATES, self::ISSUE_CERTIFICATES, self::REVOKE_CERTIFICATES,
                 self::VIEW_DEPARTMENTS, self::MANAGE_DEPARTMENTS, self::VIEW_TASKS, self::MANAGE_TASKS,
+                self::TASKS_CREATE, self::TASKS_ASSIGN, self::TASKS_UPDATE,
                 self::VIEW_MEETINGS, self::MANAGE_MEETINGS, self::VIEW_FORMS, self::MANAGE_FORMS,
                 self::VIEW_VOLUNTEERS, self::MANAGE_VOLUNTEERS, self::VIEW_TEAM, self::MANAGE_TEAM,
                 self::VIEW_PARTNERS, self::MANAGE_PARTNERS, self::VIEW_PARTNER_REPORTS,
@@ -367,6 +390,8 @@ final class Permissions
                 self::VIEW_USERS, self::VIEW_PROGRAMS, self::VIEW_COURSES,
                 self::VIEW_TASKS, self::MANAGE_TASKS, self::VIEW_MEETINGS, self::MANAGE_MEETINGS, self::VIEW_FORMS,
                 self::VIEW_TEAM, self::VIEW_KPI, self::VIEW_REPORTS, self::VIEW_KNOWLEDGE, self::USE_AI_ASSISTANT,
+                // Tasks: create only (what POST operations/board/tasks always allowed it), inside the departments they lead.
+                self::TASKS_CREATE,
                 // Granular
                 self::WR_VIEW_DEPARTMENT, self::WR_REVIEW, self::WR_APPROVE, self::WR_REJECT,
                 self::DEPTS_VIEW_OWN, self::DEPTS_UPDATE_OWN, self::DEPTS_VIEW,
@@ -390,6 +415,7 @@ final class Permissions
             'operations_manager' => [
                 self::VIEW_DEPARTMENTS, self::MANAGE_DEPARTMENTS,
                 self::VIEW_TASKS, self::MANAGE_TASKS,
+                self::TASKS_CREATE, self::TASKS_ASSIGN, self::TASKS_UPDATE,
                 self::VIEW_MEETINGS, self::MANAGE_MEETINGS,
                 self::VIEW_FORMS, self::MANAGE_FORMS,
                 self::VIEW_PROGRAMS, self::VIEW_COURSES,
@@ -532,6 +558,7 @@ final class Permissions
             'certificates' => [self::VIEW_CERTIFICATES, self::MANAGE_CERTIFICATES, self::ISSUE_CERTIFICATES, self::REVOKE_CERTIFICATES],
             'operations'   => [self::VIEW_DEPARTMENTS, self::MANAGE_DEPARTMENTS, self::VIEW_TASKS, self::MANAGE_TASKS, self::VIEW_MEETINGS, self::MANAGE_MEETINGS, self::VIEW_FORMS, self::MANAGE_FORMS],
             'hr'           => [self::VIEW_VOLUNTEERS, self::MANAGE_VOLUNTEERS, self::VIEW_TEAM, self::MANAGE_TEAM, self::CONSULTANT_APPLICATIONS_VIEW, self::HR_TASKS_VIEW],
+            'tasks'        => [self::TASKS_CREATE, self::TASKS_ASSIGN, self::TASKS_UPDATE],
             'partnerships' => [self::VIEW_PARTNERS, self::MANAGE_PARTNERS, self::VIEW_PARTNER_REPORTS],
             'marketing'    => [self::VIEW_MARKETING, self::MANAGE_MARKETING],
             'quality'      => [self::VIEW_QUALITY, self::MANAGE_QUALITY, self::APPROVE_QUALITY_REVIEWS],

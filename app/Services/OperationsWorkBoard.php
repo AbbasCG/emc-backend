@@ -20,9 +20,11 @@ use Illuminate\Support\Facades\DB;
  *   rejection reasons, evaluations, credit / deployment data, live URLs, reporter contact data or activity logs.
  *
  * Seeing a card grants NOTHING: the per-card `capabilities` are computed with the viewer's real access (can_open through
- * TicketAccess::canView for a ticket; the assignee or a task-management role for a task) and carry only the assignee's own
- * actions. No administrative action (approve, reassign, review, lock, evaluate...) is ever offered by this payload;
- * every such action stays checked by its own endpoint.
+ * TicketAccess::canView for a ticket; the assignee or a task-management role for a task) and carry the assignee's own
+ * actions. The only administrative flags are `can_edit` / `can_reassign` on a TASK card (never on a ticket), and `meta.task_actions`
+ * for the whole board: plain booleans from App\Services\TaskWriteAccess (the permission AND the department scope AND the lock,
+ * the very rule the write endpoints enforce), so the UI never infers them from a role name. No other administrative action
+ * (approve, review, lock, evaluate...) is ever offered by this payload; every action stays checked by its own endpoint.
  *
  * What is on the board: the union of every user's «مهامي» (so everything shown at /dashboard/admin/tasks/my is here, in the same
  * column) PLUS the tasks that belong to nobody's «مهامي»: standalone tasks with no assignee («غير مسندة»).
@@ -57,7 +59,7 @@ class OperationsWorkBoard
     /** @var array<int, bool> department id => may the viewer open a ticket there (when they are neither its creator nor its assignee) */
     private array $deptOpen = [];
 
-    public function __construct(private readonly TicketAccess $access, private readonly TicketQuery $tickets) {}
+    public function __construct(private readonly TicketAccess $access, private readonly TicketQuery $tickets, private readonly TaskWriteAccess $taskWrites) {}
 
     /**
      * @param  array{scope?: string, department_id?: int|null, kind?: string, search?: string|null, per_column?: int, column?: string|null, page?: int}  $f  validated filters
@@ -152,6 +154,8 @@ class OperationsWorkBoard
                 'page' => $page,
                 // The numbers of the kind segments follow every other filter, like the page's own counters.
                 'counts' => ['all' => $tasksTotal + $ticketsTotal, 'tasks' => $tasksTotal, 'tickets' => $ticketsTotal],
+                // What THIS viewer may do to tasks: create / assign / update, and where (null ids = every department).
+                'task_actions' => $this->taskWrites->summary($viewer),
                 'generated_at' => $now->toIso8601String(),
             ],
         ];
@@ -258,7 +262,7 @@ class OperationsWorkBoard
         $due = 'COALESCE(tasks.due_datetime, tasks.due_date)';
         $q->select([
             'tasks.id', 'tasks.parent_task_id', 'tasks.title', 'tasks.department_id', 'tasks.assigned_to', 'tasks.priority', 'tasks.task_scope', 'tasks.points',
-            'tasks.estimated_hours', 'tasks.status', 'tasks.acceptance_status', 'tasks.due_date', 'tasks.due_datetime', 'tasks.locked_at', 'tasks.created_at', 'tasks.updated_at',
+            'tasks.estimated_hours', 'tasks.status', 'tasks.acceptance_status', 'tasks.due_date', 'tasks.due_datetime', 'tasks.locked_at', 'tasks.manager_approved_at', 'tasks.hr_approved_at', 'tasks.created_at', 'tasks.updated_at',
         ]);
         // Finished / parked columns: the most recently changed first. Open columns: overdue, then urgency, then the nearest deadline.
         if (! in_array($column, WorkBoardColumns::NOT_OVERDUE, true)) {
@@ -380,6 +384,8 @@ class OperationsWorkBoard
                 'can_accept' => $pending,
                 'can_reject' => $pending,
                 'can_complete' => false,
+                // The viewer's write rights on THIS task: permission + department scope + not locked (TaskWriteAccess).
+                ...$this->taskWrites->cardCapabilities($viewer, $t),
             ],
         ];
     }

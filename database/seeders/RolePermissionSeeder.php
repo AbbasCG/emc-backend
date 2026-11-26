@@ -51,6 +51,7 @@ class RolePermissionSeeder extends Seeder
                 Permissions::VIEW_AUDIT_LOGS,
                 Permissions::VIEW_AI_USAGE,
                 Permissions::TECH_DEPARTMENT_DASHBOARDS_VIEW,
+                Permissions::TASKS_CREATE,
             ],
 
             'admin' => [
@@ -76,6 +77,7 @@ class RolePermissionSeeder extends Seeder
                 // Operations
                 Permissions::VIEW_DEPARTMENTS, Permissions::MANAGE_DEPARTMENTS,
                 Permissions::VIEW_TASKS, Permissions::MANAGE_TASKS,
+                Permissions::TASKS_CREATE, Permissions::TASKS_ASSIGN, Permissions::TASKS_UPDATE,
                 Permissions::VIEW_MEETINGS, Permissions::MANAGE_MEETINGS,
                 Permissions::VIEW_FORMS, Permissions::MANAGE_FORMS,
                 // HR
@@ -98,6 +100,7 @@ class RolePermissionSeeder extends Seeder
                 Permissions::VIEW_USERS,
                 Permissions::VIEW_PROGRAMS, Permissions::VIEW_COURSES,
                 Permissions::VIEW_TASKS, Permissions::MANAGE_TASKS,
+                Permissions::TASKS_CREATE,
                 Permissions::VIEW_MEETINGS, Permissions::MANAGE_MEETINGS,
                 Permissions::VIEW_FORMS,
                 Permissions::VIEW_TEAM,
@@ -259,6 +262,9 @@ class RolePermissionSeeder extends Seeder
                 Permissions::MANAGE_DEPARTMENTS,
                 Permissions::VIEW_TASKS,
                 Permissions::MANAGE_TASKS,
+                Permissions::TASKS_CREATE,
+                Permissions::TASKS_ASSIGN,
+                Permissions::TASKS_UPDATE,
                 Permissions::VIEW_MEETINGS,
                 Permissions::MANAGE_MEETINGS,
                 Permissions::VIEW_FORMS,

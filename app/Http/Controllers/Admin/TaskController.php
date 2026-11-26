@@ -15,6 +15,7 @@ use App\Services\ActivityLogger;
 use App\Services\TaskAcceptanceService;
 use App\Services\TaskCollaborationService;
 use App\Services\TaskStatusService;
+use App\Services\TaskWriteAccess;
 use App\Services\TaskWorkflowService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -22,6 +23,79 @@ use Illuminate\Support\Facades\DB;
 
 class TaskController extends Controller
 {
+    /**
+     * The write rule, rebuilt at the start of every write action: its per-actor scope caches must live for ONE request only (the
+     * router keeps a controller instance per route, so a constructor-injected service would outlive the request in a long process).
+     */
+    private TaskWriteAccess $writeAccess;
+
+    public function __construct()
+    {
+        $this->writeAccess = app(TaskWriteAccess::class);
+    }
+
+    /** 403 with an Arabic message when the actor does not hold the write permission (the routes check it too: defence in depth). */
+    private function refuseWithout(Request $request, string $permission, string $message): ?JsonResponse
+    {
+        return $this->writeAccess->holds($request->user(), $permission)
+            ? null
+            : response()->json(['success' => false, 'message' => $message], 403);
+    }
+
+    /**
+     * The department / assignee scope of a write (see TaskWriteAccess). Returns the refusal response, or null when allowed.
+     * $departmentId is the department the task will live in; $assigneeIds every user the write puts the task on.
+     *
+     * @param  array<int, int>  $assigneeIds
+     */
+    private function refuseOutOfScope(Request $request, ?int $departmentId, array $assigneeIds = []): ?JsonResponse
+    {
+        $user = $request->user();
+        if ($this->writeAccess->manageableDepartmentIds($user) === null) {
+            return null; // acts on every department and everybody
+        }
+
+        if ($departmentId === null) {
+            return response()->json(['success' => false, 'message' => 'حدّد الإدارة التي ستتبعها المهمة؛ صلاحيتك مقتصرة على الإدارات التي تقودها.', 'errors' => ['department_id' => ['حدّد الإدارة.']]], 422);
+        }
+        if (! $this->writeAccess->inScope($user, $departmentId)) {
+            return response()->json(['success' => false, 'message' => 'هذه الإدارة خارج نطاق الإدارات التي تقودها، فلا يمكنك إدارة مهامها.'], 403);
+        }
+        foreach ($assigneeIds as $assigneeId) {
+            if (! $this->writeAccess->assigneeInScope($user, (int) $assigneeId)) {
+                return response()->json(['success' => false, 'message' => 'لا يمكنك إسناد مهمة إلا لأعضاء الإدارات التي تقودها.'], 403);
+            }
+        }
+
+        return null;
+    }
+
+    /** Did the sent value change the stored one (numbers compared as numbers, so "10" == 10)? */
+    private function differs(mixed $sent, mixed $stored, string $cast): bool
+    {
+        $norm = fn ($v) => $v === null ? null : match ($cast) {
+            'int' => (int) $v,
+            'float' => (float) $v,
+            default => (string) $v,
+        };
+
+        return $norm($sent) !== $norm($stored);
+    }
+
+    /** A section must belong to the department the task is in (only enforced for a department-scoped actor). */
+    private function refuseForeignSection(Request $request, ?int $sectionId, ?int $departmentId): ?JsonResponse
+    {
+        if ($sectionId === null || $this->writeAccess->manageableDepartmentIds($request->user()) === null) {
+            return null;
+        }
+        $belongs = $departmentId !== null
+            && \App\Models\DepartmentSection::query()->whereKey($sectionId)->where('department_id', $departmentId)->exists();
+
+        return $belongs
+            ? null
+            : response()->json(['success' => false, 'message' => 'القسم المختار لا يتبع هذه الإدارة.', 'errors' => ['section_id' => ['القسم لا يتبع الإدارة.']]], 422);
+    }
+
     private function baseQuery(): \Illuminate\Database\Eloquent\Builder
     {
         return Task::with([
@@ -154,6 +228,11 @@ class TaskController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        $this->writeAccess = app(TaskWriteAccess::class);
+        if ($refusal = $this->refuseWithout($request, TaskWriteAccess::CREATE, 'ليست لديك صلاحية إنشاء المهام.')) {
+            return $refusal;
+        }
+
         $data = $request->validate([
             'title'            => 'required|string|max:255',
             'description'      => 'nullable|string',
@@ -183,6 +262,23 @@ class TaskController extends Controller
             if (! $validation['valid']) {
                 return response()->json(['success' => false, 'message' => $validation['message']], 422);
             }
+        }
+
+        // Who the task is put on: creating it WITH an assignee also needs tasks.assign.
+        $assigneeIds = array_values(array_unique(array_map('intval', array_merge(
+            empty($data['assigned_to']) ? [] : [$data['assigned_to']],
+            $data['assigned_users'] ?? [],
+        ))));
+        if ($assigneeIds !== [] && ($refusal = $this->refuseWithout($request, TaskWriteAccess::ASSIGN, 'ليست لديك صلاحية إسناد المهام.'))) {
+            return $refusal;
+        }
+        // Department + assignee scope for anyone who is not global (a leader acts only inside the departments they lead).
+        $departmentId = isset($data['department_id']) ? (int) $data['department_id'] : null;
+        if ($refusal = $this->refuseOutOfScope($request, $departmentId, $assigneeIds)) {
+            return $refusal;
+        }
+        if ($refusal = $this->refuseForeignSection($request, isset($data['section_id']) ? (int) $data['section_id'] : null, $departmentId)) {
+            return $refusal;
         }
 
         // التحقق من أهلية العضو المكلف (منع المنقطع أو المجاز أو المنسحب)
@@ -293,6 +389,15 @@ class TaskController extends Controller
 
     public function update(Request $request, Task $task): JsonResponse
     {
+        $this->writeAccess = app(TaskWriteAccess::class);
+        if ($refusal = $this->refuseWithout($request, TaskWriteAccess::UPDATE, 'ليست لديك صلاحية تعديل المهام.')) {
+            return $refusal;
+        }
+        // The task must be in the actor's scope (a task of another department, or with no department, stays read-only to a leader).
+        if ($this->writeAccess->manageableDepartmentIds($request->user()) !== null && ! $this->writeAccess->inScope($request->user(), $this->writeAccess->departmentOf($task))) {
+            return response()->json(['success' => false, 'message' => 'هذه المهمة خارج نطاق الإدارات التي تقودها، فلا يمكنك تعديلها.'], 403);
+        }
+
         if ($task->locked_at !== null) {
             return response()->json([
                 'success' => false,
@@ -327,9 +432,61 @@ class TaskController extends Controller
             }
         }
 
+        // A department change must stay inside the scope; a leader cannot move a task out of the departments they lead.
+        $departmentId = array_key_exists('department_id', $data) ? ($data['department_id'] === null ? null : (int) $data['department_id']) : $this->writeAccess->departmentOf($task);
+        if (array_key_exists('department_id', $data) && ($refusal = $this->refuseOutOfScope($request, $departmentId))) {
+            return $refusal;
+        }
+        $sectionId = array_key_exists('section_id', $data) ? ($data['section_id'] === null ? null : (int) $data['section_id']) : ($task->section_id === null ? null : (int) $task->section_id);
+        if ((array_key_exists('section_id', $data) || array_key_exists('department_id', $data)) && ($refusal = $this->refuseForeignSection($request, $sectionId, $departmentId))) {
+            return $refusal;
+        }
+
+        // The assignee is cast ONCE (a form field arrives as the string "12") and that value drives the assign guard, the stored value
+        // and the acceptance reset alike.
+        $assigneeSent = array_key_exists('assigned_to', $data);
+        $newAssignee = $assigneeSent && $data['assigned_to'] !== null ? (int) $data['assigned_to'] : null;
+        if ($assigneeSent) {
+            $data['assigned_to'] = $newAssignee;
+        }
+        $assigneeChanged = $assigneeSent && $newAssignee !== ($task->assigned_to === null ? null : (int) $task->assigned_to);
+
+        // A delegated (non-global) holder never touches what is already credited or about to be: once a task is awaiting approval,
+        // approved or completed, its size, points, hours, status and assignee are the evaluators' (global roles are unchanged).
+        if ($this->writeAccess->manageableDepartmentIds($request->user()) !== null && $this->writeAccess->isCreditLocked($task)) {
+            $touched = [];
+            foreach (['points' => 'int', 'task_scope' => 'string', 'estimated_hours' => 'float', 'status' => 'string'] as $field => $cast) {
+                if (array_key_exists($field, $data) && $this->differs($data[$field], $task->{$field}, $cast)) {
+                    $touched[] = $field;
+                }
+            }
+            if ($assigneeChanged) {
+                $touched[] = 'assigned_to';
+            }
+            if ($touched !== []) {
+                return response()->json(['success' => false, 'message' => 'لا يمكنك تغيير النقاط أو حجم المهمة أو الساعات أو الحالة أو المكلَّف بعد أن أصبحت المهمة بانتظار الاعتماد أو معتمدة أو مكتملة.', 'errors' => array_fill_keys($touched, ['لا يمكن تغييره في هذه المرحلة.'])], 403);
+            }
+        }
+
+        // Changing WHO the task is on (including un-assigning it) is an assignment: tasks.assign + the assignee's scope.
+        if ($assigneeChanged) {
+            if ($refusal = $this->refuseWithout($request, TaskWriteAccess::ASSIGN, 'ليست لديك صلاحية إسناد المهام.')) {
+                return $refusal;
+            }
+            if ($newAssignee !== null) {
+                if ($refusal = $this->refuseOutOfScope($request, $departmentId, [$newAssignee])) {
+                    return $refusal;
+                }
+                $check = TaskWorkflowService::canAssignTaskToUser($newAssignee);
+                if (! $check['allowed']) {
+                    return response()->json(['success' => false, 'message' => $check['message']], 422);
+                }
+            }
+        }
+
         // إذا تم تغيير العضو المكلف، إعادة ضبط حالة الموافقة
-        if (isset($data['assigned_to']) && $data['assigned_to'] !== $task->assigned_to) {
-            $data['acceptance_status'] = ($data['assigned_to'] == $request->user()->id) ? Task::ACCEPTANCE_ACCEPTED : Task::ACCEPTANCE_PENDING;
+        if ($assigneeChanged && $newAssignee !== null) {
+            $data['acceptance_status'] = ($newAssignee === (int) $request->user()->id) ? Task::ACCEPTANCE_ACCEPTED : Task::ACCEPTANCE_PENDING;
             $data['rejection_reason'] = null;
             $data['rejected_at'] = null;
         }
@@ -385,10 +542,29 @@ class TaskController extends Controller
     /** إعادة إسناد المهمة المرفوضة أو غير المسندة لعضو آخر */
     public function reassign(Request $request, Task $task): JsonResponse
     {
+        $this->writeAccess = app(TaskWriteAccess::class);
+        if ($refusal = $this->refuseWithout($request, TaskWriteAccess::ASSIGN, 'ليست لديك صلاحية إسناد المهام.')) {
+            return $refusal;
+        }
+        if ($this->writeAccess->manageableDepartmentIds($request->user()) !== null && ! $this->writeAccess->inScope($request->user(), $this->writeAccess->departmentOf($task))) {
+            return response()->json(['success' => false, 'message' => 'هذه المهمة خارج نطاق الإدارات التي تقودها، فلا يمكنك إعادة إسنادها.'], 403);
+        }
+        if ($task->locked_at !== null) {
+            return response()->json(['success' => false, 'message' => 'هذه المهمة مقفلة ولا يمكن إعادة إسنادها.'], 423);
+        }
+        // A delegated holder cannot move the credit of a task that is awaiting approval, approved or completed.
+        if ($this->writeAccess->manageableDepartmentIds($request->user()) !== null && $this->writeAccess->isCreditLocked($task)) {
+            return response()->json(['success' => false, 'message' => 'لا يمكنك إعادة إسناد مهمة بانتظار الاعتماد أو معتمدة أو مكتملة.'], 403);
+        }
+
         $data = $request->validate([
             'assigned_to' => 'required|exists:users,id',
             'notes'       => 'nullable|string',
         ]);
+
+        if ($refusal = $this->refuseOutOfScope($request, $this->writeAccess->departmentOf($task), [(int) $data['assigned_to']])) {
+            return $refusal;
+        }
 
         $check = TaskWorkflowService::canAssignTaskToUser((int) $data['assigned_to']);
         if (! $check['allowed']) {
