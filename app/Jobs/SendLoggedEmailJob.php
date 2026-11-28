@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\NotificationLog;
+use App\Services\EmailDeliveryPolicy;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -31,6 +32,13 @@ class SendLoggedEmailJob implements ShouldQueue
 
     public function handle(): void
     {
+        // The settings are decided AGAIN here, not only when the mail was queued: a central pause, a changed personal choice or a
+        // lost role that happened after the message was queued but before it ran must be honoured. A message stopped this way is
+        // recorded as skipped (never as sent, never as failed) and is not retried.
+        if ($this->skippedBySettings()) {
+            return;
+        }
+
         $startMs = (int) (microtime(true) * 1000);
 
         $mailerName = $this->resolveMailerName();
@@ -69,6 +77,32 @@ class SendLoggedEmailJob implements ShouldQueue
             'mail_driver'       => $mailerName,
             'smtp_response'     => $smtpResponse,
         ]);
+    }
+
+    /** Marks the log skipped and returns true when the current settings say this message must not leave. */
+    private function skippedBySettings(): bool
+    {
+        $log = NotificationLog::query()->find($this->logId);
+        if ($log === null || $log->channel !== 'email') {
+            return false;
+        }
+
+        $payload = is_array($log->payload) ? $log->payload : [];
+        $decision = EmailDeliveryPolicy::decide(
+            (string) $log->type,
+            EmailDeliveryPolicy::resolveUser($log->user_id, $this->toEmail),
+            (bool) ($payload['_ignore_personal_choice'] ?? false),
+        );
+        if ($decision['send']) {
+            return false;
+        }
+
+        $log->update([
+            'status'  => $decision['log_status'],
+            'payload' => $payload + ['skip_reason' => $decision['source'], 'skipped_at_send' => true],
+        ]);
+
+        return true;
     }
 
     public function failed(Throwable $e): void

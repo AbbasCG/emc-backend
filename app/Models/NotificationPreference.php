@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class NotificationPreference extends Model
 {
-    protected $fillable = ['user_id', 'channel', 'type', 'enabled'];
+    protected $fillable = ['user_id', 'channel', 'type', 'enabled', 'source'];
 
     protected $casts = ['enabled' => 'boolean'];
 

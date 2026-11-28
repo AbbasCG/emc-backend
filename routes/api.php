@@ -1366,6 +1366,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('notifications/preferences', [NotificationPreferenceController::class, 'update']);
     Route::get('notifications/assignment-preferences', [NotificationPreferenceController::class, 'assignmentPreferences']);
     Route::put('notifications/assignment-preferences', [NotificationPreferenceController::class, 'updateAssignmentPreferences']);
+    // Email types this account can choose for (follow the central setting / enabled / disabled); the sender decides with the same rule.
+    Route::get('notifications/email-preferences', [NotificationPreferenceController::class, 'emailPreferences']);
+    Route::put('notifications/email-preferences', [NotificationPreferenceController::class, 'updateEmailPreferences']);
 });
 
 // ─── Program Finance Approvals — finance_manager + admin + super_admin ──────
