@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Jobs\SendLoggedEmailJob;
-use App\Models\EmailSetting;
 use App\Models\NotificationLog;
 use Illuminate\Mail\Mailable;
 use Illuminate\Support\Facades\Log;
@@ -34,10 +33,13 @@ class EmailService
             return;
         }
 
-        if (!EmailSetting::isEnabled($key)) {
-            // Recorded (not silently dropped) so Email Logs can show this
-            // was intentionally skipped rather than pretending it was sent
-            // — no queue dispatch, no mail send, just an audit trail row.
+        // ONE decision for every email (App\Services\EmailDeliveryPolicy): eligible recipient, central pause, personal choice, central
+        // default. A skipped message is RECORDED, never silently dropped, so Email Logs can tell a message the settings stopped from
+        // one that failed: no queue dispatch, no mail send, just an audit row with the reason.
+        $ignorePersonalChoice = (bool) ($context['ignore_personal_choice'] ?? false);
+        $decision = EmailDeliveryPolicy::decide($key, EmailDeliveryPolicy::resolveUser($userId, $toEmail), $ignorePersonalChoice);
+
+        if (! $decision['send']) {
             try {
                 NotificationLog::create([
                     'channel'              => 'email',
@@ -45,10 +47,10 @@ class EmailService
                     'recipient'            => $toEmail,
                     'recipient_name'       => $toName,
                     'subject'              => $subject,
-                    'status'               => 'skipped_disabled',
+                    'status'               => $decision['log_status'],
                     'user_id'              => $userId,
                     'mail_driver'          => config('mail.default'),
-                    'payload'              => $payload ?: null,
+                    'payload'              => $payload + ['skip_reason' => $decision['source']],
                     'triggered_by_user_id' => $context['triggered_by_user_id'] ?? null,
                     'related_course_id'    => $context['related_course_id'] ?? null,
                     'related_session_id'   => $context['related_session_id'] ?? null,
@@ -56,7 +58,7 @@ class EmailService
                     'related_assignment_id' => $context['related_assignment_id'] ?? null,
                 ]);
             } catch (\Throwable $e) {
-                Log::error('EmailService skipped-disabled logging failed', ['key' => $key, 'error' => $e->getMessage()]);
+                Log::error('EmailService skipped logging failed', ['key' => $key, 'error' => $e->getMessage()]);
             }
 
             return;
@@ -73,7 +75,8 @@ class EmailService
                 'user_id'              => $userId,
                 'queued_at'            => now(),
                 'mail_driver'          => config('mail.default'),
-                'payload'              => $payload ?: null,
+                // The marker lets the queued job make the same decision when it runs (an admin's test message to themselves).
+                'payload'              => ($ignorePersonalChoice ? $payload + ['_ignore_personal_choice' => true] : $payload) ?: null,
                 'triggered_by_user_id' => $context['triggered_by_user_id'] ?? null,
                 'related_course_id'    => $context['related_course_id'] ?? null,
                 'related_session_id'   => $context['related_session_id'] ?? null,

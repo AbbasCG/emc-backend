@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Mail\WelcomeMail;
 use App\Models\EmailSetting;
+use App\Services\ActivityLogger;
 use App\Services\EmailService;
+use App\Support\EmailNotificationTypes;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -87,13 +89,23 @@ class EmailSettingsController extends Controller
         $settings = [];
         foreach (self::LABELS as $key => $meta) {
             $row = $rows->get($key);
+            $paused = $row !== null && ($row->paused || ! $row->enabled);
+            $mandatory = EmailNotificationTypes::isMandatory($key);
             $settings[$key] = [
                 'key'          => $key,
                 'label'        => $meta['label'],
                 'description'  => $meta['description'],
                 'category'     => $meta['category'],
                 'category_label' => self::CATEGORY_LABELS[$meta['category']] ?? $meta['category'],
-                'enabled'      => $row ? (bool) $row->enabled : true,
+                // «التفعيل افتراضيًا»: the state of everyone who follows the central setting. Not offered for mandatory mail.
+                'default_enabled' => $row ? (bool) $row->default_enabled : true,
+                // «إيقاف الإرسال للجميع مؤقتًا»: stops the type for everyone, whatever they chose.
+                'paused'       => $paused,
+                // Kept for the previous admin page: the single old switch = "is this email allowed to leave at all".
+                'enabled'      => ! $paused,
+                'mandatory'    => $mandatory,
+                'user_configurable' => EmailNotificationTypes::isUserConfigurable($key),
+                'audience'     => EmailNotificationTypes::audienceLabel($key),
                 'updated_at'   => $row?->updated_at?->toIso8601String(),
             ];
         }
@@ -113,21 +125,59 @@ class EmailSettingsController extends Controller
     public function update(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'settings'               => ['sometimes', 'array'],
-            'settings.*.enabled'     => ['sometimes', 'boolean'],
+            'settings'               => ['sometimes', 'array', 'max:200'],
+            'settings.*'             => ['array'],
+            'settings.*.enabled'     => ['sometimes', 'boolean'],          // the previous page's single switch = NOT paused
+            'settings.*.default_enabled' => ['sometimes', 'boolean'],      // «التفعيل افتراضيًا»
+            'settings.*.paused'      => ['sometimes', 'boolean'],          // «إيقاف الإرسال للجميع مؤقتًا»
             'sender_name'            => ['sometimes', 'nullable', 'string', 'max:100'],
             'sender_email'           => ['sometimes', 'nullable', 'email', 'max:150'],
         ]);
 
-        if (!empty($data['settings'])) {
+        if (! empty($data['settings'])) {
+            // Mandatory mail (password reset, verification, credentials) has no central default to set: refuse it loudly instead
+            // of storing something the sender would ignore.
+            $errors = [];
             foreach ($data['settings'] as $key => $values) {
-                if (!array_key_exists($key, self::LABELS)) {
+                if (array_key_exists($key, self::LABELS) && EmailNotificationTypes::isMandatory($key) && array_key_exists('default_enabled', $values)) {
+                    $errors["settings.{$key}.default_enabled"] = ['الرسائل الإلزامية لا تخضع للتفعيل الافتراضي؛ يمكن فقط إيقافها مؤقتًا.'];
+                }
+            }
+            if ($errors !== []) {
+                return response()->json(['message' => 'تعذّر حفظ الإعدادات: بعضها لا ينطبق على الرسائل الإلزامية.', 'errors' => $errors], 422);
+            }
+
+            $before = EmailSetting::whereIn('key', array_keys($data['settings']))->get()->keyBy('key');
+            $changes = [];
+            foreach ($data['settings'] as $key => $values) {
+                if (! array_key_exists($key, self::LABELS)) {
                     continue;
                 }
-                EmailSetting::updateOrCreate(
-                    ['key' => $key],
-                    ['enabled' => (bool) ($values['enabled'] ?? true)]
-                );
+                $default = array_key_exists('default_enabled', $values) ? (bool) $values['default_enabled'] : null;
+                $paused = array_key_exists('paused', $values) ? (bool) $values['paused'] : null;
+                // The previous page sent only `enabled`: it meant «allowed to leave at all», i.e. NOT paused.
+                // On = it flows again (unpaused AND on by default); off = it stops (paused, the default left as it was).
+                if ($paused === null && $default === null && array_key_exists('enabled', $values)) {
+                    $wasPaused = EmailSetting::isPaused($key);
+                    $paused = ! (bool) $values['enabled'];
+                    // «on» on a PAUSED type resumes it for the people who follow the central setting too (the old switch was both);
+                    // on a type that is not paused it changes nothing, so a stale page cannot reset a default an admin turned off.
+                    $default = ((bool) $values['enabled'] && $wasPaused) ? true : null;
+                }
+                if ($paused === null && $default === null) {
+                    continue;
+                }
+
+                $old = $before->get($key);
+                $row = EmailSetting::saveControls($key, $default, $paused);
+                $changes[$key] = [
+                    'default_enabled' => [$old ? (bool) $old->default_enabled : true, (bool) $row->default_enabled],
+                    'paused' => [$old ? (bool) ($old->paused || ! $old->enabled) : false, (bool) $row->paused],
+                ];
+            }
+            if ($changes !== []) {
+                // Who changed which central control, and from what: the audit trail of an operational switch.
+                ActivityLogger::log('email_settings.updated', null, [], $request, null, ['types' => $changes], 'email_settings');
             }
         }
 
@@ -156,7 +206,10 @@ class EmailSettingsController extends Controller
             $user->name,
             $user->id,
             new WelcomeMail($user->name, $user->email, null),
-            'بريد تجريبي من منصة EMC'
+            'بريد تجريبي من منصة EMC',
+            [],
+            // the administrator's own deliberate test: their personal choice for «welcome» must not hide the message
+            ['ignore_personal_choice' => true],
         );
 
         return response()->json(['message' => "تم إرسال بريد تجريبي إلى {$user->email}"]);

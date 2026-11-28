@@ -8,9 +8,9 @@ use Illuminate\Support\Facades\Log;
 
 class EmailSetting extends Model
 {
-    protected $fillable = ['key', 'enabled', 'sender_name', 'sender_email'];
+    protected $fillable = ['key', 'enabled', 'default_enabled', 'paused', 'sender_name', 'sender_email'];
 
-    protected $casts = ['enabled' => 'boolean'];
+    protected $casts = ['enabled' => 'boolean', 'default_enabled' => 'boolean', 'paused' => 'boolean'];
 
     protected static function booted(): void
     {
@@ -20,14 +20,64 @@ class EmailSetting extends Model
         static::deleted(fn (self $setting) => static::clearCache($setting->key));
     }
 
+    /**
+     * May this email leave the platform at all (the old single admin switch)? True unless the type is paused for everyone.
+     * Kept for the callers that only need that question; the full decision (personal choice, central default) is
+     * App\Services\EmailDeliveryPolicy.
+     */
     public static function isEnabled(string $key): bool
     {
-        // These switches are operational controls; a five-minute stale value
-        // can send an email an administrator has just disabled. The table is
-        // tiny, so correctness is preferable to caching this single-row read.
+        return ! static::isPaused($key);
+    }
+
+    /**
+     * «إيقاف الإرسال للجميع مؤقتًا». A row the old code switched off (enabled = false) counts as paused too, so a type switched off
+     * by the previous application, an old admin page during a rollout, or a rolled-back deployment still stops.
+     *
+     * These switches are operational controls; a five-minute stale value can send an email an administrator has just paused. The
+     * table is tiny, so correctness is preferable to caching this single-row read.
+     */
+    public static function isPaused(string $key): bool
+    {
         $setting = static::where('key', $key)->first();
 
-        return $setting === null || (bool) $setting->enabled;
+        return $setting !== null && ($setting->paused || ! $setting->enabled);
+    }
+
+    /** «التفعيل افتراضيًا»: the state of everyone who follows the central setting. No row = on. */
+    public static function defaultEnabled(string $key): bool
+    {
+        $setting = static::where('key', $key)->first();
+
+        return $setting === null || (bool) $setting->default_enabled;
+    }
+
+    /**
+     * Both central controls, written together. `enabled` mirrors NOT paused so the previous application (and a rollback) reads
+     * the same stop.
+     */
+    public static function saveControls(string $key, ?bool $defaultEnabled = null, ?bool $paused = null): self
+    {
+        $row = static::firstOrNew(['key' => $key]);
+        // A row the old code switched off (enabled = 0) IS paused, whatever its `paused` column says: read it that way first, so an
+        // edit of the default alone never resumes it through the `enabled = NOT paused` mirror below.
+        if ($row->exists && ! $row->enabled) {
+            $row->paused = true;
+        }
+        if ($defaultEnabled !== null) {
+            $row->default_enabled = $defaultEnabled;
+        } elseif (! $row->exists) {
+            $row->default_enabled = true;
+        }
+        if ($paused !== null) {
+            $row->paused = $paused;
+        } elseif (! $row->exists) {
+            $row->paused = false;
+        }
+        $row->enabled = ! $row->paused;
+        $row->save();
+
+        return $row;
     }
 
     public static function clearCache(string $key): void

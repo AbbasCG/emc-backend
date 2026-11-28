@@ -66,7 +66,11 @@ final class TicketAssignmentNotifications
             : NotificationChannelSetting::isEnabled($type, $channel);
     }
 
-    /** The user's own choice (no saved row = follows the default, which is on). */
+    /**
+     * The user's own choice (no saved row = follows the default, which is on). This is the compatibility view of the previous
+     * assignment page; what is actually SENT is decided by App\Services\EmailDeliveryPolicy (central pause, personal choice,
+     * central default), the same rule every email follows.
+     */
     public static function userEnabled(int $userId, string $type, string $channel): bool
     {
         return NotificationPreference::isEnabled($userId, $channel, $type);
@@ -132,8 +136,9 @@ final class TicketAssignmentNotifications
     public static function setAdmin(string $type, string $channel, bool $enabled): void
     {
         if ($channel === self::EMAIL) {
-            EmailSetting::updateOrCreate(['key' => $type], ['enabled' => $enabled]);
-            EmailSetting::clearCache($type);
+            // The previous page had ONE email switch per type: on = it flows (unpaused AND on by default), off = it stops (paused; the
+            // central default is left as it was). The new email settings page sets the two controls independently.
+            EmailSetting::saveControls($type, ($enabled && EmailSetting::isPaused($type)) ? true : null, ! $enabled);
 
             return;
         }

@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Models\NotificationPreference;
 use App\Models\NotificationQuietHours;
+use App\Services\EmailPreferenceService;
+use App\Support\EmailNotificationTypes;
 use App\Support\TicketAssignmentNotifications;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -46,6 +48,12 @@ class NotificationPreferenceController extends Controller
         ]);
 
         foreach ($data['preferences'] as $pref) {
+            // An EMAIL choice for a real email type belongs to the three-state email preferences (follow / enabled / disabled,
+            // notifications/email-preferences). This save-everything endpoint must not overwrite it with a plain true/false.
+            if ($pref['channel'] === 'email' && EmailNotificationTypes::exists($pref['type'])) {
+                continue;
+            }
+
             NotificationPreference::updateOrCreate(
                 [
                     'user_id' => $request->user()->id,
@@ -127,6 +135,48 @@ class NotificationPreferenceController extends Controller
             'success' => true,
             'message' => 'تم حفظ تفضيلات إشعارات الإسناد.',
             'data' => ['types' => TicketAssignmentNotifications::preferencesFor($userId)],
+        ]);
+    }
+
+    /**
+     * GET /api/notifications/email-preferences
+     *
+     * Only the email types THIS account can receive (by role / permission / targeting rule, computed on the server and de-duplicated
+     * when several roles qualify), each with the person's choice (follow / enabled / disabled), the central setting, and the effective
+     * state with its source: the same decision the sender makes (App\Services\EmailDeliveryPolicy).
+     */
+    public function emailPreferences(Request $request, EmailPreferenceService $service): JsonResponse
+    {
+        return response()->json(['success' => true, 'data' => ['types' => $service->typesFor($request->user())]]);
+    }
+
+    /**
+     * PUT /api/notifications/email-preferences
+     *
+     * Body: { "preferences": { "course_enrollment": "follow", "certificate_ready": "enabled", "session_reminder": "disabled" } }
+     * Partial, always for the signed-in user. Rejected whole (422, nothing saved) when a type is unknown, mandatory, not available to
+     * this account's roles, or the choice is not one of follow / enabled / disabled. A saved choice is kept while a type is paused or
+     * hidden by a role change.
+     */
+    public function updateEmailPreferences(Request $request, EmailPreferenceService $service): JsonResponse
+    {
+        $data = $request->validate([
+            'preferences' => 'required|array|min:1|max:100',
+            'preferences.*' => 'required|string|max:20',
+        ], [
+            'preferences.required' => 'لا توجد تغييرات لحفظها.',
+            'preferences.*.required' => 'اختيار غير صالح.',
+        ]);
+
+        $errors = $service->save($request->user(), $data['preferences']);
+        if ($errors !== []) {
+            return response()->json(['success' => false, 'message' => 'تعذّر حفظ التفضيلات: بعض الأنواع غير متاحة لحسابك.', 'errors' => $errors], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم حفظ تفضيلات البريد الإلكتروني.',
+            'data' => ['types' => $service->typesFor($request->user())],
         ]);
     }
 

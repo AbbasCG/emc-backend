@@ -2008,8 +2008,9 @@ class NotificationService
     }
 
     /**
-     * Admin switch first (EmailService logs skipped_disabled itself), then the assignee's own
-     * email preference, logged as skipped_user_preference so Email Logs shows why nothing went out.
+     * The assignment email goes through EmailService like every other email: the shared decision (App\Services\EmailDeliveryPolicy:
+     * central pause, then the assignee's own choice, then the central default) is made there, and a stopped message is logged as
+     * skipped_disabled / skipped_user_preference so Email Logs shows why nothing went out.
      */
     private static function dispatchAssignmentEmail(
         string $type,
@@ -2019,26 +2020,6 @@ class NotificationService
         array $payload,
         ?int $assignedById,
     ): void {
-        $channel = \App\Support\TicketAssignmentNotifications::EMAIL;
-
-        if (\App\Models\EmailSetting::isEnabled($type)
-            && ! \App\Support\TicketAssignmentNotifications::userEnabled($user->id, $type, $channel)) {
-            \App\Models\NotificationLog::create([
-                'channel'              => 'email',
-                'type'                 => $type,
-                'recipient'            => $user->email,
-                'recipient_name'       => $user->name,
-                'subject'              => $subject,
-                'status'               => 'skipped_user_preference',
-                'user_id'              => $user->id,
-                'mail_driver'          => config('mail.default'),
-                'payload'              => $payload,
-                'triggered_by_user_id' => $assignedById,
-            ]);
-
-            return;
-        }
-
         EmailService::dispatch($type, $user->email, $user->name, $user->id, $mail, $subject, $payload,
             ['triggered_by_user_id' => $assignedById]);
     }
